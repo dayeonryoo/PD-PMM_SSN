@@ -1,8 +1,10 @@
+#include <iostream>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <limits>
+#include "SSN_PMM.hpp"
 #include "Problem.hpp"
-#include "PMM_SSN.hpp"
+#include "Solution.hpp"
 
 using namespace std;
 using namespace Eigen;
@@ -14,7 +16,6 @@ int main() {
 
     // Define problem data
     Mat Q(6,6);
-    Q.setZero();
 
     vector<Eigen::Triplet<T>> Atr;
     Atr.emplace_back(0, 0, 1.0);
@@ -33,7 +34,7 @@ int main() {
     Btr.emplace_back(2, 5, 1.0);
     Mat B(3,6);
     B.setFromTriplets(Btr.begin(), Btr.end());
-    
+
     Vec c = Vec::Zero(6);
     c(0) = 1.0;
     c(2) = -2.0;
@@ -51,6 +52,10 @@ int main() {
 
     // Create Problem instance
     Problem<T> problem(Q, A, B, c, b, lx, ux, lw, uw);
+
+    // Solve the problem using SSN_PMM
+    SSN_PMM<T> solver(problem); 
+    Solution<T> solution = solver.solve();
 
     return 0;
 }
