@@ -2,8 +2,6 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <limits>
-using namespace std;
-using namespace Eigen;
 
 // =============================================================
 //      min  c^T x + (1/2) x^T Q x,
@@ -27,12 +25,17 @@ public:
     Vec y2;         // Lagrangian multipliers for Bx = w
     Vec z;          // Lagrangian multipliers for box constraints on x
     T obj_val;      // Optimal objective value
-    int PMM_it;     // Number of PMM iterations performed
-    int SSN_it;     // Number of SSN iterations performed
+    int PMM_iter;   // Number of PMM iterations performed
+    int SSN_iter;   // Number of SSN iterations performed per PMM iteration
+    T PMM_tol_achieved; // Tolerance achieved by PMM
+    T SSN_tol_achieved; // Tolerance achieved by SSN
 
     Solution(const int opt_, const Vec& x_, const Vec& y1_, const Vec& y2_,
-             const Vec& z_, const T obj_val_, const int PMM_it_, const int SSN_it_)
-    : opt(opt_), x(x_), y1(y1_), y2(y2_), z(z_), obj_val(obj_val_), PMM_it(PMM_it_), SSN_it(SSN_it_)
+             const Vec& z_, const T obj_val_, const int PMM_iter_, const int SSN_iter_,
+             const T PMM_tol_achieved_ = 0, const T SSN_tol_achieved_ = 0)
+    : opt(opt_), x(x_), y1(y1_), y2(y2_), z(z_), obj_val(obj_val_),
+      PMM_iter(PMM_iter_), SSN_iter(SSN_iter_),
+      PMM_tol_achieved(PMM_tol_achieved_), SSN_tol_achieved(SSN_tol_achieved_)
     {}
 
 };

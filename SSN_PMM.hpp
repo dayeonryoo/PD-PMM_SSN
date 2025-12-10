@@ -4,8 +4,7 @@
 #include "Problem.hpp"
 #include "Solution.hpp"
 #include "SSN.hpp"
-using namespace std;
-using namespace Eigen;
+
 
 // =============================================================
 //      min  c^T x + (1/2) x^T Q x,
@@ -54,25 +53,24 @@ public:
     // Inputs:
     Mat Q, A, B;
     Vec c, b;
-    Vec lx, ux;
-    Vec lw, uw;
-    int n, m, l;
+    Vec lx, ux, lw, uw;
     T tol;
     int max_it;
+
+    int n, m, l;
 
     // Outputs:
     int opt;
     Vec x, y1, y2, z;
     T obj_val;
     int PMM_iter, SSN_iter;
+    T PMM_tol_achieved, SSN_tol_achieved;
 
     // Constructor
     SSN_PMM(Problem<T>& problem)
     : Q(problem.Q), A(problem.A), B(problem.B), c(problem.c), b(problem.b),
       lx(problem.lx), ux(problem.ux), lw(problem.lw), uw(problem.uw),
-      tol(problem.tol), max_it(problem.max_it),
-      n(problem.Q.cols()), m(problem.A.rows()), l(problem.B.rows()),
-      opt(-1), obj_val(0), PMM_iter(0), SSN_iter(0)
+      tol(problem.tol), max_it(problem.max_it)
     {
         // Validate required matrices
         if (Q.rows() == 0 || Q.cols() == 0) {
@@ -84,6 +82,12 @@ public:
         if (B.rows() == 0 || B.cols() == 0) {
             throw std::invalid_argument("Matrix B must be provided with nonzero dimensions.");
         }
+
+        // Dimensions
+        n = Q.rows();
+        m = A.rows();
+        l = B.rows();
+
         // Validate dimensions
         if (Q.cols() != n) {
             throw std::invalid_argument("Matrix Q must be square with size n x n.");
@@ -106,14 +110,11 @@ public:
         if (lw.size() != l || uw.size() != l) {
             throw std::invalid_argument("Vectors lw and uw must have size l.");
         }
-        // Initialize solution vectors
-        x = Vec::Zero(n);
-        y1 = Vec::Zero(m);
-        y2 = Vec::Zero(l);
-        z = Vec::Zero(n);
     }
-    // Compute residuals
-    Vec compute_residuals();
+
+    // Return the maximum residual norm associated with optimality conditions.
+    T max_residual_norm();
+
     // Solve method
     Solution<T> solve();
 };

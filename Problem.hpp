@@ -3,8 +3,6 @@
 #include <Eigen/Sparse>
 #include <limits>
 #include <optional>
-using namespace std;
-using namespace Eigen;
 
 // =============================================================
 //      min  c^T x + (1/2) x^T Q x,
@@ -22,22 +20,17 @@ public:
 
     Mat Q, A, B;
     Vec c, b;
-    Vec lx, ux;
-    Vec lw, uw;
-    int n, m, l;
+    Vec lx, ux, lw, uw;
     T tol;
     int max_it;
 
     Problem(const Mat& Q_, const Mat& A_, const Mat& B_,
-            std::optional<Vec> c_  = std::nullopt,
-            std::optional<Vec> b_  = std::nullopt,
-            std::optional<Vec> lx_ = std::nullopt,
-            std::optional<Vec> ux_ = std::nullopt,
-            std::optional<Vec> lw_ = std::nullopt,
-            std::optional<Vec> uw_ = std::nullopt,
+            const Vec& c_, const Vec& b_,
+            const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
             T tol_ = T(1e-4),
             int max_it_ = 200)
-    : Q(Q_), A(A_), B(B_), tol(tol_), max_it(max_it_)
+    : Q(Q_), A(A_), B(B_), tol(tol_), c(c_), b(b_),
+      lx(lx_), ux(ux_), lw(lw_), uw(uw_), max_it(max_it_)
     {
         // Validate required matrices
         if (Q.rows() == 0 || Q.cols() == 0) {
@@ -51,9 +44,9 @@ public:
         }
 
         // Dimensions
-        n = Q.rows();
-        m = A.rows();
-        l = B.rows();
+        int n = Q.rows();
+        int m = A.rows();
+        int l = B.rows();
 
         // Validate dimensions
         if (Q.cols() != n) {
@@ -65,16 +58,6 @@ public:
         if (B.cols() != n) {
             throw std::invalid_argument("Matrix B must have n columns.");
         }
-
-        // Defaults
-        c = c_.value_or(Vec::Zero(n));
-        b = b_.value_or(Vec::Zero(m));
-
-        T inf = std::numeric_limits<T>::infinity();
-        lx = lx_.value_or(Vec::Constant(n, -inf));
-        ux = ux_.value_or(Vec::Constant(n, inf));
-        lw = lw_.value_or(Vec::Constant(l, -inf));
-        uw = uw_.value_or(Vec::Constant(l, inf));
 
         // Validate vector dimensions
         if (c.size() != n) {

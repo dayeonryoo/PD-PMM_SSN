@@ -2,8 +2,14 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
-using namespace std;
-using namespace Eigen;
+template <typename T>
+struct SSN_result {
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    Vec x;
+    Vec y2;
+    int SSN_in_iter;
+    T SSN_tol_achieved;
+};
 
 template <typename T>
 class SSN {
@@ -12,40 +18,37 @@ public:
     using Mat = Eigen::SparseMatrix<T>;
 
     // Inputs
-    Mat Q, A, B, A_T, B_T;
-    Vec Q_diag;
+    Mat Q, A, B;
     Vec c, b;
     Vec lx, ux;
     Vec lw, uw;
     int n, m, l;
     Vec x, y1, y2, z;
-    int max_SSN_iters;
-    T mu, rho, tol;
+    int SSN_max_in_iter;
+    T mu, rho, SSN_tol;
+
+    // Storing
+    Mat A_T, B_T;
+    Vec Q_diag;
 
     // Outputs
-    int iter;
-    bool tol_achieved;
+    int SSN_in_iter;
+    bool SSN_tol_achieved;
     
-
     SSN(const Mat& Q_, const Mat& A_, const Mat& B_,
         const Vec& c_, const Vec& b_,
-        const Vec& lx_, const Vec& ux_,
-        const Vec& lw_, const Vec& uw_,
+        const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
         const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-        T mu_, T rho_, T tol_,
-        int n_, int m_, int l_,
-        int max_SSN_iters_)
-    : Q(Q_), A(A_), B(B_),
-      c(c_), b(b_),
-      lx(lx_), ux(ux_),
-      lw(lw_), uw(uw_),
+        T mu_, T rho_, int n_, int m_, int l_,
+        T SSN_tol_, int SSN_max_in_iter_)
+    : Q(Q_), A(A_), B(B_), c(c_), b(b_),
+      lx(lx_), ux(ux_), lw(lw_), uw(uw_),
       x(x_), y1(y1_), y2(y2_), z(z_),
-      mu(mu_), rho(rho_), tol(tol_),
-      n(n_), m(m_), l(l_),
-      max_SSN_iters(max_SSN_iters_)
+      mu(mu_), rho(rho_), n(n_), m(m_), l(l_),
+      SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_)
     {}
 
-    void solve(); // Update x, y1, y2, z in place
+    SSN_result<T> solve_SSN();
 
 };
 

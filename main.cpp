@@ -4,10 +4,7 @@
 #include <limits>
 #include "SSN_PMM.hpp"
 #include "Problem.hpp"
-#include "Solution.hpp"
 
-using namespace std;
-using namespace Eigen;
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 using Mat = Eigen::SparseMatrix<T>;
@@ -17,7 +14,7 @@ int main() {
     // Define problem data
     Mat Q(6,6);
 
-    vector<Eigen::Triplet<T>> Atr;
+    std::vector<Eigen::Triplet<T>> Atr;
     Atr.emplace_back(0, 0, 1.0);
     Atr.emplace_back(0, 2, 1.0);
     Atr.emplace_back(1, 3, 2.0);
@@ -25,7 +22,7 @@ int main() {
     Mat A(2,6);
     A.setFromTriplets(Atr.begin(), Atr.end());
 
-    vector<Eigen::Triplet<T>> Btr;
+    std::vector<Eigen::Triplet<T>> Btr;
     Btr.emplace_back(0, 0, 1.0);
     Btr.emplace_back(0, 1, -1.0);
     Btr.emplace_back(1, 2, 2.0);
