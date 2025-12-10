@@ -27,10 +27,6 @@ public:
     int SSN_max_in_iter;
     T mu, rho, SSN_tol;
 
-    // Storing
-    Mat A_T, B_T;
-    Vec Q_diag;
-
     // Outputs
     int SSN_in_iter;
     bool SSN_tol_achieved;
@@ -48,6 +44,10 @@ public:
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_)
     {}
 
+    Vec compute_box_proj(const Vec& v, const Vec& lower, const Vec& upper);
+    Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper);
+    Vec compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
+    Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
     SSN_result<T> solve_SSN();
 
 };
