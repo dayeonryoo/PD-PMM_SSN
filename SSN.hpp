@@ -30,6 +30,12 @@ public:
     // Outputs
     int SSN_in_iter;
     bool SSN_tol_achieved;
+
+    // Set the semismooth Newton parameters
+    T beta = 0.4995 / 2;
+    T delta = 0.995;
+    T eta = SSN_tol / 10;
+    T gamma = 0.1;
     
     SSN(const SpMat& Q_, const SpMat& A_, const SpMat& B_,
         const Vec& c_, const Vec& b_,
@@ -46,8 +52,9 @@ public:
 
     Vec compute_box_proj(const Vec& v, const Vec& lower, const Vec& upper);
     Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper);
-    Vec compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
+    T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
+    T backtracking_line_search(const Vec& dx, const Vec& dy2);
     SSN_result<T> solve_SSN();
 
 };

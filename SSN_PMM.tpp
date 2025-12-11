@@ -1,11 +1,11 @@
 #pragma once
+#include <iostream>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include "SSN.hpp"
 
-
 template <typename T>
-T SSN_PMM<T>::max_residual_norm() {
+typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms(){
     // Dual residual norm
     T res_d = (c + Q * x - A.transpose() * y1 - B.transpose() * y2 + z).norm() / (1 + c.norm());
     
@@ -19,28 +19,41 @@ T SSN_PMM<T>::max_residual_norm() {
 
     // Complementarity residual norm for Bx constraints
     Vec w = B * x;
-    Vec temp_compl_B = w - y2;
-    temp_compl_B = temp_compl_B.cwiseMax(lw).cwiseMin(uw);
-    T compl_B = (w - temp_compl_B).norm();
+    Vec temp_compl_w = w - y2;
+    temp_compl_w = temp_compl_w.cwiseMax(lw).cwiseMin(uw);
+    T compl_w = (w - temp_compl_w).norm();
 
     // Collect residual norms
     Vec res_norms(4);
-    res_norms << res_d, res_p, compl_x, compl_B;
+    res_norms << res_p, res_d, compl_x, compl_w;
 
-    return res_norms.maxCoeff();
+    return res_norms;
+}
+
+template <typename T>
+void SSN_PMM<T>::update_PMM_parameters(const T res_p, const T res_d,
+                                       const T new_res_p, const T new_res_d) {
+    // If the overall primal and dual residual error is decreased,
+    // we increase the penalty parameters aggressively.
+    // If not, we continue increasing the parameters slowly
+    // up to the regularization threshold.
+
+    bool cond_p = 0.95 * res_p > new_res_p;
+    bool cond_d = 0.905 * res_d > new_res_d;
+
+    if (cond_p || cond_d){
+        mu = std::min(reg_limit, 1.2 * mu);
+        rho = std::min(1e2 * reg_limit, 1.4 * rho);
+    } else {
+        mu = std::min(reg_limit, 1.1 * mu);
+        rho = std::min(1e2 * reg_limit, 1.1 * rho);
+    };
+
 }
 
 template <typename T>
 Solution<T> SSN_PMM<T>::solve() {
     
-    // Initialize parameters
-    T mu = 5e1;
-    T rho = 1e2;
-    int SSN_max_iters = 4000; // Maximum number of total SSN iterations
-    int SSN_max_in_iter = 40; // Maximum number of SSN iterations per PMM iteration
-    T SSN_tol = tol; // Tolerance for SSN termination
-    T reg_limit = 1e6; // Maximum value for the penalty parameters
-
     // Initialize variables
     opt = -1;
     PMM_iter = 0;
@@ -69,11 +82,14 @@ Solution<T> SSN_PMM<T>::solve() {
     // End
     // ----------------------------------------------
 
-        // Check termination criteria.
-        if (max_residual_norm() < tol) {
+        // Compute residuals and check termination criteria.
+        Vec res_norms = compute_residual_norms();
+        if (res_norms.maxCoeff() < tol) {
             opt = 0; // Optimal solution found
             break;
         }
+        T res_p = res_norms(0);
+        T res_d = res_norms(1);
 
         // Update the Newton system
         NS.x = x;
@@ -83,16 +99,27 @@ Solution<T> SSN_PMM<T>::solve() {
         NS.mu = mu;
         NS.rho = rho;
 
-        // Call semismooth Newton method.
+        // Call semismooth Newton method to update x and y2
         SSN_result<T> NS_solution = NS.solve_SSN();
         x = NS_solution.x;
         y2 = NS_solution.y2;
+
         // Update multipliers
-        y1 += mu * (A * x - b);
+        y1 -= mu * (A * x - b);
         z += mu * x - mu * ((z / mu) + x).cwiseMax(lx).cwiseMin(ux);
 
-        ++PMM_iter;
+        // Compute the new residual norms
+        Vec new_res_norms = compute_residual_norms();
+        T new_res_p = res_norms(0);
+        T new_res_d = res_norms(1);
+
+        // Update penalty parameters
+        update_PMM_parameters(res_p, res_d, new_res_p, new_res_d);
+
+        PMM_iter++;
         SSN_iter += NS_solution.SSN_in_iter;
+        if (SSN_iter >= SSN_max_iter) break;
     }
+
     return Solution<T>(opt, x, y1, y2, z, obj_val, PMM_iter, SSN_iter);
 }

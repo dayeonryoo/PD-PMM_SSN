@@ -23,7 +23,7 @@ typename SSN<T>::Vec SSN<T>::compute_dist_box(const Vec& v, const Vec& lower, co
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
+T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
     using Vec = typename SSN<T>::Vec;
 
     // Evalueate Dist_K (z/mu + x_new)
@@ -32,12 +32,15 @@ typename SSN<T>::Vec SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_
     // Evaluate Dist_W (B*x_new - (y2 - y2_new/2)/mu)
     Vec dist_W = compute_dist_box(B * x_new + (y2_new / 2 - y2) / mu, lw, uw);
 
+    // Evaluate primal residual A x_new - b
+    Vec pr_res = A * x_new - b;
+
     // Compute Lagrangian
-    Vec L = c.transpose() * x_new + (1/2) * x_new.transpose() * Q * x_new
-            - y1.transpose() * (A * x_new - b) + (mu / 2) * (A * x_new - b).squaredNorm()
-            - 1 / (2 * mu) * z.squaredNorm() + (mu / 2) * dist_K.squaredNorm()
-            + mu * dist_W.squaredNorm() + 1 / (4 * mu) * y2_new.squaredNorm() - 1 / (2 * mu) * y2.squaredNorm()
-            + 1  / (2 * rho) * (x_new - x).squaredNorm();
+    T L = c.dot(x_new) + (1/2) * x_new.transpose() * Q * x_new
+          - y1.dot(pr_res) + (mu / 2) * pr_res.squaredNorm()
+          - 1 / (2 * mu) * z.squaredNorm() + (mu / 2) * dist_K.squaredNorm()
+          + mu * dist_W.squaredNorm() + 1 / (4 * mu) * y2_new.squaredNorm() - 1 / (2 * mu) * y2.squaredNorm()
+          + 1  / (2 * rho) * (x_new - x).squaredNorm();
 
     return L;
 }
@@ -61,7 +64,7 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     Vec grad_L_y2 = dist_W + 1 / (2 * mu) * y2_new;
 
     // Combine gradients
-    Vec grad_L(grad_L_x.size() + grad_L_y2.size());
+    Vec grad_L(n + l);
     grad_L << grad_L_x, grad_L_y2;
 
     return grad_L;
@@ -72,17 +75,44 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
 
 // Build a sparse matrix given a vector of diagonal elements
 
+template <typename T>
+T SSN<T>::backtracking_line_search(const Vec& dx, const Vec& dy2) {
+    using Vec = typename SSN<T>::Vec;
+
+    // Increase m until alpha = delta^m breaks the Armijo-Goldstein condition
+    T alpha = delta;
+    int m = 1;
+
+    // Evaluate Lagrangian and its gradient at current u = [x; y]
+    T L = compute_Lagrangian(x, y2);
+    Vec grad_L = compute_grad_Lagrangian(x, y2);
+
+    // Evaluate Lagrangian at u_new = u + alpha * du
+    Vec x_new = x + alpha * dx;
+    Vec y2_new = y2 + alpha * dy2;
+    T L_new = compute_Lagrangian(x_new, y2_new);
+
+    // Iterate until finding the largest step size satisfying the Armijo-Goldstein condition
+    T grad_desc = grad_L.segment(0, n).dot(dx) + grad_L.segment(n, l).dot(dy2);
+    while (L_new > L + beta * alpha * grad_desc) {
+        m += 200;
+        alpha = pow(delta, m);
+        if (alpha < 1e-3) break; // Lower bound on alpha
+
+        // Evaluate Lagrangian at u_new for next iteration
+        x_new = x + alpha * dx;
+        y2_new = y2 + alpha * dy2;
+        L_new = compute_Lagrangian(x_new, y2_new);
+    }
+
+    return alpha;
+}
+
 
 template <typename T>
 SSN_result<T> SSN<T>::solve_SSN() {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
-
-    // Set the semismooth Newton parameters
-    T beta = 0.4995 / 2;
-    T delta = 0.995;
-    T eta = SSN_tol / 10;
-    T gamma = 0.1;
 
     // Intialize iteration counter and set starting points
     SSN_result<T> result;
@@ -141,7 +171,8 @@ SSN_result<T> SSN<T>::solve_SSN() {
         SpMat A_tr = A.transpose();
         SpMat B_tr = B.transpose();
 
-        // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; -G D]
+        // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; -G D]:
+        
         // H_tilde = diag(Q) + mu(I_n - P_K) + I_n / rho
         Vec H_tilde_diag = Q_diag + mu * (ones_n - diag_P_K) + (1 / rho) * ones_n;
         SpMat H_tilde(n, n);
@@ -243,7 +274,15 @@ SSN_result<T> SSN<T>::solve_SSN() {
         Vec rhs = G * r1 + r2;
         Eigen::SimplicialLLT<SpMat> chol;
         chol.compute(Schur_tilde);
+        if (chol.info() != Eigen::Success) {
+            std::cerr << "Cholesky factorization faild\n";
+            break;
+        }
         Vec dy_ = chol.solve(rhs);
+        if (chol.info() != Eigen::Success) {
+            std::cerr << "Solving via Cholesky factorization faild\n";
+            break;
+        }
 
         // Retrive dx and dy2
         Vec dx = (G_tr * dy_ - r1).cwiseQuotient(H_tilde_diag);
@@ -251,10 +290,17 @@ SSN_result<T> SSN<T>::solve_SSN() {
         dy2.segment(0, n_active_W) = dy_.segment(m, n_active_W);
         dy2.segment(n_active_W, n_inactive_W) = dy2_inactive_W;
 
-        
+        // Backtracking line search to find a Newton step size alpha
+        T alpha = backtracking_line_search(dx, dy2);
+
+        // Udpate x and y2
+        result.x = x + alpha * dx;
+        result.y2 = y2 + alpha * dy2;
         
         result.SSN_in_iter++;
     }
+
+    result.SSN_tol_achieved = compute_grad_Lagrangian(result.x, result.y2).squaredNorm();
 
     return result;
 }

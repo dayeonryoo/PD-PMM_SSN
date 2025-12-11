@@ -54,5 +54,16 @@ int main() {
     SSN_PMM<T> solver(problem); 
     Solution<T> solution = solver.solve();
 
+    if (solution.opt == 0) {
+        std::cout << "Optimal solution found.\n";
+    } else {
+        std::cout << "opt = " << solution.opt << std::endl;
+    }
+    std::cout << "x = " << solution.x << std::endl;
+    std::cout << "y1 = " << solution.y1 << std::endl;
+    std::cout << "y2 = " << solution.y2 << std::endl;
+    std::cout << "z = " << solution.z << std::endl;
+    std::cout << "f(x) = " << solution.obj_val << std::endl;
+
     return 0;
 }
