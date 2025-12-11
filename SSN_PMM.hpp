@@ -48,10 +48,10 @@ template <typename T>
 class SSN_PMM {
 public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
-    using Mat = Eigen::SparseMatrix<T>;
+    using SpMat = Eigen::SparseMatrix<T>;
 
     // Inputs:
-    Mat Q, A, B;
+    SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux, lw, uw;
     T tol;

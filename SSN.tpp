@@ -3,6 +3,7 @@
 #include <vector>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
+#include <Eigen/SparseCholesky>
 
 template <typename T>
 typename SSN<T>::Vec SSN<T>::compute_box_proj(const Vec& v, const Vec& lower, const Vec& upper) {
@@ -67,10 +68,15 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
 
 }
 
+// Build a sparse matrix given a mask
+
+// Build a sparse matrix given a vector of diagonal elements
+
+
 template <typename T>
 SSN_result<T> SSN<T>::solve_SSN() {
     using Vec = typename SSN<T>::Vec;
-    using Mat = typename SSN<T>::Mat;
+    using SpMat = typename SSN<T>::SpMat;
 
     // Set the semismooth Newton parameters
     T beta = 0.4995 / 2;
@@ -127,61 +133,79 @@ SSN_result<T> SSN<T>::solve_SSN() {
         int n_active_W = active_W.count();
         int n_inactive_W = l - n_active_W;
 
-        // Build Clarke subgradient matrix J_tilde = [-H_tilde G^T; -G D]
+        // Useful vectors and matrices
         Vec ones_n = Vec::Ones(n);
         Vec ones_l = Vec::Ones(l);
         Vec ones_m = Vec::Ones(m);
         Vec Q_diag = Q.diagonal();
-        Mat A_tr = A.transpose();
-        Mat B_tr = B.transpose();
+        SpMat A_tr = A.transpose();
+        SpMat B_tr = B.transpose();
 
+        // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; -G D]
+        // H_tilde = diag(Q) + mu(I_n - P_K) + I_n / rho
         Vec H_tilde_diag = Q_diag + mu * (ones_n - diag_P_K) + (1 / rho) * ones_n;
+        SpMat H_tilde(n, n);
+        std::vector<Eigen::Triplet<T>> H_tilde_trpl;
+        H_tilde_trpl.reserve(n);
+        for (int i = 0; i < n; ++i) {
+            H_tilde_trpl.emplace_back(i, i, H_tilde_diag(i));
+        }
+        H_tilde.setFromTriplets(H_tilde_trpl.begin(), H_tilde_trpl.end());
 
-        Mat B_active_W(n_active_W, B.cols());
-        Mat B_inactive_W(l - n_active_W, B.cols());
-        std::vector<Eigen::Triplet<T>> B_act_trp;
-        std::vector<Eigen::Triplet<T>> B_inact_trp;
-        B_act_trp.reserve(B.nonZeros());
-        B_inact_trp.reserve(B.nonZeros());
+        // Active and inactive parts of B w.r.t. W = [lw, uw]
+        SpMat B_active_W(n_active_W, B.cols());
+        SpMat B_inactive_W(l - n_active_W, B.cols());
+        std::vector<Eigen::Triplet<T>> B_act_trpl;
+        std::vector<Eigen::Triplet<T>> B_inact_trpl;
+        B_act_trpl.reserve(B.nonZeros());
+        B_inact_trpl.reserve(B.nonZeros());
         int new_row_act = 0;
         int new_row_inact = 0;
         for (int i = 0; i < B.rows(); ++i)
         {
             if (active_W(i)) {
-                // Copy entire row i into B_active_W
-                for (typename Mat::InnerIterator it(B, i); it; ++it) {
-                    B_act_trp.emplace_back(new_row_act, it.col(), it.value());
+                for (typename SpMat::InnerIterator it(B, i); it; ++it) {
+                    B_act_trpl.emplace_back(new_row_act, it.col(), it.value());
                 }
                 new_row_act++;
             }
             else {
-                // Copy entire row i into B_inactive_W
-                for (typename Mat::InnerIterator it(B, i); it; ++it) {
-                    B_inact_trp.emplace_back(new_row_inact, it.col(), it.value());
+                for (typename SpMat::InnerIterator it(B, i); it; ++it) {
+                    B_inact_trpl.emplace_back(new_row_inact, it.col(), it.value());
                 }
                 new_row_inact++;
             }
         }
-        B_active_W.setFromTriplets(B_act_trp.begin(), B_act_trp.end());
-        B_inactive_W.setFromTriplets(B_inact_trp.begin(), B_inact_trp.end());
+        B_active_W.setFromTriplets(B_act_trpl.begin(), B_act_trpl.end());
+        B_inactive_W.setFromTriplets(B_inact_trpl.begin(), B_inact_trpl.end());
 
-        Mat G(A.rows() + n_active_W, A.cols());
-        std::vector<Eigen::Triplet<T>> G_trp;
-        G_trp.reserve(A.nonZeros() + B_active_W.nonZeros());
+        // G = [A ; B_active_W]
+        SpMat G(A.rows() + n_active_W, A.cols());
+        std::vector<Eigen::Triplet<T>> G_trpl;
+        G_trpl.reserve(A.nonZeros() + B_active_W.nonZeros());
         for (int i = 0; i < A.rows(); ++i) {
-            for (typename Mat::InnerIterator it(A, i); it; ++it) {
-                G_trp.emplace_back(i, it.col(), it.value());
+            for (typename SpMat::InnerIterator it(A, i); it; ++it) {
+                G_trpl.emplace_back(i, it.col(), it.value());
             }
         }
         for (int i = 0; i < n_active_W; ++i) {
-            for (typename Mat::InnerIterator it(B_active_W, i); it; ++it) {
-                G_trp.emplace_back(A.rows() + i, it.col(), it.value());
+            for (typename SpMat::InnerIterator it(B_active_W, i); it; ++it) {
+                G_trpl.emplace_back(A.rows() + i, it.col(), it.value());
             }
         }
-        G.setFromTriplets(G_trp.begin(), G_trp.end());
-        Mat G_tr = G.transpose();
+        G.setFromTriplets(G_trpl.begin(), G_trpl.end());
+        SpMat G_tr = G.transpose();
 
-        Vec D = (1 / mu) * Vec::Ones(m + n_active_W);
+        // D = [I_m / mu, 0 ; 0, (I_m - P_W/2) / mu]
+        // Vec D_diag = (1 / mu) * Vec::Ones(m + n_active_W);
+        SpMat D(m + n_active_W, m + n_active_W);
+        std::vector<Eigen::Triplet<T>> D_trpl;
+        D_trpl.reserve(m + n_active_W);
+        for (int i = 0; i < m + n_active_W; ++i) {
+            D_trpl.emplace_back(i, i, 1 / mu);
+        }
+        D.setFromTriplets(D_trpl.begin(), D_trpl.end());
+
         
         // Compute dy2 in inactive_W:
         // dy2_inactive_W = ((I - P_W/2)^{-1} - mu * dist_W(v) - y2/2)(inactive_W)
@@ -206,19 +230,27 @@ SSN_result<T> SSN<T>::solve_SSN() {
         Vec dy2_inactive_W = 2 * Vec::Ones(n_inactive_W) - mu * dist_W_v_inactive_W - y2_inactive_W / 2;
 
         // Compute the RHS vector
-        Vec rhs(n + m + n_active_W);
-        rhs.segment(0, n) = c + Q * x + mu * dist_K_u - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W;
-        rhs.segment(n, m) = (1 / mu) * y1 - A * result.x + b;
-        rhs.segment(n + m, n_active_W) = -dist_W_v_active_W - y2_active_W / (2 * mu);
+        Vec r1 = c + Q * x + mu * dist_K_u - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W;
+        Vec r2(m + n_active_W);
+        r2.segment(0, m) = (1 / mu) * y1 - A * result.x + b;
+        r2.segment(m, n_active_W) = -dist_W_v_active_W - y2_active_W / (2 * mu);
 
         // Compute the Schur complement of J_tilde
-        Mat H_tilde(n, n);
-        std::vector<Eigen::Triplet<T>> H_tilde_trp;
-        H_tilde_trp.reserve(n);
-        for (int i = 0; i < n; ++i) {
-            H_tilde_trp.emplace_back(i, i, H_tilde_diag(i));
-        }
-        H_tilde.setFromTriplets(H_tilde_trp.begin(), H_tilde_trp.end());
+        SpMat Schur_tilde = G * H_tilde * G_tr + D; // Self-adjoint and PD
+
+        // Perform Cholesky factorization on the approximated Schur complement
+        // to solve Schur_tilde * dy_2 = rhs, where rhs = G * r1 + r2.
+        Vec rhs = G * r1 + r2;
+        Eigen::SimplicialLLT<SpMat> chol;
+        chol.compute(Schur_tilde);
+        Vec dy_ = chol.solve(rhs);
+
+        // Retrive dx and dy2
+        Vec dx = (G_tr * dy_ - r1).cwiseQuotient(H_tilde_diag);
+        Vec dy2(l);
+        dy2.segment(0, n_active_W) = dy_.segment(m, n_active_W);
+        dy2.segment(n_active_W, n_inactive_W) = dy2_inactive_W;
+
         
         
         result.SSN_in_iter++;

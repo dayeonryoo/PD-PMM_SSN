@@ -16,15 +16,15 @@ template <typename T>
 class Problem {
 public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
-    using Mat = Eigen::SparseMatrix<T>;
+    using SpMat = Eigen::SparseMatrix<T>;
 
-    Mat Q, A, B;
+    SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux, lw, uw;
     T tol;
     int max_it;
 
-    Problem(const Mat& Q_, const Mat& A_, const Mat& B_,
+    Problem(const SpMat& Q_, const SpMat& A_, const SpMat& B_,
             const Vec& c_, const Vec& b_,
             const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
             T tol_ = T(1e-4),

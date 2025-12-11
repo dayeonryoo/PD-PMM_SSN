@@ -7,19 +7,19 @@
 
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
-using Mat = Eigen::SparseMatrix<T>;
+using SpMat = Eigen::SparseMatrix<T>;
 
 int main() {
 
     // Define problem data
-    Mat Q(6,6);
+    SpMat Q(6,6);
 
     std::vector<Eigen::Triplet<T>> Atr;
     Atr.emplace_back(0, 0, 1.0);
     Atr.emplace_back(0, 2, 1.0);
     Atr.emplace_back(1, 3, 2.0);
     Atr.emplace_back(1, 5, 1.0);
-    Mat A(2,6);
+    SpMat A(2,6);
     A.setFromTriplets(Atr.begin(), Atr.end());
 
     std::vector<Eigen::Triplet<T>> Btr;
@@ -29,7 +29,7 @@ int main() {
     Btr.emplace_back(1, 4, -1.0);
     Btr.emplace_back(2, 3, 1.0);
     Btr.emplace_back(2, 5, 1.0);
-    Mat B(3,6);
+    SpMat B(3,6);
     B.setFromTriplets(Btr.begin(), Btr.end());
 
     Vec c = Vec::Zero(6);

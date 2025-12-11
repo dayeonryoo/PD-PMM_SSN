@@ -15,10 +15,10 @@ template <typename T>
 class SSN {
 public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
-    using Mat = Eigen::SparseMatrix<T>;
+    using SpMat = Eigen::SparseMatrix<T>;
 
     // Inputs
-    Mat Q, A, B;
+    SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux;
     Vec lw, uw;
@@ -31,7 +31,7 @@ public:
     int SSN_in_iter;
     bool SSN_tol_achieved;
     
-    SSN(const Mat& Q_, const Mat& A_, const Mat& B_,
+    SSN(const SpMat& Q_, const SpMat& A_, const SpMat& B_,
         const Vec& c_, const Vec& b_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
         const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
