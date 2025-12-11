@@ -8,54 +8,73 @@
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 using SpMat = Eigen::SparseMatrix<T>;
+using Triplet = Eigen::Triplet<T>;
 
 int main() {
 
+// =============================================================
+//      min  c^T x + (1/2) x^T Q x,
+//      s.t. A x = b,
+//           B x = w,
+//           lx <= x <= ux,
+//           lw <= w <= uw
+// --------------------------------------------------------------
+//      c = [-1; -2], A = [1; 1], b = 1, B = I_2,
+//      lx = [0; 0], ux = [1; 1], lw = [0; 0], uw = [1; 1]
+// --------------------------------------------------------------
+//      Expected solution: x = [0; 1]
+//      Expected objective value: f(x) = -2
+// =============================================================
+
     // Define problem data
-    SpMat Q(6,6);
+    const int n = 2;
+    const int m = 1;
+    const int l = 2;
 
-    std::vector<Eigen::Triplet<T>> Atr;
-    Atr.emplace_back(0, 0, 1.0);
-    Atr.emplace_back(0, 2, 1.0);
-    Atr.emplace_back(1, 3, 2.0);
-    Atr.emplace_back(1, 5, 1.0);
-    SpMat A(2,6);
-    A.setFromTriplets(Atr.begin(), Atr.end());
+    // Q = 0
+    SpMat Q(n, n);
+    Q.setZero();
 
-    std::vector<Eigen::Triplet<T>> Btr;
-    Btr.emplace_back(0, 0, 1.0);
-    Btr.emplace_back(0, 1, -1.0);
-    Btr.emplace_back(1, 2, 2.0);
-    Btr.emplace_back(1, 4, -1.0);
-    Btr.emplace_back(2, 3, 1.0);
-    Btr.emplace_back(2, 5, 1.0);
-    SpMat B(3,6);
-    B.setFromTriplets(Btr.begin(), Btr.end());
+    // A = [1; 1]
+    SpMat A(m, n);
+    std::vector<Triplet> A_trpl;
+    A_trpl.emplace_back(0, 0, 1.0);
+    A_trpl.emplace_back(0, 1, 1.0);
+    A.setFromTriplets(A_trpl.begin(), A_trpl.end());
+    
+    // B = I_2
+    SpMat B(l, n);
+    std::vector<Triplet> B_trpl;
+    B_trpl.emplace_back(0, 0, 1.0);
+    B_trpl.emplace_back(1, 1, 1.0);
+    B.setFromTriplets(B_trpl.begin(), B_trpl.end());
 
-    Vec c = Vec::Zero(6);
-    c(0) = 1.0;
-    c(2) = -2.0;
-    c(4) = 1.0;
-    Vec b(2);
-    b << 3, 5;
+    // c = [-1; -2], b =1
+    Vec c(n);
+    c << -1.0, -2.0;
+    Vec b(m);
+    b << 1.0;
 
-    T inf = std::numeric_limits<T>::infinity();
-    Vec lx(6), ux(6);
-    lx << 0, -inf, 0, -inf, 0, -inf;
-    ux << 5, inf, 4, inf, 3, inf;
-    Vec lw(3), uw(3);
-    lw << -2, -1, 0;
-    uw << 2, 3, 4;
+    // 0 <= x, w <= 1
+    Vec lx(n), ux(n);
+    lx.setZero();
+    ux.setOnes();
+    Vec lw(l), uw(l);
+    lw.setZero();
+    uw.setOnes();
+
+    T tol = 0.1;
+    int max_iter = 100;
 
     // Create Problem instance
-    Problem<T> problem(Q, A, B, c, b, lx, ux, lw, uw);
+    Problem<T> problem(Q, A, B, c, b, lx, ux, lw, uw, tol, max_iter);
 
     // Solve the problem using SSN_PMM
     SSN_PMM<T> solver(problem); 
     Solution<T> solution = solver.solve();
 
     if (solution.opt == 0) {
-        std::cout << "Optimal solution found.\n";
+        std::cout << "Optimal solution found at iteration " << solution.PMM_iter << std::endl;
     } else {
         std::cout << "opt = " << solution.opt << std::endl;
     }
