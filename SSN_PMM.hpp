@@ -62,8 +62,8 @@ public:
     // SSN parameters
     T mu = 5e1;
     T rho = 1e2;
-    int SSN_max_iter = 4000;
-    int SSN_max_in_iter = 40;
+    int SSN_max_iter = 4000; // 4000
+    int SSN_max_in_iter = 3; // 40
     T SSN_tol = tol;
     T reg_limit = 1e6;
 
@@ -120,11 +120,8 @@ public:
         }
     }
 
-    // Compute the residual norms associated with optimality conditions
     Vec compute_residual_norms();
-    // Udpate penalty parameters mu and rho
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
-    // Solve method
     Solution<T> solve();
 };
 

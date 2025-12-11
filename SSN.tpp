@@ -17,7 +17,7 @@ template <typename T>
 typename SSN<T>::Vec SSN<T>::compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
     using Vec = typename SSN<T>::Vec;
 
-    Vec proj = v.cwiseMax(lower).cwiseMin(upper);
+    Vec proj = compute_box_proj(v, lower, upper);
     Vec dist = v - proj;
     return dist;
 }
@@ -137,9 +137,8 @@ SSN_result<T> SSN<T>::solve_SSN() {
 
         // Compute gradient and check termination criteria
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
-        T grad_norm = grad_L.norm();
-        if (grad_norm < SSN_tol) {
-            SSN_tol_achieved = grad_norm;
+        T grad_L_norm = grad_L.norm();
+        if (grad_L_norm < SSN_tol) {
             break;
         }
 
@@ -172,7 +171,7 @@ SSN_result<T> SSN<T>::solve_SSN() {
         SpMat B_tr = B.transpose();
 
         // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; -G D]:
-        
+
         // H_tilde = diag(Q) + mu(I_n - P_K) + I_n / rho
         Vec H_tilde_diag = Q_diag + mu * (ones_n - diag_P_K) + (1 / rho) * ones_n;
         SpMat H_tilde(n, n);
@@ -298,9 +297,12 @@ SSN_result<T> SSN<T>::solve_SSN() {
         result.y2 = y2 + alpha * dy2;
         
         result.SSN_in_iter++;
+
+        std::cout << "  SSN iter " << result.SSN_in_iter << ": x = " << result.x.transpose() << std::endl;
     }
 
-    result.SSN_tol_achieved = compute_grad_Lagrangian(result.x, result.y2).squaredNorm();
+    result.SSN_tol_achieved = compute_grad_Lagrangian(result.x, result.y2).norm();
+    std::cout << "  SSN tol achieved = " << result.SSN_tol_achieved << std::endl;
 
     return result;
 }

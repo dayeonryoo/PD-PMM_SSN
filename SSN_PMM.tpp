@@ -5,12 +5,12 @@
 #include "SSN.hpp"
 
 template <typename T>
-typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms(){
-    // Dual residual norm
-    T res_d = (c + Q * x - A.transpose() * y1 - B.transpose() * y2 + z).norm() / (1 + c.norm());
-    
+typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms() {
     // Primal residual norm
     T res_p = (A * x - b).norm() / (1 + b.norm());
+
+    // Dual residual norm
+    T res_d = (c + Q * x - A.transpose() * y1 - B.transpose() * y2 + z).norm() / (1 + c.norm());
 
     // Complementarity residual norm for box constraints
     Vec temp_compl_x = x + z;
@@ -84,12 +84,15 @@ Solution<T> SSN_PMM<T>::solve() {
 
         // Compute residuals and check termination criteria.
         Vec res_norms = compute_residual_norms();
-        if (res_norms.maxCoeff() < tol) {
+        T max_res_norm = res_norms.maxCoeff();
+        if (max_res_norm < tol) {
             opt = 0; // Optimal solution found
             break;
         }
         T res_p = res_norms(0);
         T res_d = res_norms(1);
+
+        std::cout << "PMM iter " << PMM_iter << ": x = " << x.transpose() << ", res norms = " << res_norms.transpose() << std::endl;
 
         // Update the Newton system
         NS.x = x;
@@ -105,8 +108,8 @@ Solution<T> SSN_PMM<T>::solve() {
         y2 = NS_solution.y2;
 
         // Update multipliers
-        y1 -= mu * (A * x - b);
-        z += mu * x - mu * ((z / mu) + x).cwiseMax(lx).cwiseMin(ux);
+        y1 = y1 - mu * (A * x - b);
+        z = z + mu * x - mu * ((z / mu) + x).cwiseMax(lx).cwiseMin(ux);
 
         // Compute the new residual norms
         Vec new_res_norms = compute_residual_norms();
@@ -119,7 +122,10 @@ Solution<T> SSN_PMM<T>::solve() {
         PMM_iter++;
         SSN_iter += NS_solution.SSN_in_iter;
         if (SSN_iter >= SSN_max_iter) break;
+
     }
 
-    return Solution<T>(opt, x, y1, y2, z, obj_val, PMM_iter, SSN_iter);
+    PMM_tol_achieved = compute_residual_norms().maxCoeff();
+
+    return Solution<T>(opt, x, y1, y2, z, obj_val, PMM_iter, SSN_iter, PMM_tol_achieved);
 }

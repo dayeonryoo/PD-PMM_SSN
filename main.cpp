@@ -19,11 +19,11 @@ int main() {
 //           lx <= x <= ux,
 //           lw <= w <= uw
 // --------------------------------------------------------------
-//      c = [-1; -2], A = [1; 1], b = 1, B = I_2,
+//      c = [1; 2], Q = 0, A = [1; 1], b = 0, B = I_2,
 //      lx = [0; 0], ux = [1; 1], lw = [0; 0], uw = [1; 1]
 // --------------------------------------------------------------
-//      Expected solution: x = [0; 1]
-//      Expected objective value: f(x) = -2
+//      Expected solution: x = [0; 0]
+//      Expected objective value: f(x) = 0
 // =============================================================
 
     // Define problem data
@@ -49,11 +49,11 @@ int main() {
     B_trpl.emplace_back(1, 1, 1.0);
     B.setFromTriplets(B_trpl.begin(), B_trpl.end());
 
-    // c = [-1; -2], b =1
+    // c = [1; 2], b = 0
     Vec c(n);
-    c << -1.0, -2.0;
+    c << 1.0, 2.0;
     Vec b(m);
-    b << 1.0;
+    b << 0.0;
 
     // 0 <= x, w <= 1
     Vec lx(n), ux(n);
@@ -64,7 +64,7 @@ int main() {
     uw.setOnes();
 
     T tol = 0.1;
-    int max_iter = 100;
+    int max_iter = 5;
 
     // Create Problem instance
     Problem<T> problem(Q, A, B, c, b, lx, ux, lw, uw, tol, max_iter);
@@ -73,16 +73,19 @@ int main() {
     SSN_PMM<T> solver(problem); 
     Solution<T> solution = solver.solve();
 
+    std::cout << "Final result:\n";
+
     if (solution.opt == 0) {
         std::cout << "Optimal solution found at iteration " << solution.PMM_iter << std::endl;
     } else {
         std::cout << "opt = " << solution.opt << std::endl;
     }
-    std::cout << "x = " << solution.x << std::endl;
-    std::cout << "y1 = " << solution.y1 << std::endl;
-    std::cout << "y2 = " << solution.y2 << std::endl;
-    std::cout << "z = " << solution.z << std::endl;
+    std::cout << "x = " << solution.x.transpose() << std::endl;
+    // std::cout << "y1 = " << solution.y1.transpose() << std::endl;
+    // std::cout << "y2 = " << solution.y2.transpose() << std::endl;
+    // std::cout << "z = " << solution.z.transpose() << std::endl;
     std::cout << "f(x) = " << solution.obj_val << std::endl;
+    std::cout << "PMM tol achieved = " << solution.PMM_tol_achieved << std::endl;
 
     return 0;
 }
