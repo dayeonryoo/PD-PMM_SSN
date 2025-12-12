@@ -53,15 +53,15 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
 
     // Evaluate Dist_W (B*x_new - (y2 - y2_new/2)/mu)
-    Vec dist_W = compute_dist_box(B * x_new - (y2 - y2_new / 2) / mu, lw, uw);
+    Vec dist_W = compute_dist_box(B * x_new + (0.5 * y2_new - y2) / mu, lw, uw);
 
     // Compute gradient of Lagrangian
     Vec grad_L_x = c + Q * x_new - A.transpose() * y1 + mu * A.transpose() * (A * x_new - b)
-                   + mu * (z / mu + x_new - dist_K)
+                   + mu * dist_K
                    + 2 * mu * B.transpose() * dist_W
-                   + 1 / rho * (x_new - x);
+                   + (x_new - x) / rho;
 
-    Vec grad_L_y2 = dist_W + 1 / (2 * mu) * y2_new;
+    Vec grad_L_y2 = dist_W + y2_new / (2 * mu);
 
     // Combine gradients
     Vec grad_L(n + l);
@@ -147,8 +147,8 @@ SSN_result<T> SSN<T>::solve_SSN() {
         Eigen::Array<bool, Eigen::Dynamic, 1> K_mask = (u.array() > lx.array()) && (u.array() < ux.array());
         Vec diag_P_K = K_mask.cast<T>().matrix();
 
-        // Compute Clarke subgradient of Proj_W(B*x_new - (y2 - y2_new/2)/mu)
-        Vec v = B * result.x - (y2 - result.y2 / 2) / mu;
+        // Compute Clarke subgradient of Proj_W(B*x_new + (y2_new/2 - y2)/mu)
+        Vec v = B * result.x + (0.5 * result.y2 - y2) / mu;
         Eigen::Array<bool, Eigen::Dynamic, 1> W_mask = (v.array() > lw.array()) && (v.array() < uw.array());
         Vec diag_P_W = W_mask.cast<T>().matrix();
 
@@ -173,7 +173,7 @@ SSN_result<T> SSN<T>::solve_SSN() {
         // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; -G D]:
 
         // H_tilde = diag(Q) + mu(I_n - P_K) + I_n / rho
-        Vec H_tilde_diag = Q_diag + mu * (ones_n - diag_P_K) + (1 / rho) * ones_n;
+        Vec H_tilde_diag = Q_diag + mu * (ones_n - diag_P_K) + ones_n / rho;
         SpMat H_tilde(n, n);
         std::vector<Eigen::Triplet<T>> H_tilde_trpl;
         H_tilde_trpl.reserve(n);
@@ -193,13 +193,12 @@ SSN_result<T> SSN<T>::solve_SSN() {
         int new_row_inact = 0;
         for (int i = 0; i < B.rows(); ++i)
         {
-            if (active_W(i)) {
+            if (active_W(i)) { // SHOULD LOOP OVER COL NOT ROW
                 for (typename SpMat::InnerIterator it(B, i); it; ++it) {
                     B_act_trpl.emplace_back(new_row_act, it.col(), it.value());
                 }
                 new_row_act++;
-            }
-            else {
+            } else {
                 for (typename SpMat::InnerIterator it(B, i); it; ++it) {
                     B_inact_trpl.emplace_back(new_row_inact, it.col(), it.value());
                 }
@@ -213,12 +212,12 @@ SSN_result<T> SSN<T>::solve_SSN() {
         SpMat G(A.rows() + n_active_W, A.cols());
         std::vector<Eigen::Triplet<T>> G_trpl;
         G_trpl.reserve(A.nonZeros() + B_active_W.nonZeros());
-        for (int i = 0; i < A.rows(); ++i) {
+        for (int i = 0; i < A.rows(); ++i) { // SHOULD LOOP OVER COL NOT ROW
             for (typename SpMat::InnerIterator it(A, i); it; ++it) {
                 G_trpl.emplace_back(i, it.col(), it.value());
             }
         }
-        for (int i = 0; i < n_active_W; ++i) {
+        for (int i = 0; i < n_active_W; ++i) { // SHOULD LOOP OVER COL NOT ROW
             for (typename SpMat::InnerIterator it(B_active_W, i); it; ++it) {
                 G_trpl.emplace_back(A.rows() + i, it.col(), it.value());
             }
@@ -226,7 +225,7 @@ SSN_result<T> SSN<T>::solve_SSN() {
         G.setFromTriplets(G_trpl.begin(), G_trpl.end());
         SpMat G_tr = G.transpose();
 
-        // D = [I_m / mu, 0 ; 0, (I_m - P_W/2) / mu]
+        // D = [I_m / mu, 0 ; 0, (I_m - P_W/2)_active_W / mu]
         // Vec D_diag = (1 / mu) * Vec::Ones(m + n_active_W);
         SpMat D(m + n_active_W, m + n_active_W);
         std::vector<Eigen::Triplet<T>> D_trpl;
@@ -246,7 +245,7 @@ SSN_result<T> SSN<T>::solve_SSN() {
         Vec y2_inactive_W(n_inactive_W);
         int p_act = 0;
         int p_inact = 0;
-        for (int i = 0; i < 1; ++i) {
+        for (int i = 0; i < l; ++i) {
             if (active_W(i)) {
                 dist_W_v_active_W(p_act) = dist_W_v(i);
                 y2_active_W(p_act) = result.y2(i);

@@ -34,7 +34,7 @@ public:
     // Set the semismooth Newton parameters
     T beta = 0.4995 / 2;
     T delta = 0.995;
-    T eta = SSN_tol / 10;
+    T eta = 0.1 * SSN_tol;
     T gamma = 0.1;
     
     SSN(const SpMat& Q_, const SpMat& A_, const SpMat& B_,

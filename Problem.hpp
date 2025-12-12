@@ -22,15 +22,15 @@ public:
     Vec c, b;
     Vec lx, ux, lw, uw;
     T tol;
-    int max_it;
+    int max_iter;
 
     Problem(const SpMat& Q_, const SpMat& A_, const SpMat& B_,
             const Vec& c_, const Vec& b_,
             const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
             T tol_ = T(1e-4),
-            int max_it_ = 200)
+            int max_iter_ = 200)
     : Q(Q_), A(A_), B(B_), tol(tol_), c(c_), b(b_),
-      lx(lx_), ux(ux_), lw(lw_), uw(uw_), max_it(max_it_)
+      lx(lx_), ux(ux_), lw(lw_), uw(uw_), max_iter(max_iter_)
     {
         // Validate required matrices
         if (Q.rows() == 0 || Q.cols() == 0) {

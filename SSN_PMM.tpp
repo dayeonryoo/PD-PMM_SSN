@@ -71,7 +71,7 @@ Solution<T> SSN_PMM<T>::solve() {
         SSN_tol, SSN_max_in_iter);
 
     // SSN-PMM main loop
-    while (PMM_iter < max_it) {
+    while (PMM_iter < max_iter) {
     // ----------------------------------------------
     // Structure:
     // Until (primal infeasibility, dual infeasibility, complementarity) < tol, do:
@@ -108,8 +108,8 @@ Solution<T> SSN_PMM<T>::solve() {
         y2 = NS_solution.y2;
 
         // Update multipliers
-        y1 = y1 - mu * (A * x - b);
-        z = z + mu * x - mu * ((z / mu) + x).cwiseMax(lx).cwiseMin(ux);
+        y1 -= mu * (A * x - b);
+        z += mu * (x - ((z / mu) + x).cwiseMax(lx).cwiseMin(ux));
 
         // Compute the new residual norms
         Vec new_res_norms = compute_residual_norms();

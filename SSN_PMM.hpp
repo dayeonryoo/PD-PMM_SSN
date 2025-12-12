@@ -55,13 +55,15 @@ public:
     Vec c, b;
     Vec lx, ux, lw, uw;
     T tol;
-    int max_it;
+    int max_iter;
 
     int n, m, l;
 
-    // SSN parameters
+    // PMM parameters
     T mu = 5e1;
     T rho = 1e2;
+
+    // SSN parameters
     int SSN_max_iter = 4000; // 4000
     int SSN_max_in_iter = 3; // 40
     T SSN_tol = tol;
@@ -78,7 +80,7 @@ public:
     SSN_PMM(Problem<T>& problem)
     : Q(problem.Q), A(problem.A), B(problem.B), c(problem.c), b(problem.b),
       lx(problem.lx), ux(problem.ux), lw(problem.lw), uw(problem.uw),
-      tol(problem.tol), max_it(problem.max_it)
+      tol(problem.tol), max_iter(problem.max_iter)
     {
         // Validate required matrices
         if (Q.rows() == 0 || Q.cols() == 0) {
