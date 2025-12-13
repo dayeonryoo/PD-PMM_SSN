@@ -64,7 +64,7 @@ public:
     T rho = 1e2;
 
     // SSN parameters
-    int SSN_max_iter = 4000; // 4000
+    int SSN_max_iter = 10; // 4000
     int SSN_max_in_iter = 3; // 40
     T SSN_tol = tol;
     T reg_limit = 1e6;
@@ -122,6 +122,7 @@ public:
         }
     }
 
+    Vec proj(const Vec& u, const Vec& lower, const Vec& upper);
     Vec compute_residual_norms();
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
     Solution<T> solve();

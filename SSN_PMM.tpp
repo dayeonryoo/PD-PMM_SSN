@@ -2,7 +2,13 @@
 #include <iostream>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
+#include <algorithm>
 #include "SSN.hpp"
+
+template <typename T>
+typename SSN_PMM<T>::Vec SSN_PMM<T>::proj(const Vec& u, const Vec& lower, const Vec& upper) {
+    return u.cwiseMax(lower).cwiseMin(upper);
+}
 
 template <typename T>
 typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms() {
@@ -13,15 +19,10 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms() {
     T res_d = (c + Q * x - A.transpose() * y1 - B.transpose() * y2 + z).norm() / (1 + c.norm());
 
     // Complementarity residual norm for box constraints
-    Vec temp_compl_x = x + z;
-    temp_compl_x = temp_compl_x.cwiseMax(lx).cwiseMin(ux);
-    T compl_x = (x - temp_compl_x).norm();
+    T compl_x = (x - proj(x + z, lx, ux)).norm();
 
     // Complementarity residual norm for Bx constraints
-    Vec w = B * x;
-    Vec temp_compl_w = w - y2;
-    temp_compl_w = temp_compl_w.cwiseMax(lw).cwiseMin(uw);
-    T compl_w = (w - temp_compl_w).norm();
+    T compl_w = (B * x - proj(B * x - y2, lw, uw)).norm();
 
     // Collect residual norms
     Vec res_norms(4);
@@ -84,15 +85,16 @@ Solution<T> SSN_PMM<T>::solve() {
 
         // Compute residuals and check termination criteria.
         Vec res_norms = compute_residual_norms();
+        T res_p = res_norms(0); // Needed to update PMM params
+        T res_d = res_norms(1);
         T max_res_norm = res_norms.maxCoeff();
         if (max_res_norm < tol) {
             opt = 0; // Optimal solution found
             break;
         }
-        T res_p = res_norms(0);
-        T res_d = res_norms(1);
 
-        std::cout << "PMM iter " << PMM_iter << ": x = " << x.transpose() << ", res norms = " << res_norms.transpose() << std::endl;
+        PMM_iter++;
+        std::cout << "PMM iter " << PMM_iter << ": x = (" << x.transpose() << "), res norms = (" << res_norms.transpose() << ")\n";
 
         // Update the Newton system
         NS.x = x;
@@ -103,25 +105,31 @@ Solution<T> SSN_PMM<T>::solve() {
         NS.rho = rho;
 
         // Call semismooth Newton method to update x and y2
-        SSN_result<T> NS_solution = NS.solve_SSN();
-        x = NS_solution.x;
-        y2 = NS_solution.y2;
+        Vec res_vec(3);
+        res_vec << 0.1 * res_p, 0.1 * res_d, T(1);
+        SSN_tol = std::max(res_vec.minCoeff(), SSN_tol);
+        SSN_tol_achieved = 2 * res_vec.maxCoeff();
+        while (SSN_tol_achieved > std::max(0.1*res_vec.maxCoeff(), res_vec.minCoeff())) {
+            SSN_result<T> NS_solution = NS.solve_SSN();
+            x = NS_solution.x;
+            y2 = NS_solution.y2;
+            NS.x = x;
+            NS.y2 = y2;
+            SSN_iter += NS_solution.SSN_in_iter;
+            if (SSN_iter >= SSN_max_iter) break;
+        }
 
         // Update multipliers
         y1 -= mu * (A * x - b);
-        z += mu * (x - ((z / mu) + x).cwiseMax(lx).cwiseMin(ux));
+        z += mu * (x - proj(z / mu + x, lx, ux));
 
         // Compute the new residual norms
         Vec new_res_norms = compute_residual_norms();
-        T new_res_p = res_norms(0);
-        T new_res_d = res_norms(1);
+        T new_res_p = new_res_norms(0);
+        T new_res_d = new_res_norms(1);
 
         // Update penalty parameters
         update_PMM_parameters(res_p, res_d, new_res_p, new_res_d);
-
-        PMM_iter++;
-        SSN_iter += NS_solution.SSN_in_iter;
-        if (SSN_iter >= SSN_max_iter) break;
 
     }
 

@@ -50,11 +50,12 @@ public:
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_)
     {}
 
+    Vec proj(const Vec& u, const Vec& lower, const Vec& upper);
     Vec compute_box_proj(const Vec& v, const Vec& lower, const Vec& upper);
     Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper);
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
-    T backtracking_line_search(const Vec& dx, const Vec& dy2);
+    T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     SSN_result<T> solve_SSN();
 
 };

@@ -81,8 +81,9 @@ int main() {
         std::cout << "opt = " << solution.opt << std::endl;
     }
     std::cout << "x = " << solution.x.transpose() << std::endl;
-    // std::cout << "y1 = " << solution.y1.transpose() << std::endl;
-    // std::cout << "y2 = " << solution.y2.transpose() << std::endl;
+    Vec y(m + l);
+    y << solution.y1, solution.y2;
+    std::cout << "y = (" << y.transpose() << ")\n";
     // std::cout << "z = " << solution.z.transpose() << std::endl;
     std::cout << "f(x) = " << solution.obj_val << std::endl;
     std::cout << "PMM tol achieved = " << solution.PMM_tol_achieved << std::endl;
