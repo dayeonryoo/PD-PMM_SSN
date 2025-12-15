@@ -16,6 +16,8 @@ class SSN {
 public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using SpMat = Eigen::SparseMatrix<T>;
+    using BoolArr = Eigen::Array<bool, Eigen::Dynamic, 1>;
+    using Triplet = Eigen::Triplet<T>;
 
     // Inputs
     SpMat Q, A, B;
@@ -37,6 +39,8 @@ public:
     T eta = 0.1 * SSN_tol;
     T gamma = 0.1;
     
+    SSN() {}
+
     SSN(const SpMat& Q_, const SpMat& A_, const SpMat& B_,
         const Vec& c_, const Vec& b_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
@@ -55,6 +59,12 @@ public:
     Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper);
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
+    Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper);
+    SpMat build_diag_matrix(const Vec& diag);
+    Vec separate_rows(const Vec& u, const BoolArr& mask);
+    SpMat separate_rows(const SpMat& M, const BoolArr& mask);
+    Vec retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask);
+    SpMat stack_rows(const SpMat& A, const SpMat& B);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     SSN_result<T> solve_SSN();
 

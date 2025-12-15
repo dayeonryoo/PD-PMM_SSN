@@ -41,7 +41,7 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
     Vec pr_res = A * x_new - b;
 
     // Compute Lagrangian
-    T L = c.dot(x_new) + 0.5 * x_new.transpose() * Q * x_new
+    T L = c.dot(x_new) + 0.5 * x_new.dot(Q * x_new)
           - y1.dot(pr_res) + (mu / 2) * pr_res.squaredNorm()
           - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
           + mu * dist_W.squaredNorm() + y2_new.squaredNorm() / (4 * mu) - y2.squaredNorm() / (2 * mu)
@@ -78,6 +78,135 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
 }
 
 template <typename T>
+typename SSN<T>::Vec SSN<T>::Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper) {
+    using Vec = typename SSN<T>::Vec;
+    using BoolArr = typename SSN<T>::BoolArr;
+
+    BoolArr mask = (u.array() > lower.array()) && (u.array() < upper.array());
+    Vec grad_proj = mask.cast<T>().matrix();
+
+    return grad_proj;
+}
+
+template <typename T>
+typename SSN<T>::SpMat SSN<T>::build_diag_matrix(const Vec& diag) {
+    using Vec = typename SSN<T>::Vec;
+    using SpMat = typename SSN<T>::SpMat;
+    using Triplet = typename SSN<T>::Triplet;
+
+    int t = diag.size();
+    SpMat M(t, t);
+    std::vector<Triplet> trpl;
+    trpl.reserve(t);
+    for (int i = 0; i < t; ++i) {
+        trpl.emplace_back(i, i, diag(i));
+    }
+    M.setFromTriplets(trpl.begin(), trpl.end());
+    
+    return M;
+}
+
+template <typename T>
+typename SSN<T>::Vec SSN<T>::separate_rows(const Vec& u, const BoolArr& mask) {
+    using Vec = typename SSN<T>::Vec;
+    using SpMat = typename SSN<T>::SpMat;
+    using Triplet = typename SSN<T>::Triplet;
+    using BoolArr = typename SSN<T>::BoolArr;
+
+    int t = mask.count();
+    Vec u_separated(u.size());
+    int selected_row = 0;
+    int unselected_row = 0;
+    for (int i = 0; i < u.size(); ++i) {
+        if (mask(i)) {
+            u_separated(selected_row++) = u(i);
+        } else {
+            u_separated(t + unselected_row++) = u(i);
+        }
+    }
+    
+    return u_separated;
+}
+
+template <typename T>
+typename SSN<T>::SpMat SSN<T>::separate_rows(const SpMat& M, const BoolArr& mask) {
+    using Vec = typename SSN<T>::Vec;
+    using SpMat = typename SSN<T>::SpMat;
+    using Triplet = typename SSN<T>::Triplet;
+    using BoolArr = typename SSN<T>::BoolArr;
+
+    int t = mask.count();
+    Eigen::VectorXi row_map(M.rows());
+    int selected_row = 0;
+    int unselected_row = 0;
+    for (int i = 0; i < M.rows(); ++i) {
+        if (mask(i)) {
+            row_map(i) = selected_row++;
+        } else {
+            row_map(i) = t + unselected_row++;
+        }
+    }
+    SpMat M_separated(M.rows(), M.cols());
+    std::vector<Triplet> trpl;
+    trpl.reserve(M.nonZeros());
+    for (int col = 0; col < M.cols(); ++col) {
+        for (typename SpMat::InnerIterator it(M, col); it; ++it) {
+            trpl.emplace_back(row_map(it.row()), col, it.value());
+        }
+    }
+    M_separated.setFromTriplets(trpl.begin(), trpl.end());
+    
+    return M_separated;
+}
+
+template <typename T>
+typename SSN<T>::SpMat SSN<T>::stack_rows(const SpMat& A, const SpMat& B) {
+    using SpMat = typename SSN<T>::SpMat;
+    using Triplet = typename SSN<T>::Triplet;
+
+    assert(A.cols() == B.cols());
+
+    int A_rows = A.rows();
+    int B_rows = B.rows();
+    int A_cols = A.cols();
+
+    SpMat stack(A_rows + B_rows, A.cols());
+    std::vector<Triplet> trpl;
+    trpl.reserve(A.nonZeros() + B.nonZeros());
+
+    for (int col = 0; col < A_cols; ++col) {
+        for (typename SpMat::InnerIterator it(A, col); it; ++it) {
+            trpl.emplace_back(it.row(), col, it.value());
+        }
+    }
+
+    for (int col = 0; col < A_cols; ++col) {
+        for (typename SpMat::InnerIterator it(B, col); it; ++it) {
+            trpl.emplace_back(A_rows + it.row(), col, it.value());
+        }
+    }
+
+    stack.setFromTriplets(trpl.begin(), trpl.end());
+    return stack;
+}
+
+template <typename T>
+typename SSN<T>::Vec SSN<T>::retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask) {
+    int i_sel = 0;
+    int i_unsel = 0;
+    Vec u(mask.size());
+    for (int i = 0; i < mask.size(); ++i) {
+        if (mask(i)) {
+            u(i) = u_sel(i_sel++);
+        } else {
+            u(i) = u_unsel(i_unsel++);
+        }
+    }
+
+    return u;
+}
+
+template <typename T>
 T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
     using Vec = typename SSN<T>::Vec;
 
@@ -89,22 +218,22 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
     T L = compute_Lagrangian(x_curr, y2_curr);
     Vec grad_L = compute_grad_Lagrangian(x_curr, y2_curr);
 
-    // Evaluate Lagrangian at u_new = u + alpha * du
-    Vec x_new = x_curr + alpha * dx;
-    Vec y2_new = y2_curr + alpha * dy2;
-    T L_new = compute_Lagrangian(x_new, y2_new);
+    T grad_desc = grad_L.head(n).dot(dx) + grad_L.tail(l).dot(dy2);
 
     // Iterate until finding the largest step size satisfying the Armijo-Goldstein condition
-    T grad_desc = grad_L.segment(0, n).dot(dx) + grad_L.segment(n, l).dot(dy2);
-    while (L_new > L + beta * alpha * grad_desc) {
+    while (true) {
+
+        // Evaluate Lagrangian at u_new = u + alpha * du
+        Vec x_new = x_curr + alpha * dx;
+        Vec y2_new = y2_curr + alpha * dy2;
+        T L_new = compute_Lagrangian(x_new, y2_new);
+
+        if (L_new <= L + beta * alpha * grad_desc) break;
+
         m += 200;
         alpha = pow(delta, m);
-        if (alpha < 1e-3) break; // Lower bound on alpha
 
-        // Evaluate Lagrangian at u_new for next iteration
-        x_new += alpha * dx;
-        y2_new += alpha * dy2;
-        L_new = compute_Lagrangian(x_new, y2_new);
+        if (alpha < 1e-3) break; // Lower bound on alpha
     }
 
     return alpha;
@@ -115,8 +244,8 @@ template <typename T>
 SSN_result<T> SSN<T>::solve_SSN() {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
-    using BoolArr = Eigen::Array<bool, Eigen::Dynamic, 1>;
-    using Triplet = Eigen::Triplet<T>;
+    using BoolArr = typename SSN<T>::BoolArr;
+    using Triplet =typename SSN<T>::Triplet;
 
     // Intialize iteration counter and set starting points
     SSN_result<T> result;
@@ -146,13 +275,11 @@ SSN_result<T> SSN<T>::solve_SSN() {
 
         // Compute Clarke subgradient of Proj_K(z/mu + x_new)
         Vec u = z / mu + result.x;
-        BoolArr K_mask = (u.array() > lx.array()) && (u.array() < ux.array());
-        Vec diag_P_K = K_mask.cast<T>().matrix();
+        Vec diag_P_K = Clarke_subgrad_of_proj(u, lx, ux);
 
         // Compute Clarke subgradient of Proj_W(B*x_new + (y2_new/2 - y2)/mu)
         Vec v = B * result.x + (0.5 * result.y2 - y2) / mu;
-        BoolArr W_mask = (v.array() > lw.array()) && (v.array() < uw.array());
-        Vec diag_P_W = W_mask.cast<T>().matrix();
+        Vec diag_P_W = Clarke_subgrad_of_proj(v, lw, uw);
 
         // Compute dist_K(u) and dist_W(v)
         Vec dist_K_u = compute_dist_box(u, lx, ux);
@@ -177,96 +304,31 @@ SSN_result<T> SSN<T>::solve_SSN() {
         // H_tilde = diag(Q) + mu(I_n - P_K) + I_n / rho
         Vec H_tilde_diag = Q_diag + mu * (ones_n - diag_P_K) + ones_n / rho;
         Vec H_tilde_diag_inv = H_tilde_diag.cwiseInverse();
-        SpMat H_tilde_inv(n, n);
-        std::vector<Triplet> H_tilde_inv_tripl;
-        H_tilde_inv_tripl.reserve(n);
-        for (int i = 0; i < n; ++i) {
-            H_tilde_inv_tripl.emplace_back(i, i, H_tilde_diag_inv(i));
-        }
-        H_tilde_inv.setFromTriplets(H_tilde_inv_tripl.begin(), H_tilde_inv_tripl.end());
+        SpMat H_tilde_inv = build_diag_matrix(H_tilde_diag_inv);
 
         // Active and inactive parts of B w.r.t. W = [lw, uw]
-        Eigen::VectorXi row_map_act(l); // Indices for active rows
-        Eigen::VectorXi row_map_inact(l); // Indicices for inactive rows
-        int new_row_act = 0;
-        int new_row_inact = 0;
-        for (int i = 0; i < l; ++i) {
-            if (active_W(i)) {
-                row_map_act(i) = new_row_act;
-                new_row_act++;
-            } else {
-                row_map_inact(i) = new_row_inact;
-                new_row_inact++;
-            }
-        }
-        SpMat B_active_W(n_active_W, n);
-        SpMat B_inactive_W(n_inactive_W, n);
-        std::vector<Triplet> B_act_trpl;
-        std::vector<Triplet> B_inact_trpl;
-        B_act_trpl.reserve(B.nonZeros());
-        B_inact_trpl.reserve(B.nonZeros());
-        for (int i = 0; i < n; ++i) { // Iterate columns
-            for (typename SpMat::InnerIterator it(B, i); it; ++it) { // Iterate nnz in col i
-                int old_row = it.row();
-                if (active_W(old_row)) {
-                    int new_row = row_map_act(old_row);
-                    B_act_trpl.emplace_back(new_row, i, it.value());
-                } else {
-                    int new_row = row_map_inact(old_row);
-                    B_inact_trpl.emplace_back(new_row, i, it.value());
-                }
-            }
-        }
-        B_active_W.setFromTriplets(B_act_trpl.begin(), B_act_trpl.end());
-        B_inactive_W.setFromTriplets(B_inact_trpl.begin(), B_inact_trpl.end());
+        SpMat B_sep = separate_rows(B, active_W);
+        SpMat B_active_W = B_sep.topRows(n_active_W);
+        SpMat B_inactive_W = B_sep.bottomRows(n_inactive_W);
 
         // G = [A ; B_active_W]
-        SpMat G(m + n_active_W, n);
-        std::vector<Triplet> G_trpl;
-        G_trpl.reserve(A.nonZeros() + B_active_W.nonZeros());
-        for (int col = 0; col < n; ++col) {
-            for (typename SpMat::InnerIterator it(A, col); it; ++it) {
-                G_trpl.emplace_back(it.row(), col, it.value());
-            }
-        }
-        for (int col = 0; col < n; ++col) {
-            for (typename SpMat::InnerIterator it(B_active_W, col); it; ++it) {
-                G_trpl.emplace_back(m + it.row(), col, it.value());
-            }
-        }
-        G.setFromTriplets(G_trpl.begin(), G_trpl.end());
+        SpMat G = stack_rows(A, B_active_W);
         SpMat G_tr = G.transpose();
 
         // D = [I_m / mu, 0 ; 0, (I_m - P_W/2)_active_W / mu]
-        SpMat D(m + n_active_W, m + n_active_W);
-        std::vector<Triplet> D_trpl;
-        D_trpl.reserve(m + n_active_W);
-        for (int i = 0; i < m + n_active_W; ++i) {
-            D_trpl.emplace_back(i, i, 1 / mu);
-        }
-        D.setFromTriplets(D_trpl.begin(), D_trpl.end());
+        SpMat D = build_diag_matrix(Vec::Ones(m + n_active_W) / mu);
 
-        
         // Compute dy2 in inactive_W:
         // dy2_inactive_W = ((I - P_W/2)^{-1} - mu * dist_W(v) - y2/2)(inactive_W)
         //                = 2 - mu * dist_W(v)(inactive_W) - y2(inactive_W)/2 
-        Vec y2_active_W(n_active_W);
-        Vec y2_inactive_W(n_inactive_W);
-        Vec dist_W_v_active_W(n_active_W);
-        Vec dist_W_v_inactive_W(n_inactive_W);
-        int i_act = 0;
-        int i_inact = 0;
-        for (int i = 0; i < l; ++i) {
-            if (active_W(i)) {
-                dist_W_v_active_W(i_act) = dist_W_v(i);
-                y2_active_W(i_act) = result.y2(i);
-                i_act++;
-            } else {
-                dist_W_v_inactive_W(i_inact) = dist_W_v(i);
-                y2_inactive_W(i_inact) = result.y2(i);
-                i_inact++;
-            }
-        }
+        Vec y2_sep = separate_rows(y2, active_W);
+        Vec y2_active_W = y2_sep.head(n_active_W);
+        Vec y2_inactive_W = y2_sep.tail(n_inactive_W);
+
+        Vec dist_W_v_sep = separate_rows(dist_W_v, active_W);
+        Vec dist_W_v_active_W = dist_W_v_sep.head(n_active_W);
+        Vec dist_W_v_inactive_W = dist_W_v_sep.tail(n_inactive_W);
+
         Vec dy2_inactive_W = 2 * Vec::Ones(n_inactive_W) - mu * dist_W_v_inactive_W - y2_inactive_W / 2;
 
         // Compute the RHS vector
@@ -274,8 +336,8 @@ SSN_result<T> SSN<T>::solve_SSN() {
                  - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W
                  + (result.x - x) / rho;
         Vec r2(m + n_active_W);
-        r2.segment(0, m) = y1 / mu - A * result.x + b;
-        r2.segment(m, n_active_W) = -dist_W_v_active_W - y2_active_W / (2 * mu);
+        r2.head(m) = y1 / mu - A * result.x + b;
+        r2.tail(n_active_W) = -dist_W_v_active_W - y2_active_W / (2 * mu);
 
         // Compute the Schur complement of J_tilde
         SpMat Schur_tilde = G * H_tilde_inv * G_tr + D; // Self-adjoint and PD
@@ -297,19 +359,8 @@ SSN_result<T> SSN<T>::solve_SSN() {
 
         // Retrive dx and dy2
         Vec dx = H_tilde_inv * (G_tr * dy_ - r1);
-        Vec dy2_active_W = dy_.segment(m, n_active_W);
-        Vec dy2(l);
-        i_act = 0;
-        i_inact = 0;
-        for (int i = 0; i < l; ++i) {
-            if (active_W(i)) {
-                dy2(i) = dy2_active_W(i_act);
-                i_act++;
-            } else {
-                dy2(i) = dy2_inactive_W(i_inact);
-                i_inact++;
-            }
-        }
+        Vec dy2_active_W = dy_.tail(n_active_W);
+        Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
         // Backtracking line search to find a Newton step size alpha
         T alpha = backtracking_line_search(result.x, result.y2, dx, dy2);

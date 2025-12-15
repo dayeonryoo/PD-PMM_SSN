@@ -38,10 +38,13 @@ if(NOT DEFINED CMAKE_OBJDUMP)
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  # Include the install script for each subdirectory.
+  # Include the install script for the subdirectory.
   include("C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/eigen-build/cmake_install.cmake")
-  include("C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/googletest-build/cmake_install.cmake")
+endif()
 
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/googletest-build/cmake_install.cmake")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT

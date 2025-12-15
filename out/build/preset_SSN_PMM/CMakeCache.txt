@@ -212,7 +212,7 @@ CMAKE_PROJECT_DESCRIPTION:STATIC=
 CMAKE_PROJECT_HOMEPAGE_URL:STATIC=
 
 //Value Computed by CMake
-CMAKE_PROJECT_NAME:STATIC=SSM_PMM
+CMAKE_PROJECT_NAME:STATIC=SSN_PMM
 
 //Value Computed by CMake
 CMAKE_PROJECT_SPDX_LICENSE:STATIC=
@@ -346,9 +346,6 @@ EIGEN_LEAVE_TEST_IN_ALL_TARGET:BOOL=OFF
 //Value Computed by CMake
 Eigen3_BINARY_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/eigen-build
 
-//The directory containing a CMake configuration file for Eigen3.
-Eigen3_DIR:PATH=Eigen3_DIR-NOTFOUND
-
 //Value Computed by CMake
 Eigen3_IS_TOP_LEVEL:STATIC=OFF
 
@@ -399,13 +396,13 @@ INSTALL_GTEST:BOOL=ON
 PKGCONFIG_INSTALL_DIR:PATH=share/pkgconfig
 
 //Value Computed by CMake
-SSM_PMM_BINARY_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM
+SSN_PMM_BINARY_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM
 
 //Value Computed by CMake
-SSM_PMM_IS_TOP_LEVEL:STATIC=ON
+SSN_PMM_IS_TOP_LEVEL:STATIC=ON
 
 //Value Computed by CMake
-SSM_PMM_SOURCE_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN
+SSN_PMM_SOURCE_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN
 
 //Value Computed by CMake
 gmock_BINARY_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/googletest-build/googlemock
