@@ -1,0 +1,83 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"install"
+		],
+		"files" : 
+		[
+			"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 24,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 29,
+				"parent" : 0
+			}
+		]
+	},
+	"codemodelVersion" : 
+	{
+		"major" : 2,
+		"minor" : 9
+	},
+	"installers" : 
+	[
+		{
+			"backtrace" : 1,
+			"component" : "Devel",
+			"destination" : "include/eigen3/unsupported/Eigen",
+			"paths" : 
+			[
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/AdolcForward",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/AlignedVector3",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/ArpackSupport",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/AutoDiff",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/BVH",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/EulerAngles",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/FFT",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/IterativeSolvers",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/KroneckerProduct",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/LevenbergMarquardt",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/MatrixFunctions",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/MPRealSupport",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/NNLS",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/NonLinearOptimization",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/NumericalDiff",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/OpenGLSupport",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/Polynomials",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/SparseExtra",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/SpecialFunctions",
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/Splines"
+			],
+			"type" : "file"
+		},
+		{
+			"backtrace" : 2,
+			"component" : "Devel",
+			"destination" : "include/eigen3/unsupported/Eigen",
+			"paths" : 
+			[
+				"out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen/src"
+			],
+			"type" : "directory"
+		}
+	],
+	"paths" : 
+	{
+		"build" : "_deps/eigen-build/unsupported/Eigen",
+		"source" : "out/build/preset_SSN_PMM/_deps/eigen-src/unsupported/Eigen"
+	}
+}

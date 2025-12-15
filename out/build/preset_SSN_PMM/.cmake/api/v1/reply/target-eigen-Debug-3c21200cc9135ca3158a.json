@@ -1,0 +1,41 @@
+{
+	"abstract" : true,
+	"backtrace" : 1,
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"add_library"
+		],
+		"files" : 
+		[
+			"out/build/preset_SSN_PMM/_deps/eigen-src/CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 213,
+				"parent" : 0
+			}
+		]
+	},
+	"codemodelVersion" : 
+	{
+		"major" : 2,
+		"minor" : 9
+	},
+	"id" : "eigen::@71fc261a36766da068b5",
+	"name" : "eigen",
+	"paths" : 
+	{
+		"build" : "_deps/eigen-build",
+		"source" : "out/build/preset_SSN_PMM/_deps/eigen-src"
+	},
+	"sources" : [],
+	"type" : "INTERFACE_LIBRARY"
+}

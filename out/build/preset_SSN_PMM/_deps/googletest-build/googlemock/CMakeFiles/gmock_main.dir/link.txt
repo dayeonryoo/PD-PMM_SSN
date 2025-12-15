@@ -1,0 +1,2 @@
+C:\Users\k24095864\msys2\ucrt64\bin\ar.exe qc ..\..\..\lib\libgmock_main.a CMakeFiles/gmock_main.dir/src/gmock_main.cc.obj
+C:\Users\k24095864\msys2\ucrt64\bin\ranlib.exe ..\..\..\lib\libgmock_main.a
