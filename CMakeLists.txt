@@ -52,5 +52,11 @@ target_link_libraries(test_ssn
     ssn_pmm
     gtest
     gtest_main)
-
 add_test(NAME SSNTests COMMAND test_ssn)
+
+add_executable(test_pmm tests/PMM_tests.cpp)
+target_link_libraries(test_pmm
+    ssn_pmm
+    gtest
+    gtest_main)
+add_test(NAME PMMTests COMMAND test_pmm)

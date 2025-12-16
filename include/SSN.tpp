@@ -207,6 +207,28 @@ typename SSN<T>::Vec SSN<T>::retrive_row_order(const Vec& u_sel, const Vec& u_un
 }
 
 template <typename T>
+typename SSN<T>::Vec SSN<T>::solve_via_chol(const SpMat& M, const Vec& r) {
+    using Vec = typename SSN<T>::Vec;
+    using SpMat = typename SSN<T>::SpMat;
+
+    assert(M.rows() == M.cols());
+    assert(M.rows() == r.size());
+    
+    Eigen::SimplicialLLT<SpMat> chol;
+    chol.compute(M);
+    if (chol.info() != Eigen::Success) {
+        throw std::runtime_error("Cholesky factorization failed");
+    }
+
+    Vec sol = chol.solve(r);
+    if (chol.info() != Eigen::Success) {
+        throw std::runtime_error("Solving linear system via Cholesky failed");
+    }
+
+    return sol;
+}
+
+template <typename T>
 T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
     using Vec = typename SSN<T>::Vec;
 
@@ -241,7 +263,7 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
 
 
 template <typename T>
-SSN_result<T> SSN<T>::solve_SSN() {
+SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
     using BoolArr = typename SSN<T>::BoolArr;
@@ -259,7 +281,7 @@ SSN_result<T> SSN<T>::solve_SSN() {
         // Structure:
         // Let M(u), with u = (x,y_2), be the proximal augmented Lagrangian
         // associated with the subproblem of interest.
-        // Until (|| \nabla M(u_{k_j}) || < SSN_tol), do:
+        // Until (|| \nabla M(u_{k_j}) || < eps), for some given eps, do:
         //     1) Compute a Clarke subgradient J of \nabla M(u_{k_j})
         //        and solve J du = - \nabla M(u_{k_j}) for the Newton direction du;
         //     2) Perform a backtracking line search to determine the step size alpha;
@@ -271,7 +293,7 @@ SSN_result<T> SSN<T>::solve_SSN() {
         // Compute gradient and check termination criteria
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
         T grad_L_norm = grad_L.norm();
-        if (grad_L_norm < SSN_tol) break;
+        if (grad_L_norm < eps) break;
 
         // Compute Clarke subgradient of Proj_K(z/mu + x_new)
         Vec u = z / mu + result.x;
@@ -321,7 +343,7 @@ SSN_result<T> SSN<T>::solve_SSN() {
         // Compute dy2 in inactive_W:
         // dy2_inactive_W = ((I - P_W/2)^{-1} - mu * dist_W(v) - y2/2)(inactive_W)
         //                = 2 - mu * dist_W(v)(inactive_W) - y2(inactive_W)/2 
-        Vec y2_sep = separate_rows(y2, active_W);
+        Vec y2_sep = separate_rows(result.y2, active_W);
         Vec y2_active_W = y2_sep.head(n_active_W);
         Vec y2_inactive_W = y2_sep.tail(n_inactive_W);
 
@@ -329,7 +351,7 @@ SSN_result<T> SSN<T>::solve_SSN() {
         Vec dist_W_v_active_W = dist_W_v_sep.head(n_active_W);
         Vec dist_W_v_inactive_W = dist_W_v_sep.tail(n_inactive_W);
 
-        Vec dy2_inactive_W = 2 * Vec::Ones(n_inactive_W) - mu * dist_W_v_inactive_W - y2_inactive_W / 2;
+        Vec dy2_inactive_W = -2 * (mu * dist_W_v_inactive_W + y2_inactive_W / 2);
 
         // Compute the RHS vector
         Vec r1 = c + Q * result.x + mu * dist_K_u
@@ -343,19 +365,9 @@ SSN_result<T> SSN<T>::solve_SSN() {
         SpMat Schur_tilde = G * H_tilde_inv * G_tr + D; // Self-adjoint and PD
 
         // Perform Cholesky factorization on the approximated Schur complement
-        // to solve Schur_tilde * dy_ = G * r1 + r2, where dy_ = [dy1; dy2_active].
-        Vec rhs = G * r1 + r2;
-        Eigen::SimplicialLLT<SpMat> chol;
-        chol.compute(Schur_tilde);
-        if (chol.info() != Eigen::Success) {
-            std::cerr << "Cholesky factorization faild\n";
-            break;
-        }
-        Vec dy_ = chol.solve(rhs);
-        if (chol.info() != Eigen::Success) {
-            std::cerr << "Solving via Cholesky factorization faild\n";
-            break;
-        }
+        // to solve Schur_tilde * dy_ = G * H_tilde_inv * r1 + r2, where dy_ = [dy1; dy2_active].
+        Vec rhs = G * H_tilde_inv * r1 + r2;
+        Vec dy_ = solve_via_chol(Schur_tilde, rhs);
 
         // Retrive dx and dy2
         Vec dx = H_tilde_inv * (G_tr * dy_ - r1);
@@ -369,13 +381,21 @@ SSN_result<T> SSN<T>::solve_SSN() {
         result.x += alpha * dx;
         result.y2 += alpha * dy2;
         
+        x = result.x;
+        y2 = result.y2;
         result.SSN_in_iter++;
 
         std::cout << "  SSN iter " << result.SSN_in_iter << ": x = (" << result.x.transpose() << ")\n";
+        std::cout << "             y2 = (" << result.y2.transpose() << ")\n";
+        std::cout << "             ||grad_L|| = " << compute_grad_Lagrangian(result.x, result.y2).norm() << "\n";
+        std::cout << "             primal res = " << (A * result.x - b).norm() << "\n";
     }
 
     result.SSN_tol_achieved = compute_grad_Lagrangian(result.x, result.y2).norm();
-    std::cout << "  SSN tol achieved = " << result.SSN_tol_achieved << std::endl;
+    std::cout << "SSN finished in " << result.SSN_in_iter << " iterations.\n";
+    std::cout << "  SSN tol achieved = " << result.SSN_tol_achieved << "\n";
+    std::cout << " x = (" << result.x.transpose() << ")\n";
+    std::cout << " y2 = (" << result.y2.transpose() << ")\n";
 
     return result;
 }

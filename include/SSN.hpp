@@ -65,8 +65,9 @@ public:
     SpMat separate_rows(const SpMat& M, const BoolArr& mask);
     Vec retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
+    Vec solve_via_chol(const SpMat& M, const Vec& r);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
-    SSN_result<T> solve_SSN();
+    SSN_result<T> solve_SSN(const T eps);
 
 };
 

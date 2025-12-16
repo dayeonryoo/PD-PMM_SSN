@@ -40,14 +40,14 @@ void SSN_PMM<T>::update_PMM_parameters(const T res_p, const T res_d,
     // up to the regularization threshold.
 
     bool cond_p = 0.95 * res_p > new_res_p;
-    bool cond_d = 0.905 * res_d > new_res_d;
+    bool cond_d = 0.95 * res_d > new_res_d;
 
     if (cond_p || cond_d){
-        mu = std::min(reg_limit, 1.2 * mu);
-        rho = std::min(1e2 * reg_limit, 1.4 * rho);
+        mu = std::min(reg_limit, 1.2*mu);
+        rho = std::min(1e2*reg_limit, 1.4*rho);
     } else {
-        mu = std::min(reg_limit, 1.1 * mu);
-        rho = std::min(1e2 * reg_limit, 1.1 * rho);
+        mu = std::min(reg_limit, 1.1*mu);
+        rho = std::min(1e2*reg_limit, 1.1*rho);
     };
 
 }
@@ -59,10 +59,13 @@ Solution<T> SSN_PMM<T>::solve() {
     opt = -1;
     PMM_iter = 0;
     SSN_iter = 0;
-    x = Vec::Zero(n);
-    y1 = Vec::Zero(m);
-    y2 = Vec::Zero(l);
-    z = Vec::Zero(n);
+    
+    if (x.size() != n) {
+        x = Vec::Zero(n);
+        y1 = Vec::Zero(m);
+        y2 = Vec::Zero(l);
+        z = Vec::Zero(n);     
+    }
 
     // Build the Newton system.
     SSN<T> NS(Q, A, B, c, b,
@@ -104,17 +107,25 @@ Solution<T> SSN_PMM<T>::solve() {
         NS.mu = mu;
         NS.rho = rho;
 
-        // Call semismooth Newton method to update x and y2
+        // Calculate adaptive SSN tolerance eps_k
         Vec res_vec(3);
         res_vec << 0.1 * res_p, 0.1 * res_d, T(1);
-        SSN_tol = std::max(res_vec.minCoeff(), SSN_tol);
-        SSN_tol_achieved = 2 * res_vec.maxCoeff();
-        while (SSN_tol_achieved > std::max(0.1*res_vec.maxCoeff(), res_vec.minCoeff())) {
-            SSN_result<T> NS_solution = NS.solve_SSN();
+        T min_res_vec = res_vec.minCoeff();
+        T max_res_vec = res_vec.maxCoeff();
+        T eps_k = std::max(min_res_vec, SSN_tol);
+        SSN_tol_achieved = 2 * max_res_vec;
+
+        // Call semismooth Newton method to update x and y2
+        while (SSN_tol_achieved > std::max(0.1*max_res_vec, min_res_vec)) {
+            SSN_result<T> NS_solution = NS.solve_SSN(eps_k);
             x = NS_solution.x;
             y2 = NS_solution.y2;
+
+            // Update the Newton system in case of a restart
             NS.x = x;
             NS.y2 = y2;
+
+            SSN_tol_achieved = NS_solution.SSN_tol_achieved;
             SSN_iter += NS_solution.SSN_in_iter;
             if (SSN_iter >= SSN_max_iter) break;
         }
@@ -133,6 +144,10 @@ Solution<T> SSN_PMM<T>::solve() {
 
     }
 
+    // Compute objective value
+    obj_val = c.dot(x) + 0.5 * x.dot(Q * x);
+
+    // Final tolerance achieved by PMM
     PMM_tol_achieved = compute_residual_norms().maxCoeff();
 
     return Solution<T>(opt, x, y1, y2, z, obj_val, PMM_iter, SSN_iter, PMM_tol_achieved);

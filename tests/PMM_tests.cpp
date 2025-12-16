@@ -1,0 +1,210 @@
+#include <gtest/gtest.h>
+#include <cassert>
+#include "SSN_PMM.hpp"
+
+template<typename T>
+SSN_PMM<T> make_simple_ssn_pmm() {
+    /*
+    minimize x1 + x2 + 0.5(x1^2 + x2^2)
+    s.t. x1 + x2 = 0, 0 <= x1, x2 <= 1.
+
+    c = [1; 1], Q = [1, 0; 0, 1], A = [1, 1], b = [0], B = [1, 0],
+    lx = [0; 0], ux = [1; 1], lw = [0], uw = [1],
+    x = [0; 0], y1 = [1], y2 = [0], z = [0; 0],
+    */
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    SSN_PMM<T> pmm;
+
+    int n = 2;
+    int m = 1;
+    int l = 1;
+
+    pmm.n = n;
+    pmm.m = m;
+    pmm.l = l;
+
+    // Objective
+    pmm.c = Vec::Ones(n);
+    pmm.Q = SpMat(n, n);
+    pmm.Q.insert(0, 0) = 1.0;
+    pmm.Q.insert(1, 1) = 1.0;
+
+    // Constraints
+    pmm.A = SpMat(m, n);
+    pmm.A.insert(0, 0) = 1.0;
+    pmm.A.insert(0, 1) = 1.0;
+    pmm.b = Vec::Zero(m);
+
+    pmm.B = SpMat(l, n);
+    pmm.B.insert(0, 0) = 1.0;
+
+    // Bounds
+    pmm.lx = Vec::Zero(n);
+    pmm.ux = Vec::Ones(n);
+    pmm.lw = Vec::Zero(l);
+    pmm.uw = Vec::Ones(l);
+
+    // Variables (KKT-consistent)
+    pmm.x  = Vec::Zero(n);
+    pmm.y1 = Vec::Ones(m);
+    pmm.y2 = Vec::Zero(l);
+    pmm.z  = Vec::Zero(n);
+
+    pmm.mu = 1.0;
+    pmm.rho = 1.0;
+    pmm.reg_limit = 100.0;
+
+    pmm.tol = 1e-6;
+    pmm.max_iter = 20;
+
+    pmm.SSN_tol = 1e-6;
+    pmm.SSN_max_iter = 50;
+    pmm.SSN_max_in_iter = 20;
+
+    return pmm;
+}
+
+TEST(PMM_BoxProjection, ClipsCorrectly) {
+    using T = double;
+    using Vec = Eigen::VectorXd;
+
+    SSN_PMM<T> pmm;
+
+    Vec v(3); v << -1.0, 0.5, 2.0;
+    Vec lo(3); lo << 0.0, 0.0, 0.0;
+    Vec hi(3); hi << 1.0, 1.0, 1.0;
+
+    Vec proj_v = pmm.proj(v, lo, hi);
+
+    Vec expected(3); expected << 0.0, 0.5, 1.0;
+    EXPECT_TRUE(proj_v.isApprox(expected));
+}
+
+TEST(PMM_Residuals, ZeroAtKKTPoint) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+    SSN_PMM<T> pmm = make_simple_ssn_pmm<T>(); // KKT-consistent system
+
+    Vec res = pmm.compute_residual_norms();
+
+    Vec expected = Vec::Zero(4); // primal, dual, complementarity
+
+    EXPECT_TRUE(res.isApprox(expected));
+}
+
+TEST(PMM_Residuals, NonZeroWhenPerturbed) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+    SSN_PMM<T> pmm = make_simple_ssn_pmm<T>();
+
+    // Perturb from KKT point
+    pmm.x(0) = -1.0;
+    pmm.x(1) = 2.0;
+    pmm.y1(0) = 0.0;
+    pmm.y2(0) = 2.0;
+    pmm.z(0) = 3.0;
+    pmm.z(1) = 2.0; 
+
+    Vec res = pmm.compute_residual_norms();
+
+    EXPECT_NEAR(res(0), 1.0, 1e-14); // primal residual
+    EXPECT_NEAR(res(1), std::sqrt(26.0) / (1 + std::sqrt(2.0)), 1e-14); // dual residual
+    EXPECT_NEAR(res(2), std::sqrt(5.0), 1e-14); // complementarity for x
+    EXPECT_NEAR(res(3), 1.0, 1e-14); // complementarity for w
+}
+
+TEST(PMM_UpdateParams, AggressiveUpdate_Primal) {
+    using T = double;
+
+    SSN_PMM<T> pmm = make_simple_ssn_pmm<T>();
+
+    T res_p = 10.0;
+    T res_d = 10.0;
+    T new_res_p = 8.0; // 0.95 * 10 = 9.5 > 8.0
+    T new_res_d = 9.9; // 0.95 * 10 = 9.5 > 9.9 is false
+
+    T old_mu = pmm.mu;
+    T old_rho = pmm.rho;
+
+    pmm.update_PMM_parameters(res_p, res_d, new_res_p, new_res_d);
+
+    EXPECT_NEAR(pmm.mu, 1.2*old_mu, 1e-14);
+    EXPECT_NEAR(pmm.rho, 1.4*old_rho, 1e-14);
+}
+
+TEST(PMM_UpdateParams, AggressiveUpdate_Dual) {
+    using T = double;
+
+    SSN_PMM<T> pmm = make_simple_ssn_pmm<T>();
+
+    T res_p = 10.0;
+    T res_d = 10.0;
+    T new_res_p = 9.9; // 0.95 * 10 = 9.5 > 9.9 is false
+    T new_res_d = 8.9; // 0.95 * 10 = 9.5 > 8.9
+
+    T old_mu = pmm.mu;
+    T old_rho = pmm.rho;
+
+    pmm.update_PMM_parameters(res_p, res_d, new_res_p, new_res_d);
+
+    EXPECT_NEAR(pmm.mu, 1.2*old_mu, 1e-14);
+    EXPECT_NEAR(pmm.rho, 1.4*old_rho, 1e-14);
+}
+
+TEST(PMM_UpdateParams, SlowUpdate) {
+    using T = double;
+
+    SSN_PMM<T> pmm = make_simple_ssn_pmm<T>();
+
+    T res_p = 10.0;
+    T res_d = 10.0;
+    T new_res_p = 9.5; // 0.95 * 10 = 9.5 > 9.5 is false
+    T new_res_d = 9.9; // 0.95 * 10 = 9.5 > 9.9 is false
+
+    T old_mu = pmm.mu;
+    T old_rho = pmm.rho;
+
+    pmm.update_PMM_parameters(res_p, res_d, new_res_p, new_res_d);
+
+    EXPECT_NEAR(pmm.mu, 1.1*old_mu, 1e-14);
+    EXPECT_NEAR(pmm.rho, 1.1*old_rho, 1e-14);
+}
+
+TEST(PMM_UpdateParams, SaturationAtRegLimit) {
+    using T = double;
+
+    SSN_PMM<T> pmm = make_simple_ssn_pmm<T>();
+
+    pmm.mu = 0.99 * pmm.reg_limit;
+    pmm.rho = 0.99 * 1e2 * pmm.reg_limit;
+
+    pmm.update_PMM_parameters(10.0, 10.0, 8.9, 8.9); // aggressive update
+
+    EXPECT_NEAR(pmm.mu, pmm.reg_limit, 1e-14);
+    EXPECT_NEAR(pmm.rho, 1e2*pmm.reg_limit, 1e-14);
+}
+
+TEST(PMM_Solve, AlreadyOptimal) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+    SSN_PMM<T> pmm = make_simple_ssn_pmm<T>();
+
+    Solution<T> sol = pmm.solve();
+
+    EXPECT_EQ(sol.opt, 0); // optimal solution found
+
+    EXPECT_NEAR((pmm.A * sol.x - pmm.b).norm(), 0.0, 1e-6); // primal feasibility
+
+    EXPECT_GE((sol.x - pmm.lx).minCoeff(), -1e-8); // box feasibility on x
+    EXPECT_LE((sol.x - pmm.ux).maxCoeff(), 1e-8);
+    EXPECT_GE((pmm.B * sol.x - pmm.lw).minCoeff(), -1e-8); // box feasibility on w
+    EXPECT_LE((pmm.B * sol.x - pmm.uw).maxCoeff(), 1e-8);
+
+    EXPECT_TRUE(sol.x.isApprox(pmm.x)); // solution matches initial KKT point
+}
+

@@ -197,6 +197,19 @@ test_ssn/fast:
 .PHONY : test_ssn/fast
 
 #=============================================================================
+# Target rules for targets named test_pmm
+
+# Build rule for target.
+test_pmm: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 test_pmm
+.PHONY : test_pmm
+
+# fast build rule for target.
+test_pmm/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\test_pmm.dir\build.make CMakeFiles/test_pmm.dir/build
+.PHONY : test_pmm/fast
+
+#=============================================================================
 # Target rules for targets named gmock
 
 # Build rule for target.
@@ -272,6 +285,30 @@ src/main.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\ssn_pmm_main.dir\build.make CMakeFiles/ssn_pmm_main.dir/src/main.cpp.s
 .PHONY : src/main.cpp.s
 
+tests/PMM_tests.obj: tests/PMM_tests.cpp.obj
+.PHONY : tests/PMM_tests.obj
+
+# target to build an object file
+tests/PMM_tests.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\test_pmm.dir\build.make CMakeFiles/test_pmm.dir/tests/PMM_tests.cpp.obj
+.PHONY : tests/PMM_tests.cpp.obj
+
+tests/PMM_tests.i: tests/PMM_tests.cpp.i
+.PHONY : tests/PMM_tests.i
+
+# target to preprocess a source file
+tests/PMM_tests.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\test_pmm.dir\build.make CMakeFiles/test_pmm.dir/tests/PMM_tests.cpp.i
+.PHONY : tests/PMM_tests.cpp.i
+
+tests/PMM_tests.s: tests/PMM_tests.cpp.s
+.PHONY : tests/PMM_tests.s
+
+# target to generate assembly for a file
+tests/PMM_tests.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\test_pmm.dir\build.make CMakeFiles/test_pmm.dir/tests/PMM_tests.cpp.s
+.PHONY : tests/PMM_tests.cpp.s
+
 tests/SSN_tests.obj: tests/SSN_tests.cpp.obj
 .PHONY : tests/SSN_tests.obj
 
@@ -314,10 +351,14 @@ help:
 	@echo ... gtest
 	@echo ... gtest_main
 	@echo ... ssn_pmm_main
+	@echo ... test_pmm
 	@echo ... test_ssn
 	@echo ... src/main.obj
 	@echo ... src/main.i
 	@echo ... src/main.s
+	@echo ... tests/PMM_tests.obj
+	@echo ... tests/PMM_tests.i
+	@echo ... tests/PMM_tests.s
 	@echo ... tests/SSN_tests.obj
 	@echo ... tests/SSN_tests.i
 	@echo ... tests/SSN_tests.s

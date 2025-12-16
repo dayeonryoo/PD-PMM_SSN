@@ -77,6 +77,7 @@ public:
     T PMM_tol_achieved, SSN_tol_achieved;
 
     // Constructor
+    SSN_PMM() {}
     SSN_PMM(Problem<T>& problem)
     : Q(problem.Q), A(problem.A), B(problem.B), c(problem.c), b(problem.b),
       lx(problem.lx), ux(problem.ux), lw(problem.lw), uw(problem.uw),
