@@ -63,6 +63,9 @@ SSN_PMM<T> make_simple_ssn_pmm() {
     pmm.SSN_max_iter = 50;
     pmm.SSN_max_in_iter = 20;
 
+    pmm.PMM_print_what = PrintWhat::FULL;
+    pmm.PMM_print_when = PrintWhen::ALWAYS;
+
     return pmm;
 }
 
@@ -198,13 +201,46 @@ TEST(PMM_Solve, AlreadyOptimal) {
 
     EXPECT_EQ(sol.opt, 0); // optimal solution found
 
-    EXPECT_NEAR((pmm.A * sol.x - pmm.b).norm(), 0.0, 1e-6); // primal feasibility
-
-    EXPECT_GE((sol.x - pmm.lx).minCoeff(), -1e-8); // box feasibility on x
-    EXPECT_LE((sol.x - pmm.ux).maxCoeff(), 1e-8);
-    EXPECT_GE((pmm.B * sol.x - pmm.lw).minCoeff(), -1e-8); // box feasibility on w
-    EXPECT_LE((pmm.B * sol.x - pmm.uw).maxCoeff(), 1e-8);
+    // Verify KKT conditions
+    Vec res = pmm.compute_residual_norms();
+    Vec expected = Vec::Zero(4); // primal, dual, complementarity
+    EXPECT_TRUE(res.isApprox(expected));
 
     EXPECT_TRUE(sol.x.isApprox(pmm.x)); // solution matches initial KKT point
+    EXPECT_TRUE(sol.y1.isApprox(pmm.y1));
+    EXPECT_TRUE(sol.y2.isApprox(pmm.y2));
+    EXPECT_TRUE(sol.z.isApprox(pmm.z));
 }
 
+TEST(PMM_Solve, SimpleProblem) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+    SSN_PMM<T> pmm = make_simple_ssn_pmm<T>();
+
+    // Perturb from KKT point
+    pmm.x(0) = -1.0;
+    pmm.x(1) = 2.0;
+    pmm.y1(0) = 0.0;
+    pmm.y2(0) = 2.0;
+    pmm.z(0) = 3.0;
+    pmm.z(1) = 2.0; 
+
+    Solution<T> sol = pmm.solve();
+
+    EXPECT_EQ(sol.opt, 0); // optimal solution found
+
+    // Verify KKT conditions
+    Vec res = pmm.compute_residual_norms();
+    std::cout << "Final residuals: " << res.transpose() << std::endl;
+    Vec expected = Vec::Zero(4); // primal, dual, complementarity
+    EXPECT_NEAR(res(0), 0.0, pmm.tol); // primal
+    EXPECT_NEAR(res(1), 0.0, pmm.tol); // dual
+    EXPECT_NEAR(res(2), 0.0, pmm.tol); // complementarity for x
+    EXPECT_NEAR(res(3), 0.0, pmm.tol); // complementarity for w
+
+    // Verify solution (primal)
+    EXPECT_NEAR(sol.x(0), 0.0, pmm.tol);
+    EXPECT_NEAR(sol.x(1), 0.0, pmm.tol);
+
+}

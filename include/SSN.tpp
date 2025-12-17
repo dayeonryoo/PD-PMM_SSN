@@ -11,19 +11,10 @@ typename SSN<T>::Vec SSN<T>::proj(const Vec& u, const Vec& lower, const Vec& upp
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::compute_box_proj(const Vec& v, const Vec& lower, const Vec& upper) {
-    using Vec = typename SSN<T>::Vec;
-
-    Vec proj = v.cwiseMax(lower).cwiseMin(upper);
-    return proj;
-}
-
-template <typename T>
 typename SSN<T>::Vec SSN<T>::compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
     using Vec = typename SSN<T>::Vec;
 
-    Vec proj = compute_box_proj(v, lower, upper);
-    Vec dist = v - proj;
+    Vec dist = v - proj(v, lower, upper);
     return dist;
 }
 
@@ -61,8 +52,6 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     Vec dist_W = compute_dist_box(B * x_new + (0.5 * y2_new - y2) / mu, lw, uw);
 
     // Compute gradient of Lagrangian
-    SpMat A_tr = A.transpose();
-    SpMat B_tr = B.transpose();
     Vec grad_L_x = c + Q * x_new - A_tr * y1 + mu * A_tr * (A * x_new - b)
                    + mu * dist_K
                    + 2 * mu * B_tr * dist_W
@@ -202,7 +191,6 @@ typename SSN<T>::Vec SSN<T>::retrive_row_order(const Vec& u_sel, const Vec& u_un
             u(i) = u_unsel(i_unsel++);
         }
     }
-
     return u;
 }
 
@@ -275,6 +263,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     result.x = x;
     result.y2 = y2;
 
+    // Initialize printing
+    auto printer = make_print_function<T, Vec>(SSN_print_label, SSN_print_when, SSN_print_what, SSN_max_in_iter);
+
     // SSN main loop
     while (result.SSN_in_iter < SSN_max_in_iter) {
         // ----------------------------------------------
@@ -290,9 +281,14 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // End
         // ----------------------------------------------
 
-        // Compute gradient and check termination criteria
+        // Compute gradient of Lagrangian at current (x, y2)
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
         T grad_L_norm = grad_L.norm();
+
+        // Print current iteration info
+        printer(result.SSN_in_iter, 0, 0, result.x, y1, result.y2, z, grad_L_norm);
+
+        // Check termination criterion
         if (grad_L_norm < eps) break;
 
         // Compute Clarke subgradient of Proj_K(z/mu + x_new)
@@ -312,14 +308,6 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         BoolArr inactive_W = (diag_P_W.array() == 1);
         int n_active_W = active_W.count();
         int n_inactive_W = l - n_active_W;
-
-        // Useful vectors and matrices
-        Vec ones_n = Vec::Ones(n);
-        Vec ones_l = Vec::Ones(l);
-        Vec ones_m = Vec::Ones(m);
-        Vec Q_diag = Q.diagonal();
-        SpMat A_tr = A.transpose();
-        SpMat B_tr = B.transpose();
 
         // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; -G D]:
 
@@ -385,17 +373,11 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         y2 = result.y2;
         result.SSN_in_iter++;
 
-        std::cout << "  SSN iter " << result.SSN_in_iter << ": x = (" << result.x.transpose() << ")\n";
-        std::cout << "             y2 = (" << result.y2.transpose() << ")\n";
-        std::cout << "             ||grad_L|| = " << compute_grad_Lagrangian(result.x, result.y2).norm() << "\n";
-        std::cout << "             primal res = " << (A * result.x - b).norm() << "\n";
     }
 
+    // Final tolerance and printing
     result.SSN_tol_achieved = compute_grad_Lagrangian(result.x, result.y2).norm();
-    std::cout << "SSN finished in " << result.SSN_in_iter << " iterations.\n";
-    std::cout << "  SSN tol achieved = " << result.SSN_tol_achieved << "\n";
-    std::cout << " x = (" << result.x.transpose() << ")\n";
-    std::cout << " y2 = (" << result.y2.transpose() << ")\n";
+    printer(result.SSN_in_iter, 0, 0, result.x, y1, result.y2, z, result.SSN_tol_achieved);
 
     return result;
 }

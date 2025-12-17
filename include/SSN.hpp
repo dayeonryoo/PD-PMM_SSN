@@ -1,6 +1,7 @@
 #pragma once
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
+#include "Printing.hpp"
 
 template <typename T>
 struct SSN_result {
@@ -28,6 +29,14 @@ public:
     Vec x, y1, y2, z;
     int SSN_max_in_iter;
     T mu, rho, SSN_tol;
+    PrintWhen SSN_print_when;
+    PrintWhat SSN_print_what;
+    PrintLabel SSN_print_label = PrintLabel::SSN;
+
+    // Useful vectors and matrices
+    Vec ones_n, ones_m, ones_l;
+    Vec Q_diag;
+    SpMat A_tr, B_tr;
 
     // Outputs
     int SSN_in_iter;
@@ -46,16 +55,25 @@ public:
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
         const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
         T mu_, T rho_, int n_, int m_, int l_,
-        T SSN_tol_, int SSN_max_in_iter_)
+        T SSN_tol_, int SSN_max_in_iter_,
+        PrintWhen print_when_ = PrintWhen::NEVER,
+        PrintWhat print_what_ = PrintWhat::NONE)
     : Q(Q_), A(A_), B(B_), c(c_), b(b_),
       lx(lx_), ux(ux_), lw(lw_), uw(uw_),
       x(x_), y1(y1_), y2(y2_), z(z_),
       mu(mu_), rho(rho_), n(n_), m(m_), l(l_),
-      SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_)
-    {}
+      SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
+      SSN_print_when(print_when_), SSN_print_what(print_what_)
+    {
+        ones_n = Vec::Ones(n);
+        ones_m = Vec::Ones(m);
+        ones_l = Vec::Ones(l);
+        Q_diag = Q.diagonal();
+        A_tr = A.transpose();
+        B_tr = B.transpose();
+    }
 
     Vec proj(const Vec& u, const Vec& lower, const Vec& upper);
-    Vec compute_box_proj(const Vec& v, const Vec& lower, const Vec& upper);
     Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper);
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);

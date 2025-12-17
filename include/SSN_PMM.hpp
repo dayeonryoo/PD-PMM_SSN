@@ -4,6 +4,7 @@
 #include "Problem.hpp"
 #include "Solution.hpp"
 #include "SSN.hpp"
+#include "Printing.hpp"
 
 
 // =============================================================
@@ -76,12 +77,19 @@ public:
     int PMM_iter, SSN_iter;
     T PMM_tol_achieved, SSN_tol_achieved;
 
+    // Printing
+    PrintWhen PMM_print_when;
+    PrintWhat PMM_print_what;
+    PrintLabel PMM_print_label = PrintLabel::PMM;
+
     // Constructor
     SSN_PMM() {}
+
     SSN_PMM(Problem<T>& problem)
     : Q(problem.Q), A(problem.A), B(problem.B), c(problem.c), b(problem.b),
       lx(problem.lx), ux(problem.ux), lw(problem.lw), uw(problem.uw),
-      tol(problem.tol), max_iter(problem.max_iter)
+      tol(problem.tol), max_iter(problem.max_iter),
+      PMM_print_when(problem.print_when), PMM_print_what(problem.print_what)
     {
         // Validate required matrices
         if (Q.rows() == 0 || Q.cols() == 0) {

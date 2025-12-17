@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <algorithm>
+#include <functional>
 #include "SSN.hpp"
 
 template <typename T>
@@ -67,6 +68,11 @@ Solution<T> SSN_PMM<T>::solve() {
         z = Vec::Zero(n);     
     }
 
+    obj_val = c.dot(x) + 0.5 * x.dot(Q * x);
+
+    // Initialize printing function
+    auto printer = make_print_function<T, Vec>(PMM_print_label, PMM_print_when, PMM_print_what, max_iter);
+
     // Build the Newton system.
     SSN<T> NS(Q, A, B, c, b,
         lx, ux, lw, uw,
@@ -86,18 +92,22 @@ Solution<T> SSN_PMM<T>::solve() {
     // End
     // ----------------------------------------------
 
-        // Compute residuals and check termination criteria.
+        // Compute residuals
         Vec res_norms = compute_residual_norms();
         T res_p = res_norms(0); // Needed to update PMM params
         T res_d = res_norms(1);
         T max_res_norm = res_norms.maxCoeff();
+
+        // Print current iteration info
+        printer(PMM_iter, opt, obj_val, x, y1, y2, z, max_res_norm);
+
+        // Check termination criterion
         if (max_res_norm < tol) {
             opt = 0; // Optimal solution found
             break;
         }
 
         PMM_iter++;
-        std::cout << "PMM iter " << PMM_iter << ": x = (" << x.transpose() << "), res norms = (" << res_norms.transpose() << ")\n";
 
         // Update the Newton system
         NS.x = x;
@@ -149,6 +159,9 @@ Solution<T> SSN_PMM<T>::solve() {
 
     // Final tolerance achieved by PMM
     PMM_tol_achieved = compute_residual_norms().maxCoeff();
+
+    // Final printing
+    printer(PMM_iter, opt, obj_val, x, y1, y2, z, PMM_tol_achieved);
 
     return Solution<T>(opt, x, y1, y2, z, obj_val, PMM_iter, SSN_iter, PMM_tol_achieved);
 }

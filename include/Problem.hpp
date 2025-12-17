@@ -3,6 +3,7 @@
 #include <Eigen/Sparse>
 #include <limits>
 #include <optional>
+#include "Printing.hpp"
 
 // =============================================================
 //      min  c^T x + (1/2) x^T Q x,
@@ -23,14 +24,18 @@ public:
     Vec lx, ux, lw, uw;
     T tol;
     int max_iter;
+    PrintWhen print_when;
+    PrintWhat print_what;
 
     Problem(const SpMat& Q_, const SpMat& A_, const SpMat& B_,
             const Vec& c_, const Vec& b_,
             const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
-            T tol_ = T(1e-4),
-            int max_iter_ = 200)
+            T tol_ = T(1e-4), int max_iter_ = 200,
+            PrintWhen print_when_ = PrintWhen::END_ONLY,
+            PrintWhat print_what_ = PrintWhat::FULL)
     : Q(Q_), A(A_), B(B_), tol(tol_), c(c_), b(b_),
-      lx(lx_), ux(ux_), lw(lw_), uw(uw_), max_iter(max_iter_)
+      lx(lx_), ux(ux_), lw(lw_), uw(uw_), max_iter(max_iter_),
+      print_when(print_when_), print_what(print_what_)
     {
         // Validate required matrices
         if (Q.rows() == 0 || Q.cols() == 0) {
