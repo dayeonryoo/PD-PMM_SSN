@@ -10,6 +10,7 @@ struct SSN_result {
     Vec y2;
     int SSN_in_iter;
     T SSN_tol_achieved;
+    int SSN_opt;
 };
 
 template <typename T>
@@ -40,7 +41,8 @@ public:
 
     // Outputs
     int SSN_in_iter;
-    bool SSN_tol_achieved;
+    T SSN_tol_achieved;
+    int SSN_opt;
 
     // Set the semismooth Newton parameters
     T beta = 0.4995 / 2;
@@ -56,14 +58,14 @@ public:
         const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
         T mu_, T rho_, int n_, int m_, int l_,
         T SSN_tol_, int SSN_max_in_iter_,
-        PrintWhen print_when_ = PrintWhen::NEVER,
-        PrintWhat print_what_ = PrintWhat::NONE)
+        PrintWhen SSN_print_when_ = PrintWhen::NEVER,
+        PrintWhat SSN_print_what_ = PrintWhat::NONE)
     : Q(Q_), A(A_), B(B_), c(c_), b(b_),
       lx(lx_), ux(ux_), lw(lw_), uw(uw_),
       x(x_), y1(y1_), y2(y2_), z(z_),
       mu(mu_), rho(rho_), n(n_), m(m_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
-      SSN_print_when(print_when_), SSN_print_what(print_what_)
+      SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_)
     {
         ones_n = Vec::Ones(n);
         ones_m = Vec::Ones(m);

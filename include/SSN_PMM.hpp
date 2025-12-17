@@ -33,9 +33,9 @@
 // --------------------------------------------------------------
 // A class containing the solution of the PMM_SSN solver:
 //    .opt     -> Integer indicating the termination status:
+//                 -1: termination due to numerical errors
 //                  0: optimal solution found
 //                  1: maximum number of iterations reached
-//                  2: termination due to numerical errors
 //    .x       -> Optimal primal solution vector
 //    .y1      -> Lagrangian multipliers corresponding to Ax = b
 //    .y2      -> Lagrangian multipliers corresponding to Bx = w
@@ -65,8 +65,8 @@ public:
     T rho = 1e2;
 
     // SSN parameters
-    int SSN_max_iter = 10; // 4000
-    int SSN_max_in_iter = 3; // 40
+    int SSN_max_iter = 4000;
+    int SSN_max_in_iter = 40;
     T SSN_tol = tol;
     T reg_limit = 1e6;
 
@@ -78,8 +78,8 @@ public:
     T PMM_tol_achieved, SSN_tol_achieved;
 
     // Printing
-    PrintWhen PMM_print_when;
-    PrintWhat PMM_print_what;
+    PrintWhen PMM_print_when, SSN_print_when;
+    PrintWhat PMM_print_what, SSN_print_what;
     PrintLabel PMM_print_label = PrintLabel::PMM;
 
     // Constructor
@@ -89,7 +89,8 @@ public:
     : Q(problem.Q), A(problem.A), B(problem.B), c(problem.c), b(problem.b),
       lx(problem.lx), ux(problem.ux), lw(problem.lw), uw(problem.uw),
       tol(problem.tol), max_iter(problem.max_iter),
-      PMM_print_when(problem.print_when), PMM_print_what(problem.print_what)
+      PMM_print_when(problem.PMM_print_when), PMM_print_what(problem.PMM_print_what),
+      SSN_print_when(problem.SSN_print_when), SSN_print_what(problem.SSN_print_what)
     {
         // Validate required matrices
         if (Q.rows() == 0 || Q.cols() == 0) {
@@ -129,6 +130,12 @@ public:
         if (lw.size() != l || uw.size() != l) {
             throw std::invalid_argument("Vectors lw and uw must have size l.");
         }
+
+        // Initialize variables
+        x = Vec::Zero(n);
+        y1 = Vec::Zero(m);
+        y2 = Vec::Zero(l);
+        z = Vec::Zero(n);
     }
 
     Vec proj(const Vec& u, const Vec& lower, const Vec& upper);

@@ -262,6 +262,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     result.SSN_in_iter = 0;
     result.x = x;
     result.y2 = y2;
+    result.SSN_opt = -1;
 
     // Initialize printing
     auto printer = make_print_function<T, Vec>(SSN_print_label, SSN_print_when, SSN_print_what, SSN_max_in_iter);
@@ -283,13 +284,16 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Compute gradient of Lagrangian at current (x, y2)
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
-        T grad_L_norm = grad_L.norm();
-
-        // Print current iteration info
-        printer(result.SSN_in_iter, 0, 0, result.x, y1, result.y2, z, grad_L_norm);
+        result.SSN_tol_achieved = grad_L.norm();
 
         // Check termination criterion
-        if (grad_L_norm < eps) break;
+        if (result.SSN_tol_achieved < eps) {
+            result.SSN_opt = 0; // Optimality achieved
+            break;
+        }
+
+        // Print current iteration info
+        printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, y1, result.y2, z, result.SSN_tol_achieved);
 
         // Compute Clarke subgradient of Proj_K(z/mu + x_new)
         Vec u = z / mu + result.x;
@@ -375,9 +379,8 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
     }
 
-    // Final tolerance and printing
-    result.SSN_tol_achieved = compute_grad_Lagrangian(result.x, result.y2).norm();
-    printer(result.SSN_in_iter, 0, 0, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+    if (result.SSN_opt != 0) result.SSN_opt = 1; // Maximum number of SSN iterations reached without convergence
+    printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, y1, result.y2, z, result.SSN_tol_achieved);
 
     return result;
 }

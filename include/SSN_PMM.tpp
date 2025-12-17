@@ -60,15 +60,6 @@ Solution<T> SSN_PMM<T>::solve() {
     opt = -1;
     PMM_iter = 0;
     SSN_iter = 0;
-    
-    if (x.size() != n) {
-        x = Vec::Zero(n);
-        y1 = Vec::Zero(m);
-        y2 = Vec::Zero(l);
-        z = Vec::Zero(n);     
-    }
-
-    obj_val = c.dot(x) + 0.5 * x.dot(Q * x);
 
     // Initialize printing function
     auto printer = make_print_function<T, Vec>(PMM_print_label, PMM_print_when, PMM_print_what, max_iter);
@@ -78,7 +69,8 @@ Solution<T> SSN_PMM<T>::solve() {
         lx, ux, lw, uw,
         x, y1, y2, z,
         mu, rho, n, m, l,
-        SSN_tol, SSN_max_in_iter);
+        SSN_tol, SSN_max_in_iter,
+        SSN_print_when, SSN_print_what);
 
     // SSN-PMM main loop
     while (PMM_iter < max_iter) {
@@ -96,18 +88,20 @@ Solution<T> SSN_PMM<T>::solve() {
         Vec res_norms = compute_residual_norms();
         T res_p = res_norms(0); // Needed to update PMM params
         T res_d = res_norms(1);
-        T max_res_norm = res_norms.maxCoeff();
+        PMM_tol_achieved = res_norms.maxCoeff();
 
-        // Print current iteration info
-        printer(PMM_iter, opt, obj_val, x, y1, y2, z, max_res_norm);
+        // Compute objective value
+        obj_val = c.dot(x) + 0.5 * x.dot(Q * x);
 
         // Check termination criterion
-        if (max_res_norm < tol) {
+        if (PMM_tol_achieved < tol) {
             opt = 0; // Optimal solution found
             break;
         }
-
         PMM_iter++;
+
+        // Print current iteration info
+        printer(PMM_iter, opt, obj_val, x, y1, y2, z, PMM_tol_achieved);
 
         // Update the Newton system
         NS.x = x;
@@ -153,15 +147,8 @@ Solution<T> SSN_PMM<T>::solve() {
         update_PMM_parameters(res_p, res_d, new_res_p, new_res_d);
 
     }
-
-    // Compute objective value
-    obj_val = c.dot(x) + 0.5 * x.dot(Q * x);
-
-    // Final tolerance achieved by PMM
-    PMM_tol_achieved = compute_residual_norms().maxCoeff();
-
-    // Final printing
+    if (opt != 0) opt = 1; // Maximum number of PMM iterations reached
     printer(PMM_iter, opt, obj_val, x, y1, y2, z, PMM_tol_achieved);
 
-    return Solution<T>(opt, x, y1, y2, z, obj_val, PMM_iter, SSN_iter, PMM_tol_achieved);
+    return Solution<T>(opt, x, y1, y2, z, obj_val, PMM_iter, SSN_iter, PMM_tol_achieved, SSN_tol_achieved);
 }

@@ -10,8 +10,8 @@ enum class PrintWhen {
 
 enum class PrintWhat {
     NONE,
-    SUMMARY, // iter, opt, x, y2, tol, 
-    FULL // iter, opt, obj_val, x, y1, y2, z, tol
+    SUMMARY, // iter, x, y2, tol, 
+    FULL // iter, obj_val, x, y1, y2, z, tol
 };
 
 enum class PrintLabel {
@@ -24,9 +24,8 @@ std::function<void(int, int, T, const Vec&, const Vec&, const Vec&, const Vec&, 
 make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_iter) {
     return [label, when, what, max_iter](int iter, int opt, T obj_val, const Vec& x, const Vec& y1,
                                          const Vec& y2, const Vec& z, T tol) {
-        bool is_last = (iter == max_iter - 1);
         if (when == PrintWhen::NEVER) return;
-        if (when == PrintWhen::END_ONLY && !is_last) return;
+        if (when == PrintWhen::END_ONLY && opt == -1) return;
 
         if (what == PrintWhat::SUMMARY) {
             switch (label) {
@@ -38,18 +37,24 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                     break;
             }
             std::cout << "iter " << iter << ":\n";
-            if (label == PrintLabel::PMM) {
-                std::cout << "  opt = " << opt << ",\n";
-            }
             std::cout << "  x = (" << x.transpose() << "),\n";
             std::cout << "  y2 = (" << y2.transpose() << "),\n";
             std::cout << "  tol = " << tol << "\n";
-            if (label == PrintLabel::PMM) {
-                if (opt == 0) {
-                    std::cout << "Optimal solution found at iteration " << iter << "\n";
-                } else if (is_last) {
-                    std::cout << "Optimal solution not found within the maximum number of iterations.\n";
-                }
+            switch (label) {
+                case PrintLabel::PMM:
+                    if (opt == 0) {
+                        std::cout << "Optimal solution found at PMM iteration " << iter << ".\n";
+                    } else if (opt == 1) {
+                        std::cout << "Optimal solution not found within the maximum number of PMM iterations.\n";
+                    }
+                    break;
+                case PrintLabel::SSN:
+                    if (opt == 0) {
+                        std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
+                    } else if (opt == 1) {
+                        std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
+                    }
+                    break;
             }
         } else if (what == PrintWhat::FULL) {
             switch (label) {
@@ -62,7 +67,6 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
             }
             std::cout << "iter " << iter << ":\n";
             if (label == PrintLabel::PMM) {
-                std::cout << "  opt = " << opt << ",\n";
                 std::cout << "  obj_val = " << obj_val << ",\n";
             }
             std::cout << "  x = (" << x.transpose() << "),\n";
@@ -70,12 +74,21 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
             std::cout << "  y2 = (" << y2.transpose() << "),\n";
             std::cout << "  z = (" << z.transpose() << "),\n";
             std::cout << "  tol = " << tol << "\n";
-            if (label == PrintLabel::PMM) {
-                if (opt == 0) {
-                    std::cout << "Optimal solution found at iteration " << iter << ".\n";
-                } else if (is_last) {
-                    std::cout << "Optimal solution not found within the maximum number of iterations.\n";
-                }
+            switch (label) {
+                case PrintLabel::PMM:
+                    if (opt == 0) {
+                        std::cout << "Optimal solution found at PMM iteration " << iter << ".\n";
+                    } else if (opt == 1) {
+                        std::cout << "Optimal solution not found within the maximum number of PMM iterations.\n";
+                    }
+                    break;
+                case PrintLabel::SSN:
+                    if (opt == 0) {
+                        std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
+                    } else if (opt == 1) {
+                        std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
+                    }
+                    break;
             }
         }
     };
