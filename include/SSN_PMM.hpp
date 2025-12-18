@@ -55,20 +55,17 @@ public:
     SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux, lw, uw;
-    T tol;
-    int max_iter;
+    T tol = 0.0;
+    int max_iter = 0;
 
     int n, m, l;
 
     // PMM parameters
-    T mu = 5e1;
-    T rho = 1e2;
+    T mu, rho;
 
     // SSN parameters
-    int SSN_max_iter = 4000;
-    int SSN_max_in_iter = 40;
-    T SSN_tol = tol;
-    T reg_limit = 1e6;
+    int SSN_max_iter, SSN_max_in_iter;
+    T SSN_tol, reg_limit;
 
     // Outputs:
     int opt;
@@ -80,7 +77,7 @@ public:
     // Printing
     PrintWhen PMM_print_when, SSN_print_when;
     PrintWhat PMM_print_what, SSN_print_what;
-    PrintLabel PMM_print_label = PrintLabel::PMM;
+    PrintLabel PMM_print_label;
 
     // Constructor
     SSN_PMM() {}
@@ -92,52 +89,14 @@ public:
       PMM_print_when(problem.PMM_print_when), PMM_print_what(problem.PMM_print_what),
       SSN_print_when(problem.SSN_print_when), SSN_print_what(problem.SSN_print_what)
     {
-        // Validate required matrices
-        if (Q.rows() == 0 || Q.cols() == 0) {
-            throw std::invalid_argument("Matrix Q must be provided with nonzero dimensions.");
-        }
-        if (A.rows() == 0 || A.cols() == 0) {
-            throw std::invalid_argument("Matrix A must be provided with nonzero dimensions.");
-        }
-        if (B.rows() == 0 || B.cols() == 0) {
-            throw std::invalid_argument("Matrix B must be provided with nonzero dimensions.");
-        }
-
-        // Dimensions
-        n = Q.rows();
-        m = A.rows();
-        l = B.rows();
-
-        // Validate dimensions
-        if (Q.cols() != n) {
-            throw std::invalid_argument("Matrix Q must be square with size n x n.");
-        }
-        if (A.cols() != n) {
-            throw std::invalid_argument("Matrix A must have n columns.");
-        }
-        if (B.cols() != n) {
-            throw std::invalid_argument("Matrix B must have n columns.");
-        }
-        if (c.size() != n) {
-            throw std::invalid_argument("Vector c must have size n.");
-        }
-        if (b.size() != m) {
-            throw std::invalid_argument("Vector b must have size m.");
-        }
-        if (lx.size() != n || ux.size() != n) {
-            throw std::invalid_argument("Vectors lx and ux must have size n.");
-        }
-        if (lw.size() != l || uw.size() != l) {
-            throw std::invalid_argument("Vectors lw and uw must have size l.");
-        }
-
-        // Initialize variables
-        x = Vec::Zero(n);
-        y1 = Vec::Zero(m);
-        y2 = Vec::Zero(l);
-        z = Vec::Zero(n);
+        determine_dimensions();
+        set_default();
+        check_dimensionality();
     }
 
+    void determine_dimensions();
+    void set_default();
+    void check_dimensionality();
     Vec proj(const Vec& u, const Vec& lower, const Vec& upper);
     Vec compute_residual_norms();
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);

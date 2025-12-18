@@ -31,8 +31,8 @@ public:
             const Vec& c_, const Vec& b_,
             const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
             T tol_ = T(1e-4), int max_iter_ = 200,
-            PrintWhen PMM_print_when_ = PrintWhen::END_ONLY,
-            PrintWhat PMM_print_what_ = PrintWhat::FULL,
+            PrintWhen PMM_print_when_ = PrintWhen::NEVER,
+            PrintWhat PMM_print_what_ = PrintWhat::NONE,
             PrintWhen SSN_print_when_ = PrintWhen::NEVER,
             PrintWhat SSN_print_what_ = PrintWhat::NONE)
     : Q(Q_), A(A_), B(B_), tol(tol_), c(c_), b(b_),

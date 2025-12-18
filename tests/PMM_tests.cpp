@@ -244,3 +244,208 @@ TEST(PMM_Solve, SimpleProblem) {
     EXPECT_NEAR(sol.x(1), 0.0, pmm.tol);
 
 }
+
+TEST(PMM_DetermineDimensions, FromC) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+    SSN_PMM<T> pmm;
+    pmm.c = Vec::Zero(5);
+
+    pmm.determine_dimensions();
+
+    EXPECT_EQ(pmm.n, 5);
+    EXPECT_EQ(pmm.m, 0);
+    EXPECT_EQ(pmm.l, 0);
+}
+
+TEST(PMM_DetermineDimensions, FromQ) {
+    using T = double;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    SSN_PMM<T> pmm;
+    pmm.Q = SpMat(4, 4);
+
+    pmm.determine_dimensions();
+
+    EXPECT_EQ(pmm.n, 4);
+    EXPECT_EQ(pmm.m, 0);
+    EXPECT_EQ(pmm.l, 0);
+}
+
+TEST(PMM_DetermineDimensions, FromA) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    SSN_PMM<T> pmm;
+    pmm.A = SpMat(3, 6);
+    pmm.determine_dimensions();
+
+    EXPECT_EQ(pmm.n, 6);
+    EXPECT_EQ(pmm.m, 3);
+    EXPECT_EQ(pmm.l, 0);
+}
+
+TEST(PMM_DetermineDimensions, FromB) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    SSN_PMM<T> pmm;
+    pmm.B = SpMat(8, 7);
+    pmm.determine_dimensions();
+
+    EXPECT_EQ(pmm.n, 7);
+    EXPECT_EQ(pmm.m, 0);
+    EXPECT_EQ(pmm.l, 8);
+
+}
+
+TEST(PMM_DetermineDimensions, Fromlxux) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+    SSN_PMM<T> pmm;
+    pmm.lx = Vec::Zero(9);
+
+    pmm.determine_dimensions();
+
+    EXPECT_EQ(pmm.n, 9);
+    EXPECT_EQ(pmm.m, 0);
+    EXPECT_EQ(pmm.l, 0);
+}
+
+TEST(PMM_DefaultSettings, InitializesVariables) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    SSN_PMM<T> pmm;
+    pmm.c = Vec::Ones(3);
+    
+    pmm.determine_dimensions();
+    pmm.set_default();
+
+    EXPECT_EQ(pmm.mu, 50.0);
+    EXPECT_EQ(pmm.rho, 100.0);
+    EXPECT_EQ(pmm.tol, 1e-6);
+    EXPECT_EQ(pmm.max_iter, 1e3);
+    EXPECT_EQ(pmm.SSN_max_iter, 4000);
+    EXPECT_EQ(pmm.SSN_max_in_iter, 40);
+    EXPECT_EQ(pmm.SSN_tol, pmm.tol);
+    EXPECT_EQ(pmm.reg_limit, 1e6);
+
+    EXPECT_TRUE(pmm.x.isApprox(Vec::Zero(3)));
+    EXPECT_TRUE(pmm.y1.isApprox(Vec::Zero(0)));
+    EXPECT_TRUE(pmm.y2.isApprox(Vec::Zero(0)));
+    EXPECT_TRUE(pmm.z.isApprox(Vec::Zero(3)));
+
+    EXPECT_EQ(pmm.Q.rows(), 3);
+    EXPECT_EQ(pmm.Q.cols(), 3);
+    EXPECT_EQ(pmm.A.rows(), 0);
+    EXPECT_EQ(pmm.A.cols(), 3);
+    EXPECT_TRUE(pmm.b.isApprox(Vec::Zero(0)));
+    EXPECT_EQ(pmm.B.rows(), 0);
+    EXPECT_EQ(pmm.B.cols(), 3);
+
+    T inf = std::numeric_limits<T>::infinity();
+    EXPECT_EQ(pmm.lx.size(), 3);
+    EXPECT_EQ(pmm.ux.size(), 3);
+    EXPECT_EQ(pmm.lw.size(), 0);
+    EXPECT_EQ(pmm.uw.size(), 0);
+    EXPECT_EQ(pmm.lx(0), -inf);
+    EXPECT_EQ(pmm.ux(0), inf);
+}
+
+TEST(PMM_Default_Solve, Given_c_lx) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+    SSN_PMM<T> pmm;
+    EXPECT_THROW(pmm.determine_dimensions(), std::invalid_argument);
+
+    pmm.c = Vec::Ones(3);
+    pmm.lx = Vec::Ones(3) * -1.0;
+    pmm.determine_dimensions();
+    pmm.set_default();
+
+    Solution<T> sol = pmm.solve();
+    EXPECT_EQ(sol.opt, 0);
+    EXPECT_TRUE(sol.x.isApprox(pmm.lx, pmm.tol));
+}
+
+TEST(PMM_Default_Solve, Given_A_b) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    SSN_PMM<T> pmm;
+    pmm.A = SpMat(1, 2);
+    pmm.A.insert(0, 0) = 1.0;
+    pmm.A.insert(0, 1) = 1.0;
+    pmm.b = Vec::Ones(1);
+    
+    pmm.determine_dimensions();
+    pmm.set_default();
+
+    Solution<T> sol = pmm.solve();
+    Vec expected = Vec::Ones(2) / 2;
+    EXPECT_EQ(sol.opt, 0);
+    EXPECT_TRUE(sol.x.isApprox(expected, pmm.tol));
+}
+
+TEST(PMM_Default_Solve, Given_c_B_uw) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    SSN_PMM<T> pmm;
+    pmm.c = -1.0 * Vec::Ones(2);
+    pmm.B = SpMat(1, 2); 
+    pmm.B.insert(0, 0) = 1.0;
+    pmm.B.insert(0, 1) = 1.0;
+    pmm.uw = Vec::Ones(1);
+    
+    pmm.determine_dimensions();
+    pmm.set_default();
+
+    Solution<T> sol = pmm.solve();
+    Vec expected = Vec::Ones(2) / 2;
+    EXPECT_EQ(sol.opt, 0);
+    EXPECT_TRUE(sol.x.isApprox(expected, pmm.tol));
+}
+
+TEST(PMM_CheckDimension, MixedCase) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    SSN_PMM<T> pmm;
+
+    pmm.Q = SpMat(2, 2);
+    pmm.A = SpMat(1, 3); // Wrong n
+    
+    pmm.determine_dimensions();
+    pmm.set_default();
+
+    EXPECT_THROW(pmm.check_dimensionality(), std::invalid_argument);
+
+    pmm.A = SpMat(1, 2); // Correct n
+    pmm.b = Vec::Zero(2); // Wrong m
+    
+    pmm.determine_dimensions();
+    pmm.set_default();
+    EXPECT_EQ(pmm.n, 2);
+    EXPECT_THROW(pmm.check_dimensionality(), std::invalid_argument);
+
+    pmm.b = Vec::Zero(1); // Correct m
+
+    pmm.determine_dimensions();
+    pmm.set_default();
+    pmm.check_dimensionality();
+
+    EXPECT_EQ(pmm.m, 1);
+    EXPECT_EQ(pmm.l, 0);
+    
+}

@@ -4,7 +4,116 @@
 #include <Eigen/Sparse>
 #include <algorithm>
 #include <functional>
+#include <stdexcept>
 #include "SSN.hpp"
+
+template <typename T>
+void SSN_PMM<T>::determine_dimensions() {
+
+    // Determine n
+    if (c.size() != 0) {
+        n = c.size();
+    } else if (Q.rows() != 0) {
+        n = Q.rows();
+    } else if (A.cols() != 0) {
+        n = A.cols();
+    } else if (B.cols() != 0) {
+        n = B.cols();
+    } else if (lx.size() != 0) {
+        n = lx.size();
+    } else if (ux.size() != 0) {
+        n = ux.size();
+    } else {
+        throw std::invalid_argument("Problem dimension n cannot be determined from the provided data.");
+    }
+
+    // Determine m
+    m = A.rows();
+
+    // Determine l
+    l = B.rows();
+
+}
+
+template <typename T>
+void SSN_PMM<T>::set_default() {
+    // PMM parameters
+    mu = 5e1;
+    rho = 1e2;
+    if (tol == 0.0) tol = 1e-6;
+    if (max_iter == 0) max_iter = 1e3;
+
+    // SSN parameters
+    SSN_max_iter = 4000;
+    SSN_max_in_iter = 40;
+    SSN_tol = tol;
+    reg_limit = 1e6;
+
+    // Printing
+    PMM_print_label = PrintLabel::PMM;
+
+    // Initial solution
+    x = Vec::Zero(n);
+    y1 = Vec::Zero(m);
+    y2 = Vec::Zero(l);
+    z = Vec::Zero(n);
+
+    T inf = std::numeric_limits<T>::infinity();
+
+    // Matrices and vectors
+    if (c.size() == 0) {
+        c = Vec::Zero(n);
+    }
+    if (Q.rows() == 0 || Q.cols() == 0) {
+        Q = SpMat(n, n);
+    }
+    if (A.rows() == 0 || A.cols() == 0) {
+        A = SpMat(m, n);
+    }
+    if (b.size() == 0) {
+        b = Vec::Zero(m);
+    }
+    if (B.rows() == 0 || B.cols() == 0) {
+        B = SpMat(l, n);
+    }
+    if (lx.size() == 0) {
+        lx = Vec::Constant(n, -inf);
+    }
+    if (ux.size() == 0) {
+        ux = Vec::Constant(n, inf);
+    }
+    if (lw.size() == 0) {
+        lw = Vec::Constant(l, -inf);
+    }
+    if (uw.size() == 0) {
+        uw = Vec::Constant(l, inf);
+    }
+}
+
+template <typename T>
+void SSN_PMM<T>::check_dimensionality() {
+    if (Q.rows() != n || Q.cols() != n) {
+        throw std::invalid_argument("Dimension mismatch: Q should be n x n.");
+    }
+    if (c.size() != n) {
+        throw std::invalid_argument("Dimension mismatch: c should be a vector of size n.");
+    }
+    if (A.rows() != m || A.cols() != n) {
+        throw std::invalid_argument("Dimension mismatch: A should be m x n.");
+    }
+    if (b.size() != m) {
+        throw std::invalid_argument("Dimension mismatch: b should be a vector of size m.");
+    }
+    if (B.rows() != l || B.cols() != n) {
+        throw std::invalid_argument("Dimension mismatch: B should be l x n.");
+    }
+    if (lx.size() != n || ux.size() != n) {
+        throw std::invalid_argument("Dimension mismatch: lx and ux should be a vector of size n.");
+    }
+    if (lw.size() != l || uw.size() != l) {
+        throw std::invalid_argument("Dimension mismatch: lw and uw should be a vector of size l.");
+    }
+}
 
 template <typename T>
 typename SSN_PMM<T>::Vec SSN_PMM<T>::proj(const Vec& u, const Vec& lower, const Vec& upper) {
