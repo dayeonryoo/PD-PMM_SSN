@@ -43,6 +43,7 @@ int main() {
     const int l = 3;
 
     SpMat Q0(n, n);
+    Q0.setZero();
 
     SpMat A(m, n);
     std::vector<Triplet> A_trpl;
@@ -95,10 +96,8 @@ int main() {
     LP_sol.print_summary();
     
     std::cout << "===================================================================\n";
-    
 
 //  Q = diag(2, 0, 1, 0, 1, 0)
-
 
     SpMat diag_Q(n, n);
     std::vector<Triplet> diag_Q_trpl;
@@ -119,7 +118,6 @@ int main() {
     diag_QP_sol.print_summary();
 
     std::cout << "===================================================================\n";
-    
 
     // Q = [ 2, 0, -1, 0,  0, 0
     //       0, 0,  0, 0,  0, 0
@@ -151,8 +149,61 @@ int main() {
     Solution<T> SPSD_QP_sol = SPSD_QP_solver.solve();
     SPSD_QP_sol.print_summary();
 
+    std::cout << "===================================================================\n";
 
+// ==============================================================
+//     min  c^T x + (1/2) x^T Q x,
+//     s.t. A x = b,
+//          B x = w,
+//          lx <= x <= ux,
+//          lw <= w <= uw
+// ---------------------------------------------------------------
+//     n = 3, m = 2, l = 2,
+//     c = [1, -2, 0]^T,
+//     Q = diag(2, 1, 0),
+//     A = [1, 1, 0,
+//          0, 1, 1],
+//     b = [1, 1]^T,
+//     B = [1, -1, 0],
+//     lx = [0, 0, 0]^T,
+//     ux = [inf, inf, inf]^T,
+//     lw = [0], uw = [inf]
+// ---------------------------------------------------------------
+//     x1 + x2 = 1
+//     x2 + x3 = 1
+//     x1 - x2 >= 0, x >= 0
+//     Expected solution: x = (0.5, 0.5, 0.5)
+// ==============================================================
     
+    Problem<T> QP1;
+    Vec c1(3); c1 << 1, -2, 0;
+    QP1.c = c1;
+
+    SpMat Q1(3, 3);
+    Q1.insert(0, 0) = 2;
+    Q1.insert(1, 1) = 1;
+    QP1.Q = Q1;
+
+    SpMat A1(2, 3);
+    A1.insert(0, 0) = 1;
+    A1.insert(0, 1) = 1;
+    A1.insert(1, 1) = 1;
+    A1.insert(1, 2) = 1;
+    QP1.A = A1;
+
+    QP1.b = Vec::Ones(2);
+
+    SpMat B1(1, 3);
+    B1.insert(0, 0) = 1;
+    B1.insert(0, 1) = -1;
+    QP1.B = B1;
+
+    QP1.lx = Vec::Zero(3);
+    QP1.lw = Vec::Zero(1);
+
+    SSN_PMM<T> QP1_solver(QP1);
+    Solution<T> QP1_sol = QP1_solver.solve();
+    QP1_sol.print_summary();
 
     return 0;
 }

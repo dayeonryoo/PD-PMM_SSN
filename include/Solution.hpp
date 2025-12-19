@@ -42,6 +42,7 @@ public:
         std::cout << "Solution Summary:" << std::endl;
         std::cout << "Termination status (opt): " << opt << std::endl;
         std::cout << "Optimal objective value (obj_val): " << obj_val << std::endl;
+        std::cout << "Optimal solution (x): (" << x.transpose() << ")\n";
         std::cout << "Number of PMM iterations (PMM_iter): " << PMM_iter << std::endl;
         std::cout << "Number of SSN iterations (SSN_iter): " << SSN_iter << std::endl;
         std::cout << "PMM tolerance achieved (PMM_tol_achieved): " << PMM_tol_achieved << std::endl;

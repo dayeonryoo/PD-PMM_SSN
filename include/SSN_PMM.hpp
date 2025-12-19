@@ -75,13 +75,14 @@ public:
     T PMM_tol_achieved, SSN_tol_achieved;
 
     // Printing
-    PrintWhen PMM_print_when, SSN_print_when;
-    PrintWhat PMM_print_what, SSN_print_what;
-    PrintLabel PMM_print_label;
+    PrintWhen PMM_print_when = PrintWhen::NEVER;
+    PrintWhen SSN_print_when = PrintWhen::NEVER;
+    PrintWhat PMM_print_what = PrintWhat::NONE;
+    PrintWhat SSN_print_what = PrintWhat::NONE;
+    PrintLabel PMM_print_label = PrintLabel::PMM;
 
-    // Constructor
+    // Constructors
     SSN_PMM() {}
-
     SSN_PMM(Problem<T>& problem)
     : Q(problem.Q), A(problem.A), B(problem.B), c(problem.c), b(problem.b),
       lx(problem.lx), ux(problem.ux), lw(problem.lw), uw(problem.uw),
@@ -92,11 +93,14 @@ public:
         determine_dimensions();
         set_default();
         check_dimensionality();
+        check_infeasibility();
     }
 
     void determine_dimensions();
     void set_default();
     void check_dimensionality();
+    bool is_PSD(const SpMat& Q);
+    void check_infeasibility();
     Vec proj(const Vec& u, const Vec& lower, const Vec& upper);
     Vec compute_residual_norms();
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);

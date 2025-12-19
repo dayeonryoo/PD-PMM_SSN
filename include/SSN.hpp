@@ -58,8 +58,7 @@ public:
         const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
         T mu_, T rho_, int n_, int m_, int l_,
         T SSN_tol_, int SSN_max_in_iter_,
-        PrintWhen SSN_print_when_ = PrintWhen::NEVER,
-        PrintWhat SSN_print_what_ = PrintWhat::NONE)
+        PrintWhen SSN_print_when_, PrintWhat SSN_print_what_)
     : Q(Q_), A(A_), B(B_), c(c_), b(b_),
       lx(lx_), ux(ux_), lw(lw_), uw(uw_),
       x(x_), y1(y1_), y2(y2_), z(z_),

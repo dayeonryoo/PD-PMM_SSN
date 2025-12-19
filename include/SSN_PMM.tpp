@@ -28,10 +28,24 @@ void SSN_PMM<T>::determine_dimensions() {
     }
 
     // Determine m
-    m = A.rows();
+    if (A.rows() != 0) {
+        m = A.rows();
+    } else if (b.size() != 0) {
+        m = b.size();
+    } else {
+        m = 0;
+    }
 
     // Determine l
-    l = B.rows();
+    if (B.rows() != 0) {
+        l = B.rows();
+    } else if (lw.size() != 0) {
+        l = lw.size();
+    } else if (uw.size() != 0) {
+        l = uw.size();
+    } else {
+        l = 0;
+    }
 
 }
 
@@ -49,9 +63,6 @@ void SSN_PMM<T>::set_default() {
     SSN_tol = tol;
     reg_limit = 1e6;
 
-    // Printing
-    PMM_print_label = PrintLabel::PMM;
-
     // Initial solution
     x = Vec::Zero(n);
     y1 = Vec::Zero(m);
@@ -66,6 +77,7 @@ void SSN_PMM<T>::set_default() {
     }
     if (Q.rows() == 0 || Q.cols() == 0) {
         Q = SpMat(n, n);
+        Q.setZero();
     }
     if (A.rows() == 0 || A.cols() == 0) {
         A = SpMat(m, n);
@@ -113,6 +125,67 @@ void SSN_PMM<T>::check_dimensionality() {
     if (lw.size() != l || uw.size() != l) {
         throw std::invalid_argument("Dimension mismatch: lw and uw should be a vector of size l.");
     }
+}
+
+template <typename T>
+bool SSN_PMM<T>::is_PSD(const SpMat& Q) {
+    
+    if (Q.rows() != Q.cols()) return false;
+    if (!Q.isApprox(Q.transpose(), 1e-8)) return false;
+    if (Q.nonZeros() == 0) return true;
+
+    bool diag = true; // Is Q diagonal?
+    for (int k = 0; k < Q.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
+            if (it.row() != it.col()) {
+                diag = false;
+            }
+        }
+    }
+    if (diag) { // If so, check diagonal elements.
+        for (int i = 0; i < Q.rows(); ++i) {
+            if (Q.coeff(i, i) < -1e-8) return false;
+        }
+        return true;
+    }
+
+    // For general Q, do LDLT decomposition.
+    // for (int i = 0; i < Q.rows(); ++i) {
+    //     if (Q.innerVector(i).nonZeros() > 0 || Q.outerVector(i).nonZeros() > 0) {
+    //         active.push_back(i);
+    //     }
+    // }
+    // SpMat Qc = Q;
+    // Qc.makeCompressed();
+    // Eigen::SimplicialLDLT<SpMat> ldlt;
+    // ldlt.compute(Qc);
+    // if (ldlt.info() != Eigen::Success) {
+    //     return false;
+    // }
+
+    // return (ldlt.vectorD().array() >= -1e-8).all();
+    return true;
+}
+
+template <typename T>
+void SSN_PMM<T>::check_infeasibility() {
+    // Check lower and upper bounds
+    for (int i = 0; i < n; ++i) {
+        if (lx(i) > ux(i)) {
+            throw std::invalid_argument("Problem is infeasible: lx should be <= ux.");
+        }
+    }
+    for (int i = 0; i < l; ++i) {
+        if (lw(i) > uw(i)) {
+            throw std::invalid_argument("Problem is infeasible: lw should be <= uw.");
+        }
+    }
+
+    // Check if Q is PSD
+    if (!is_PSD(Q)) {
+        throw std::invalid_argument("Problem is non-convex: Q is not positive semidefinite.");
+    }
+
 }
 
 template <typename T>

@@ -449,3 +449,72 @@ TEST(PMM_CheckDimension, MixedCase) {
     EXPECT_EQ(pmm.l, 0);
     
 }
+
+TEST(PPM_Infeasibility, WrongBounds) {
+    using T = double;
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+    SSN_PMM<T> pmm;
+
+    pmm.lx = Vec::Ones(2);
+    pmm.ux = Vec::Zero(2);
+
+    pmm.determine_dimensions();
+    pmm.set_default();
+    pmm.check_dimensionality();
+    EXPECT_THROW(pmm.check_infeasibility(), std::invalid_argument);
+
+    pmm.lw = Vec::Zero(2);
+    pmm.uw = -2 * Vec::Ones(2);
+
+    pmm.determine_dimensions();
+    pmm.set_default();
+    pmm.check_dimensionality();
+    EXPECT_THROW(pmm.check_infeasibility(), std::invalid_argument);
+
+}
+
+TEST(PPM_Infeasibility, WrongQ) {
+    using T = double;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    SSN_PMM<T> pmm;
+
+    pmm.Q = SpMat(2, 2);
+    pmm.Q.insert(0, 1) = 1; // Nonsymmetric
+
+    pmm.determine_dimensions();
+    pmm.set_default();
+    pmm.check_dimensionality();
+    EXPECT_THROW(pmm.check_infeasibility(), std::invalid_argument);
+
+    // pmm.Q.insert(1, 0) = 1;
+    // pmm.Q.insert(1, 1) = -3; // Symmetric but not PSD
+
+    // pmm.determine_dimensions();
+    // pmm.set_default();
+    // pmm.check_dimensionality();
+    // EXPECT_THROW(pmm.check_infeasibility(), std::invalid_argument);
+}
+
+TEST(PMM_IsPSD, CheckPSD) {
+    using T = double;
+    using SpMat = Eigen::SparseMatrix<T>;
+    using Triplet = Eigen::Triplet<T>;
+
+    SSN_PMM<T> pmm;
+
+    SpMat SPSD_Q(6, 6);
+    std::vector<Triplet> SPSD_Q_trpl;
+    SPSD_Q_trpl.emplace_back(0, 0, 2.0);
+    SPSD_Q_trpl.emplace_back(0, 2, -1.0);
+    SPSD_Q_trpl.emplace_back(2, 0, -1.0);
+    SPSD_Q_trpl.emplace_back(2, 2, 2.0);
+    SPSD_Q_trpl.emplace_back(2, 4, -1.0);
+    SPSD_Q_trpl.emplace_back(4, 2, -1.0);
+    SPSD_Q_trpl.emplace_back(4, 4, 2.0);
+    SPSD_Q.setFromTriplets(SPSD_Q_trpl.begin(), SPSD_Q_trpl.end());
+
+    pmm.Q = SPSD_Q;
+    EXPECT_TRUE(pmm.is_PSD(pmm.Q));
+}
