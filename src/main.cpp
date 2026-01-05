@@ -97,7 +97,7 @@ int main() {
     
     std::cout << "===================================================================\n";
 
-//  Q = diag(2, 0, 1, 0, 1, 0)
+//  Q = diag(2, 0, 1, 0, 1, 0, 0)
 
     SpMat diag_Q(n, n);
     std::vector<Triplet> diag_Q_trpl;
@@ -120,22 +120,26 @@ int main() {
     std::cout << "===================================================================\n";
 
     // Q = [ 2, 0, -1, 0,  0, 0
-    //       0, 0,  0, 0,  0, 0
+    //       0, 1,  0, 0,  0, 0
     //      -1, 0,  2, 0, -1, 0
-    //       0, 0,  0, 0,  0, 0
+    //       0, 0,  0, 1,  0, 0
     //       0, 0, -1, 0,  2, 0
-    //       0, 0,  0, 0,  0, 0]
+    //       0, 0,  0, 0,  0, 1]
 
+    // LLT doesn't work for singular Q (i.e. 0 in diagonal)
 
     SpMat SPSD_Q(n, n);
     std::vector<Triplet> SPSD_Q_trpl;
     SPSD_Q_trpl.emplace_back(0, 0, 2.0);
+    SPSD_Q_trpl.emplace_back(1, 1, 1.0);
     SPSD_Q_trpl.emplace_back(0, 2, -1.0);
     SPSD_Q_trpl.emplace_back(2, 0, -1.0);
     SPSD_Q_trpl.emplace_back(2, 2, 2.0);
+    SPSD_Q_trpl.emplace_back(3, 3, 1.0);
     SPSD_Q_trpl.emplace_back(2, 4, -1.0);
     SPSD_Q_trpl.emplace_back(4, 2, -1.0);
     SPSD_Q_trpl.emplace_back(4, 4, 2.0);
+    SPSD_Q_trpl.emplace_back(5, 5, 1.0);
     SPSD_Q.setFromTriplets(SPSD_Q_trpl.begin(), SPSD_Q_trpl.end());
 
     std::cout << "Q is symmetric positive semidefinite.\n";

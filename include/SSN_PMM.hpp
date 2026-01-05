@@ -52,7 +52,7 @@ public:
     using SpMat = Eigen::SparseMatrix<T>;
 
     // Inputs:
-    SpMat Q, A, B;
+    SpMat Q, A, B, L, L_tr;
     Vec c, b;
     Vec lx, ux, lw, uw;
     T tol = 0.0;
@@ -69,7 +69,7 @@ public:
 
     // Outputs:
     int opt;
-    Vec x, y1, y2, z;
+    Vec x, v, y1, y2, z;
     T obj_val;
     int PMM_iter, SSN_iter;
     T PMM_tol_achieved, SSN_tol_achieved;

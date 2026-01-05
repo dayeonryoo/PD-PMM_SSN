@@ -19,7 +19,7 @@ typename SSN<T>::Vec SSN<T>::compute_dist_box(const Vec& v, const Vec& lower, co
 }
 
 template <typename T>
-T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
+T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& v_new, const Vec& y2_new) {
     using Vec = typename SSN<T>::Vec;
 
     // Evalueate dist_K(z/mu + x_new)
@@ -28,12 +28,14 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
     // Evaluate dist_W(B*x_new - (y2 - y2_new/2)/mu)
     Vec dist_W = compute_dist_box(B * x_new + (0.5 * y2_new - y2) / mu, lw, uw);
 
-    // Evaluate primal residual A x_new - b
-    Vec pr_res = A * x_new - b;
+    // Evaluate primal residuals: A x_new - b, L^T x - v
+    Vec pr_res1 = A * x_new - b;
+    Vec pr_res2 = L_tr * x_new - v_new;
 
     // Compute Lagrangian
-    T L = c.dot(x_new) + 0.5 * x_new.dot(Q * x_new)
-          - y1.dot(pr_res) + (mu / 2) * pr_res.squaredNorm()
+    T L = c.dot(x_new) + 0.5 * v_new.dot(v_new)
+          - y1.head(m).dot(pr_res1) + (mu / 2) * pr_res1.squaredNorm()
+          - y1.tail(n).dot(pr_res2) + (mu / 2) * pr_res2.squaredNorm()
           - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
           + mu * dist_W.squaredNorm() + y2_new.squaredNorm() / (4 * mu) - y2.squaredNorm() / (2 * mu)
           + (x_new - x).squaredNorm() / (2 * rho);
@@ -42,8 +44,10 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new) {
+typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec& v_new, const Vec& y2_new) {
     using Vec = typename SSN<T>::Vec;
+
+    std::cout << "computing gradient...\n";
 
     // Evalueate Dist_K (z/mu + x_new)
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
@@ -51,16 +55,26 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     // Evaluate Dist_W (B*x_new - (y2 - y2_new/2)/mu)
     Vec dist_W = compute_dist_box(B * x_new + (0.5 * y2_new - y2) / mu, lw, uw);
 
+    // Evaluate primal residuals: A x_new - b, L^T x - v
+    Vec pr_res1 = A * x_new - b;
+    Vec pr_res2 = L_tr * x_new - v_new;
+
+    std::cout << "primal residulas computed for grad calculation!\n";
+
     // Compute gradient of Lagrangian
-    Vec grad_L_x = c + Q * x_new - A_tr * y1 + mu * A_tr * (A * x_new - b)
-                   + mu * dist_K
-                   + 2 * mu * B_tr * dist_W
+    Vec grad_L_x = c - A_tr * y1.head(m) + mu * A_tr * pr_res1
+                   - L * y1.tail(n) + mu * L * pr_res2
+                   + mu * dist_K + 2 * mu * B_tr * dist_W
                    + (x_new - x) / rho;
+    std::cout << "grad_L_x computed!\n";
+    Vec grad_L_v = v_new + y1.tail(n) - mu * pr_res2;
+    std::cout << "grad_L_v computed!\n";
     Vec grad_L_y2 = dist_W + y2_new / (2 * mu);
+    std::cout << "grad_L_y2 computed!\n";
 
     // Combine gradients
-    Vec grad_L(n + l);
-    grad_L << grad_L_x, grad_L_y2;
+    Vec grad_L(n + n + l);
+    grad_L << grad_L_x, grad_L_v, grad_L_y2;
 
     return grad_L;
 
@@ -217,7 +231,8 @@ typename SSN<T>::Vec SSN<T>::solve_via_chol(const SpMat& M, const Vec& r) {
 }
 
 template <typename T>
-T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
+T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& v_curr, const Vec& y2_curr,
+                                   const Vec& dx, const Vec& dv, const Vec& dy2) {
     using Vec = typename SSN<T>::Vec;
 
     // Increase m until alpha = delta^m breaks the Armijo-Goldstein condition
@@ -225,18 +240,19 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
     int m = 1;
 
     // Evaluate Lagrangian and its gradient at current u = [x; y]
-    T L = compute_Lagrangian(x_curr, y2_curr);
-    Vec grad_L = compute_grad_Lagrangian(x_curr, y2_curr);
+    T L = compute_Lagrangian(x_curr, v_curr, y2_curr);
+    Vec grad_L = compute_grad_Lagrangian(x_curr, v_curr, y2_curr);
 
-    T grad_desc = grad_L.head(n).dot(dx) + grad_L.tail(l).dot(dy2);
+    T grad_desc = grad_L.head(n).dot(dx) + grad_L.segment(n, n).dot(dv) + grad_L.tail(l).dot(dy2);
 
     // Iterate until finding the largest step size satisfying the Armijo-Goldstein condition
     while (true) {
 
         // Evaluate Lagrangian at u_new = u + alpha * du
         Vec x_new = x_curr + alpha * dx;
+        Vec v_new = v_curr + alpha * dv;
         Vec y2_new = y2_curr + alpha * dy2;
-        T L_new = compute_Lagrangian(x_new, y2_new);
+        T L_new = compute_Lagrangian(x_new, v_new, y2_new);
 
         if (L_new <= L + beta * alpha * grad_desc) break;
 
@@ -261,6 +277,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     SSN_result<T> result;
     result.SSN_in_iter = 0;
     result.x = x;
+    result.v = v;
     result.y2 = y2;
     result.SSN_opt = -1;
 
@@ -269,6 +286,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
     // SSN main loop
     while (result.SSN_in_iter < SSN_max_in_iter) {
+        std::cout << "SSN main loop started!\n";
         // ----------------------------------------------
         // Structure:
         // Let M(u), with u = (x,y_2), be the proximal augmented Lagrangian
@@ -283,8 +301,10 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // ----------------------------------------------
 
         // Compute gradient of Lagrangian at current (x, y2)
-        Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
-        result.SSN_tol_achieved = grad_L.norm();
+        Vec grad_Lag = compute_grad_Lagrangian(result.x, result.v, result.y2);
+        result.SSN_tol_achieved = grad_Lag.norm();
+
+        std::cout << "grad computed!\n";
 
         // Check termination criterion
         if (result.SSN_tol_achieved < eps) {
@@ -293,7 +313,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         }
 
         // Print current iteration info
-        printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+        printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, result.v, y1, result.y2, z, result.SSN_tol_achieved);
 
         // Compute Clarke subgradient of Proj_K(z/mu + x_new)
         Vec u = z / mu + result.x;
@@ -313,28 +333,38 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         int n_active_W = active_W.count();
         int n_inactive_W = l - n_active_W;
 
-        // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; -G D]:
+        // Build of Clarke subgradient matrix J = [-H G^T; -G D]:
 
-        // H_tilde = diag(Q) + mu(I_n - P_K) + I_n / rho
-        Vec H_tilde_diag = Q_diag + mu * (ones_n - diag_P_K) + ones_n / rho;
-        Vec H_tilde_diag_inv = H_tilde_diag.cwiseInverse();
-        SpMat H_tilde_inv = build_diag_matrix(H_tilde_diag_inv);
+        // H = mu(I_n - P_K) + I_n / rho
+        Vec H_diag = mu * (ones_n - diag_P_K) + ones_n / rho;
+        Vec H_diag_inv = H_diag.cwiseInverse();
+        SpMat H_inv = build_diag_matrix(H_diag_inv);
+        std::cout << "H computed!\n";
 
         // Active and inactive parts of B w.r.t. W = [lw, uw]
         SpMat B_sep = separate_rows(B, active_W);
         SpMat B_active_W = B_sep.topRows(n_active_W);
         SpMat B_inactive_W = B_sep.bottomRows(n_inactive_W);
+        std::cout << "B_act computed!\n";
 
-        // G = [A ; B_active_W]
-        SpMat G = stack_rows(A, B_active_W);
+        // F = [A; L^T]
+        SpMat F = stack_rows(A, L_tr);
+        std::cout << "F computed!\n";
+
+        // G = [mu L^T; F; B_active_W]
+        SpMat G = stack_rows(stack_rows(mu * L_tr, F), B_active_W);
         SpMat G_tr = G.transpose();
+        std::cout << "G computed!\n";
 
-        // D = [I_m / mu, 0 ; 0, (I_m - P_W/2)_active_W / mu]
-        SpMat D = build_diag_matrix(Vec::Ones(m + n_active_W) / mu);
+        // D = [-(1 + mu) I_n, 0, 0; 0, I_{m+n} / mu, 0; 0, 0, I_{active_W} / mu]
+        Vec D_diag(n + m+n + n_active_W);
+        D_diag.head(n) = -(1 + mu) * ones_n;
+        D_diag.tail(m+n + n_active_W) = Vec::Ones(m+n + n_active_W) / mu;
+        SpMat D = build_diag_matrix(D_diag);
+        std::cout << "D computed!\n";
 
         // Compute dy2 in inactive_W:
-        // dy2_inactive_W = ((I - P_W/2)^{-1} - mu * dist_W(v) - y2/2)(inactive_W)
-        //                = 2 - mu * dist_W(v)(inactive_W) - y2(inactive_W)/2 
+        // dy2_inactive_W = - 2 * mu * dist_W(v)(inactive_W) - y2(inactive_W) 
         Vec y2_sep = separate_rows(result.y2, active_W);
         Vec y2_active_W = y2_sep.head(n_active_W);
         Vec y2_inactive_W = y2_sep.tail(n_inactive_W);
@@ -343,44 +373,58 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dist_W_v_active_W = dist_W_v_sep.head(n_active_W);
         Vec dist_W_v_inactive_W = dist_W_v_sep.tail(n_inactive_W);
 
-        Vec dy2_inactive_W = -2 * (mu * dist_W_v_inactive_W + y2_inactive_W / 2);
+        Vec dy2_inactive_W = -2 * mu * dist_W_v_inactive_W - y2_inactive_W;
+        std::cout << "y2_inact computed!\n";
 
-        // Compute the RHS vector
-        Vec r1 = c + Q * result.x + mu * dist_K_u
-                 - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W
+        // Compute the RHS vector [r1; r2]
+        Vec r1 = c + mu * dist_K_u - B_tr * result.y2
+                 - B_inactive_W.transpose() * dy2_inactive_W
                  + (result.x - x) / rho;
-        Vec r2(m + n_active_W);
-        r2.head(m) = y1 / mu - A * result.x + b;
-        r2.tail(n_active_W) = -dist_W_v_active_W - y2_active_W / (2 * mu);
+        std::cout << "r1 computed!\n";
 
-        // Compute the Schur complement of J_tilde
-        SpMat Schur_tilde = G * H_tilde_inv * G_tr + D; // Self-adjoint and PD
+        Vec r2(n + m+n + n_active_W);
+        r2.head(n) = result.v + y1.tail(n) - mu * (L_tr * result.x - result.v);
+        r2.segment(n, m) = y1.head(m) / mu - (A * result.x - b);
+        r2.segment(n + m, n) = y1.tail(n) / mu - (L_tr * result.x - result.v);
+        r2.tail(n_active_W) = -dist_W_v_active_W - y2_active_W / (2 * mu);
+        std::cout << "r2 computed!\n";
+
+        // Compute the Schur complement of J
+        SpMat Schur = G * H_inv * G_tr + D; // Self-adjoint and PD
+        std::cout << "Schur computed! Schur = \n" << Eigen::MatrixXd(Schur) << "\n";
 
         // Perform Cholesky factorization on the approximated Schur complement
-        // to solve Schur_tilde * dy_ = G * H_tilde_inv * r1 + r2, where dy_ = [dy1; dy2_active].
-        Vec rhs = G * H_tilde_inv * r1 + r2;
-        Vec dy_ = solve_via_chol(Schur_tilde, rhs);
+        // to solve Schur * dy_ = G * H_inv * r1 + r2, where dy_ = [dv; dy1; dy2_active].
+        Vec rhs = G * H_inv * r1 + r2;
+        std::cout << "rhs computed! rhs = " << rhs.transpose() << "\n";
+        Vec dy_ = solve_via_chol(Schur, rhs);
+        std::cout << "dy_ computed!\n";
 
-        // Retrive dx and dy2
-        Vec dx = H_tilde_inv * (G_tr * dy_ - r1);
+        // Retrive dx, dv, and dy2
+        Vec dx = H_inv * (G_tr * dy_ - r1);
+        Vec dv = dy_.head(n);
         Vec dy2_active_W = dy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
+        std::cout << "dx, dv, dy2 computed!\n";
 
         // Backtracking line search to find a Newton step size alpha
-        T alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
+        T alpha = backtracking_line_search(result.x, result.v, result.y2, dx, dv, dy2);
+        std::cout << "alpha computed!\n";
 
         // Udpate x and y2
         result.x += alpha * dx;
+        result.v += alpha * dv;
         result.y2 += alpha * dy2;
         
         x = result.x;
+        v = result.v;
         y2 = result.y2;
         result.SSN_in_iter++;
 
     }
 
     if (result.SSN_opt != 0) result.SSN_opt = 1; // Maximum number of SSN iterations reached without convergence
-    printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+    printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, result.v, y1, result.y2, z, result.SSN_tol_achieved);
 
     return result;
 }

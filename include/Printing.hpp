@@ -20,10 +20,10 @@ enum class PrintLabel {
 };
 
 template <typename T, typename Vec>
-std::function<void(int, int, T, const Vec&, const Vec&, const Vec&, const Vec&, T)>
+std::function<void(int, int, T, const Vec&, const Vec&, const Vec&, const Vec&, const Vec&, T)>
 make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_iter) {
-    return [label, when, what, max_iter](int iter, int opt, T obj_val, const Vec& x, const Vec& y1,
-                                         const Vec& y2, const Vec& z, T tol) {
+    return [label, when, what, max_iter](int iter, int opt, T obj_val, const Vec& x, const Vec& v,
+                                         const Vec& y1, const Vec& y2, const Vec& z, T tol) {
         if (when == PrintWhen::NEVER) return;
         if (when == PrintWhen::END_ONLY && opt == -1) return;
 
@@ -70,6 +70,7 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                 std::cout << "  obj_val = " << obj_val << ",\n";
             }
             std::cout << "  x = (" << x.transpose() << "),\n";
+            std::cout << "  v = (" << v.transpose() << "),\n";
             std::cout << "  y1 = (" << y1.transpose() << "),\n";
             std::cout << "  y2 = (" << y2.transpose() << "),\n";
             std::cout << "  z = (" << z.transpose() << "),\n";

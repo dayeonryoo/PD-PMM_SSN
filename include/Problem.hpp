@@ -19,7 +19,7 @@ public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using SpMat = Eigen::SparseMatrix<T>;
 
-    SpMat Q, A, B;
+    SpMat Q, A, B, L;
     Vec c, b;
     Vec lx, ux, lw, uw;
     T tol;
