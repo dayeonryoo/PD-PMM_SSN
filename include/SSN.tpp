@@ -47,8 +47,6 @@ template <typename T>
 typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec& v_new, const Vec& y2_new) {
     using Vec = typename SSN<T>::Vec;
 
-    std::cout << "computing gradient...\n";
-
     // Evalueate Dist_K (z/mu + x_new)
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
 
@@ -59,18 +57,13 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     Vec pr_res1 = A * x_new - b;
     Vec pr_res2 = L_tr * x_new - v_new;
 
-    std::cout << "primal residulas computed for grad calculation!\n";
-
     // Compute gradient of Lagrangian
     Vec grad_L_x = c - A_tr * y1.head(m) + mu * A_tr * pr_res1
                    - L * y1.tail(n) + mu * L * pr_res2
                    + mu * dist_K + 2 * mu * B_tr * dist_W
                    + (x_new - x) / rho;
-    std::cout << "grad_L_x computed!\n";
     Vec grad_L_v = v_new + y1.tail(n) - mu * pr_res2;
-    std::cout << "grad_L_v computed!\n";
     Vec grad_L_y2 = dist_W + y2_new / (2 * mu);
-    std::cout << "grad_L_y2 computed!\n";
 
     // Combine gradients
     Vec grad_L(n + n + l);
@@ -289,7 +282,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         std::cout << "SSN main loop started!\n";
         // ----------------------------------------------
         // Structure:
-        // Let M(u), with u = (x,y_2), be the proximal augmented Lagrangian
+        // Let M(u), with u = (x, v, y_2), be the proximal augmented Lagrangian
         // associated with the subproblem of interest.
         // Until (|| \nabla M(u_{k_j}) || < eps), for some given eps, do:
         //     1) Compute a Clarke subgradient J of \nabla M(u_{k_j})
@@ -300,7 +293,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // End
         // ----------------------------------------------
 
-        // Compute gradient of Lagrangian at current (x, y2)
+        // Compute gradient of Lagrangian at current (x, v, y2)
         Vec grad_Lag = compute_grad_Lagrangian(result.x, result.v, result.y2);
         result.SSN_tol_achieved = grad_Lag.norm();
 
@@ -311,6 +304,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             result.SSN_opt = 0; // Optimality achieved
             break;
         }
+        result.SSN_in_iter++;
 
         // Print current iteration info
         printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, result.v, y1, result.y2, z, result.SSN_tol_achieved);
@@ -339,7 +333,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec H_diag = mu * (ones_n - diag_P_K) + ones_n / rho;
         Vec H_diag_inv = H_diag.cwiseInverse();
         SpMat H_inv = build_diag_matrix(H_diag_inv);
-        std::cout << "H computed!\n";
+        std::cout << "H_inv computed!\ndiag(H_inv) = " << H_diag_inv << "\n";
 
         // Active and inactive parts of B w.r.t. W = [lw, uw]
         SpMat B_sep = separate_rows(B, active_W);
@@ -349,19 +343,22 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // F = [A; L^T]
         SpMat F = stack_rows(A, L_tr);
-        std::cout << "F computed!\n";
+        std::cout << "F computed! F =\n";
+        std::cout << Eigen::MatrixXd(F) << "\n";
 
         // G = [mu L^T; F; B_active_W]
         SpMat G = stack_rows(stack_rows(mu * L_tr, F), B_active_W);
         SpMat G_tr = G.transpose();
-        std::cout << "G computed!\n";
+        std::cout << "G computed! G =\n";
+        std::cout << Eigen::MatrixXd(G) << "\n";
 
         // D = [-(1 + mu) I_n, 0, 0; 0, I_{m+n} / mu, 0; 0, 0, I_{active_W} / mu]
         Vec D_diag(n + m+n + n_active_W);
         D_diag.head(n) = -(1 + mu) * ones_n;
         D_diag.tail(m+n + n_active_W) = Vec::Ones(m+n + n_active_W) / mu;
         SpMat D = build_diag_matrix(D_diag);
-        std::cout << "D computed!\n";
+        std::cout << "D computed! D =\n";
+        std::cout << Eigen::MatrixXd(D) << "\n";
 
         // Compute dy2 in inactive_W:
         // dy2_inactive_W = - 2 * mu * dist_W(v)(inactive_W) - y2(inactive_W) 
@@ -408,7 +405,10 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         std::cout << "dx, dv, dy2 computed!\n";
 
         // Backtracking line search to find a Newton step size alpha
-        T alpha = backtracking_line_search(result.x, result.v, result.y2, dx, dv, dy2);
+        T alpha = 0.995;
+        if (result.SSN_in_iter > 1) {
+            alpha = backtracking_line_search(result.x, result.v, result.y2, dx, dv, dy2);
+        }
         std::cout << "alpha computed!\n";
 
         // Udpate x and y2
@@ -419,7 +419,6 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         x = result.x;
         v = result.v;
         y2 = result.y2;
-        result.SSN_in_iter++;
 
     }
 

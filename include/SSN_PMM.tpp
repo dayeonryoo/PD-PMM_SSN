@@ -129,6 +129,7 @@ void SSN_PMM<T>::check_dimensionality() {
 
 template <typename T>
 bool SSN_PMM<T>::is_PSD(const SpMat& Q) {
+    using Mat = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
     
     if (Q.rows() != Q.cols()) return false;
     if (!Q.isApprox(Q.transpose(), 1e-8)) return false;
@@ -158,15 +159,33 @@ bool SSN_PMM<T>::is_PSD(const SpMat& Q) {
     }
 
     // For general Q, do LDLT decomposition.
-    SpMat Qc = Q;
-    Qc.makeCompressed();
-    Eigen::SimplicialLLT<SpMat> llt;
-    llt.compute(Qc);
-    if (llt.info() != Eigen::Success) {
-        throw std::runtime_error("LLT failed for Q, i.e. Q is not symmetric positive semidefinite.");
+    T tol = 1e-6;
+    SpMat Qlower = Q.template selfadjointView<Eigen::Lower>();
+    Qlower.makeCompressed();
+    Eigen::SimplicialLDLT<SpMat, Eigen::Lower> ldlt;
+    ldlt.setShift(tol);
+    ldlt.compute(Qlower);
+    if (ldlt.info() != Eigen::Success) {
+        throw std::runtime_error("LDLT failed for Q, i.e. Q is not symmetric positive semidefinite.");
     }
-    L = llt.matrixL();
+    L = ldlt.matrixL();
+    Vec D_diag = ldlt.vectorD();
+    for (int i = 0; i < n; ++i) {
+        T di = D_diag(i);
+        if (di < tol) {
+            throw std::runtime_error("D from LDLT has negative element; cannot form real sqrt(D).\n");
+        }
+        T s = (std::abs(di) <= tol) ? T(0) : std::sqrt(di);
+
+        // Scale column i of L by s
+        for (typename SpMat::InnerIterator it(L, i); it; ++it) {
+            it.valueRef() *= s;
+        }
+    }
+    L.prune(tol);
+    L.makeCompressed();
     L_tr = L.transpose();
+
     return true;
 }
 
@@ -186,7 +205,7 @@ void SSN_PMM<T>::check_infeasibility() {
 
     // Check if Q is PSD
     if (!is_PSD(Q)) {
-        throw std::invalid_argument("Problem is non-convex: Q is not positive semidefinite.");
+        throw std::invalid_argument("Problem is non-convex: Q is not symmetric and positive semidefinite.");
     }
 
 }
@@ -240,6 +259,9 @@ void SSN_PMM<T>::update_PMM_parameters(const T res_p, const T res_d,
 
 template <typename T>
 Solution<T> SSN_PMM<T>::solve() {
+
+    std::cout << "L =\n";
+    std::cout << Eigen::MatrixXd(L) << "\n";
     
     // Initialize variables
     opt = -1;
