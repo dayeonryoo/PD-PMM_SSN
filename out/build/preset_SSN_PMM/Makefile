@@ -47,10 +47,10 @@ cmake_force:
 SHELL = cmd.exe
 
 # The CMake executable.
-CMAKE_COMMAND = C:\Users\k24095864\cmake\bin\cmake.exe
+CMAKE_COMMAND = C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe
 
 # The command to remove a file.
-RM = C:\Users\k24095864\cmake\bin\cmake.exe -E rm -f
+RM = C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe -E rm -f
 
 # Escaping for special characters.
 EQUALS = =
@@ -67,7 +67,7 @@ CMAKE_BINARY_DIR = C:\Users\k24095864\C++project\PD-PMM_SSN\out\build\preset_SSN
 # Special rule for the target test
 test:
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Running tests..."
-	C:\Users\k24095864\cmake\bin\ctest.exe $(ARGS)
+	C:\Users\k24095864\msys2\ucrt64\bin\ctest.exe $(ARGS)
 .PHONY : test
 
 # Special rule for the target test
@@ -87,7 +87,7 @@ edit_cache/fast: edit_cache
 # Special rule for the target rebuild_cache
 rebuild_cache:
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Running CMake to regenerate build system..."
-	C:\Users\k24095864\cmake\bin\cmake.exe --regenerate-during-build -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR)
+	C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe --regenerate-during-build -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR)
 .PHONY : rebuild_cache
 
 # Special rule for the target rebuild_cache
@@ -106,37 +106,37 @@ list_install_components/fast: list_install_components
 # Special rule for the target install
 install: preinstall
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Install the project..."
-	C:\Users\k24095864\cmake\bin\cmake.exe -P cmake_install.cmake
+	C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe -P cmake_install.cmake
 .PHONY : install
 
 # Special rule for the target install
 install/fast: preinstall/fast
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Install the project..."
-	C:\Users\k24095864\cmake\bin\cmake.exe -P cmake_install.cmake
+	C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe -P cmake_install.cmake
 .PHONY : install/fast
 
 # Special rule for the target install/local
 install/local: preinstall
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing only the local directory..."
-	C:\Users\k24095864\cmake\bin\cmake.exe -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake
+	C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake
 .PHONY : install/local
 
 # Special rule for the target install/local
 install/local/fast: preinstall/fast
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing only the local directory..."
-	C:\Users\k24095864\cmake\bin\cmake.exe -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake
+	C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe -DCMAKE_INSTALL_LOCAL_ONLY=1 -P cmake_install.cmake
 .PHONY : install/local/fast
 
 # Special rule for the target install/strip
 install/strip: preinstall
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing the project stripped..."
-	C:\Users\k24095864\cmake\bin\cmake.exe -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake
+	C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake
 .PHONY : install/strip
 
 # Special rule for the target install/strip
 install/strip/fast: preinstall/fast
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --cyan "Installing the project stripped..."
-	C:\Users\k24095864\cmake\bin\cmake.exe -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake
+	C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe -DCMAKE_INSTALL_DO_STRIP=1 -P cmake_install.cmake
 .PHONY : install/strip/fast
 
 # The main all target
@@ -182,6 +182,19 @@ ssn_pmm_main: cmake_check_build_system
 ssn_pmm_main/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\ssn_pmm_main.dir\build.make CMakeFiles/ssn_pmm_main.dir/build
 .PHONY : ssn_pmm_main/fast
+
+#=============================================================================
+# Target rules for targets named ssn_pmm_netlib
+
+# Build rule for target.
+ssn_pmm_netlib: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 ssn_pmm_netlib
+.PHONY : ssn_pmm_netlib
+
+# fast build rule for target.
+ssn_pmm_netlib/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ssn_pmm_netlib.dir\build.make CMakeFiles/ssn_pmm_netlib.dir/build
+.PHONY : ssn_pmm_netlib/fast
 
 #=============================================================================
 # Target rules for targets named test_ssn
@@ -285,6 +298,30 @@ src/main.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\ssn_pmm_main.dir\build.make CMakeFiles/ssn_pmm_main.dir/src/main.cpp.s
 .PHONY : src/main.cpp.s
 
+src/netlib.obj: src/netlib.cpp.obj
+.PHONY : src/netlib.obj
+
+# target to build an object file
+src/netlib.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ssn_pmm_netlib.dir\build.make CMakeFiles/ssn_pmm_netlib.dir/src/netlib.cpp.obj
+.PHONY : src/netlib.cpp.obj
+
+src/netlib.i: src/netlib.cpp.i
+.PHONY : src/netlib.i
+
+# target to preprocess a source file
+src/netlib.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ssn_pmm_netlib.dir\build.make CMakeFiles/ssn_pmm_netlib.dir/src/netlib.cpp.i
+.PHONY : src/netlib.cpp.i
+
+src/netlib.s: src/netlib.cpp.s
+.PHONY : src/netlib.s
+
+# target to generate assembly for a file
+src/netlib.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ssn_pmm_netlib.dir\build.make CMakeFiles/ssn_pmm_netlib.dir/src/netlib.cpp.s
+.PHONY : src/netlib.cpp.s
+
 tests/PMM_tests.obj: tests/PMM_tests.cpp.obj
 .PHONY : tests/PMM_tests.obj
 
@@ -351,11 +388,15 @@ help:
 	@echo ... gtest
 	@echo ... gtest_main
 	@echo ... ssn_pmm_main
+	@echo ... ssn_pmm_netlib
 	@echo ... test_pmm
 	@echo ... test_ssn
 	@echo ... src/main.obj
 	@echo ... src/main.i
 	@echo ... src/main.s
+	@echo ... src/netlib.obj
+	@echo ... src/netlib.i
+	@echo ... src/netlib.s
 	@echo ... tests/PMM_tests.obj
 	@echo ... tests/PMM_tests.i
 	@echo ... tests/PMM_tests.s

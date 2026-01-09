@@ -1,3 +1,3 @@
-C:\Users\k24095864\cmake\bin\cmake.exe -E rm -f CMakeFiles\ssn_pmm_main.dir/objects.a
+C:\Users\k24095864\msys2\ucrt64\bin\cmake.exe -E rm -f CMakeFiles\ssn_pmm_main.dir/objects.a
 C:\Users\k24095864\msys2\ucrt64\bin\ar.exe qc CMakeFiles\ssn_pmm_main.dir/objects.a @CMakeFiles\ssn_pmm_main.dir\objects1.rsp
 C:\Users\k24095864\msys2\ucrt64\bin\g++.exe -g -Wl,--whole-archive CMakeFiles\ssn_pmm_main.dir/objects.a -Wl,--no-whole-archive -o ssn_pmm_main.exe -Wl,--out-implib,libssn_pmm_main.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\ssn_pmm_main.dir\linkLibs.rsp

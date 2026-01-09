@@ -291,6 +291,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             result.SSN_opt = 0; // Optimality achieved
             break;
         }
+        result.SSN_in_iter++;
 
         // Print current iteration info
         printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, y1, result.y2, z, result.SSN_tol_achieved);
@@ -367,7 +368,12 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
         // Backtracking line search to find a Newton step size alpha
-        T alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
+        T alpha;
+        if (result.SSN_in_iter == 1) {
+            alpha = 0.995;
+        } else {
+            alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
+        }
 
         // Udpate x and y2
         result.x += alpha * dx;
@@ -375,7 +381,6 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         
         x = result.x;
         y2 = result.y2;
-        result.SSN_in_iter++;
 
     }
 

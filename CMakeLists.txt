@@ -44,6 +44,27 @@ target_link_libraries(ssn_pmm INTERFACE Eigen3::Eigen)
 add_executable(ssn_pmm_main src/main.cpp)
 target_link_libraries(ssn_pmm_main ssn_pmm)
 
+add_executable(ssn_pmm_netlib src/netlib.cpp)
+
+# ----------------------
+# COIN-OR (CoinUtils + Osi) for MPS reading
+# ----------------------
+find_path(COIN_INCLUDE_DIR
+    CoinMpsIO.hpp
+    PATH_SUFFIXES coin
+)
+find_library(COINUTILS_LIBRARY CoinUtils)
+
+target_include_directories(ssn_pmm_netlib
+    PRIVATE
+        ${COIN_INCLUDE_DIR}
+)
+target_link_libraries(ssn_pmm_netlib
+    PRIVATE
+        ssn_pmm
+        ${COINUTILS_LIBRARY}
+)
+
 # ----------------------
 # Tests
 # ----------------------
