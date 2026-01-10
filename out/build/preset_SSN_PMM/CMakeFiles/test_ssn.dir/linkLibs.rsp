@@ -1,1 +1,1 @@
- lib/libgtest.a lib/libgtest_main.a lib/libgtest.a -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 
+ lib/libgtest.a lib/libgtest_main.a bin/libhighs.a C:/Users/k24095864/msys2/ucrt64/lib/libz.dll.a lib/libgtest.a -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 

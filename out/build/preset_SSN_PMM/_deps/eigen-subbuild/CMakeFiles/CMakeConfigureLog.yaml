@@ -4,17 +4,6 @@ events:
   -
     kind: "message-v1"
     backtrace:
-      - "C:/Users/k24095864/cmake/share/cmake-4.2/Modules/CMakeDetermineSystem.cmake:212 (message)"
-      - "CMakeLists.txt:16 (project)"
-    message: |
-      The system is: Windows - 10.0.26100 - AMD64
-...
-
----
-events:
-  -
-    kind: "message-v1"
-    backtrace:
       - "C:/Users/k24095864/msys2/ucrt64/share/cmake/Modules/CMakeDetermineSystem.cmake:212 (message)"
       - "CMakeLists.txt:16 (project)"
     message: |

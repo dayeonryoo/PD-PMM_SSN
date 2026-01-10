@@ -84,8 +84,6 @@ CMAKE_COMMAND:INTERNAL=C:/Users/k24095864/msys2/ucrt64/bin/cmake.exe
 CMAKE_CPACK_COMMAND:INTERNAL=C:/Users/k24095864/msys2/ucrt64/bin/cpack.exe
 //Path to ctest program executable.
 CMAKE_CTEST_COMMAND:INTERNAL=C:/Users/k24095864/msys2/ucrt64/bin/ctest.exe
-//Path to cache edit program executable.
-CMAKE_EDIT_COMMAND:INTERNAL=C:/Users/k24095864/cmake/bin/cmake-gui.exe
 //Name of external makefile project generator.
 CMAKE_EXTRA_GENERATOR:INTERNAL=
 //Name of generator.

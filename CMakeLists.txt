@@ -26,6 +26,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
+# HiGHS
+FetchContent_Declare(
+    highs
+    GIT_REPOSITORY "https://github.com/ERGO-Code/HiGHS.git"
+    GIT_TAG        "latest"
+)
+FetchContent_MakeAvailable(highs)
+
 # ----------------------
 # Enable CTest
 # ----------------------
@@ -36,7 +44,10 @@ enable_testing()
 # ----------------------
 add_library(ssn_pmm INTERFACE)
 target_include_directories(ssn_pmm INTERFACE include)
-target_link_libraries(ssn_pmm INTERFACE Eigen3::Eigen)
+target_link_libraries(ssn_pmm
+    INTERFACE
+        Eigen3::Eigen
+        highs::highs)
 
 # ----------------------
 # Main executable
@@ -45,25 +56,26 @@ add_executable(ssn_pmm_main src/main.cpp)
 target_link_libraries(ssn_pmm_main ssn_pmm)
 
 add_executable(ssn_pmm_netlib src/netlib.cpp)
+target_link_libraries(ssn_pmm_netlib ssn_pmm)
 
 # ----------------------
 # COIN-OR (CoinUtils + Osi) for MPS reading
 # ----------------------
-find_path(COIN_INCLUDE_DIR
-    CoinMpsIO.hpp
-    PATH_SUFFIXES coin
-)
-find_library(COINUTILS_LIBRARY CoinUtils)
+# find_path(COIN_INCLUDE_DIR
+#     CoinMpsIO.hpp
+#     PATH_SUFFIXES coin
+# )
+# find_library(COINUTILS_LIBRARY CoinUtils)
 
-target_include_directories(ssn_pmm_netlib
-    PRIVATE
-        ${COIN_INCLUDE_DIR}
-)
-target_link_libraries(ssn_pmm_netlib
-    PRIVATE
-        ssn_pmm
-        ${COINUTILS_LIBRARY}
-)
+# target_include_directories(ssn_pmm_netlib
+#     PRIVATE
+#         ${COIN_INCLUDE_DIR}
+# )
+# target_link_libraries(ssn_pmm_netlib
+#     PRIVATE
+#         ssn_pmm
+#         ${COINUTILS_LIBRARY}
+# )
 
 # ----------------------
 # Tests

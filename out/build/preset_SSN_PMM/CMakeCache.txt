@@ -14,8 +14,32 @@
 # EXTERNAL cache entries
 ########################
 
+//Build all tests
+ALL_TESTS:BOOL=OFF
+
+//Build C++ library
+BUILD_CXX:BOOL=ON
+
+//Build cxx example
+BUILD_CXX_EXAMPLE:BOOL=ON
+
+//Build C++ executable
+BUILD_CXX_EXE:BOOL=ON
+
+//Build examples
+BUILD_EXAMPLES:BOOL=ON
+
+//Build extra instance tests
+BUILD_EXTRA_PROBLEM_SET:BOOL=OFF
+
+//Build extra unit tests
+BUILD_EXTRA_UNIT_TESTS:BOOL=OFF
+
 //Builds the googlemock subproject
 BUILD_GMOCK:BOOL=ON
+
+//Build shared libraries (.dll).
+BUILD_SHARED_LIBS:BOOL=OFF
 
 //The directory relative to CMAKE_INSTALL_PREFIX where Eigen3Config.cmake
 // is installed
@@ -64,7 +88,7 @@ CMAKE_CXX_FLAGS_RELWITHDEBINFO:STRING=-O2 -g -DNDEBUG
 CMAKE_CXX_STANDARD_LIBRARIES:STRING=-lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32
 
 //C compiler
-CMAKE_C_COMPILER:STRING=C:/Users/k24095864/msys2/ucrt64/bin/gcc.exe
+CMAKE_C_COMPILER:FILEPATH=C:/Users/k24095864/msys2/ucrt64/bin/cc.exe
 
 //A wrapper around 'ar' adding the appropriate '--plugin' option
 // for the GCC compiler
@@ -315,11 +339,36 @@ CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 // Studio IDE projects all commands are done without /nologo.
 CMAKE_VERBOSE_MAKEFILE:BOOL=FALSE
 
-//Path to a library.
-COINUTILS_LIBRARY:FILEPATH=C:/Users/k24095864/msys2/ucrt64/lib/libCoinUtils.dll.a
+//Path to the coverage program that CTest uses for performing coverage
+// inspection
+COVERAGE_COMMAND:FILEPATH=C:/Users/k24095864/msys2/ucrt64/bin/gcov.exe
 
-//Path to a file.
-COIN_INCLUDE_DIR:PATH=C:/Users/k24095864/msys2/ucrt64/include/coin
+//Extra command line flags to pass to the coverage tool
+COVERAGE_EXTRA_FLAGS:STRING=-l
+
+//Build CSharp interface
+CSHARP:BOOL=OFF
+
+//How many times to retry timed-out CTest submissions.
+CTEST_SUBMIT_RETRY_COUNT:STRING=3
+
+//How long to wait between timed-out CTest submissions.
+CTEST_SUBMIT_RETRY_DELAY:STRING=5
+
+//Build pdlp with GPU
+CUPDLP_FIND_CUDA:BOOL=OFF
+
+//Build pdlp with GPU
+CUPDLP_GPU:BOOL=OFF
+
+//Maximum time allowed before CTest will kill the test.
+DART_TESTING_TIMEOUT:STRING=1500
+
+//check the debug solution
+DEBUGSOL:BOOL=OFF
+
+//Sanitizers
+DEBUG_MEMORY:STRING=Off
 
 //Toggles the building of the Eigen Blas library
 EIGEN_BUILD_BLAS:BOOL=OFF
@@ -349,6 +398,9 @@ EIGEN_BUILD_TESTING:BOOL=OFF
 // building.
 EIGEN_LEAVE_TEST_IN_ALL_TARGET:BOOL=OFF
 
+//Emscripten HTML output
+EMSCRIPTEN_HTML:BOOL=OFF
+
 //Value Computed by CMake
 Eigen3_BINARY_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/eigen-build
 
@@ -357,6 +409,9 @@ Eigen3_IS_TOP_LEVEL:STATIC=OFF
 
 //Value Computed by CMake
 Eigen3_SOURCE_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/eigen-src
+
+//Fast build: 
+FAST_BUILD:BOOL=ON
 
 //Directory under which to collect all populated content
 FETCHCONTENT_BASE_DIR:PATH=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps
@@ -376,6 +431,10 @@ FETCHCONTENT_SOURCE_DIR_EIGEN:PATH=
 // for googletest
 FETCHCONTENT_SOURCE_DIR_GOOGLETEST:PATH=
 
+//When not empty, overrides where to find pre-populated content
+// for highs
+FETCHCONTENT_SOURCE_DIR_HIGHS:PATH=
+
 //Enables UPDATE_DISCONNECTED behavior for all content population
 FETCHCONTENT_UPDATES_DISCONNECTED:BOOL=OFF
 
@@ -385,9 +444,45 @@ FETCHCONTENT_UPDATES_DISCONNECTED_EIGEN:BOOL=OFF
 //Enables UPDATE_DISCONNECTED behavior just for population of googletest
 FETCHCONTENT_UPDATES_DISCONNECTED_GOOGLETEST:BOOL=OFF
 
+//Enables UPDATE_DISCONNECTED behavior just for population of highs
+FETCHCONTENT_UPDATES_DISCONNECTED_HIGHS:BOOL=OFF
+
+//Build Fortran interface
+FORTRAN:BOOL=OFF
+
+//Path to a program.
+GIT:FILEPATH=C:/Users/k24095864/Git/cmd/git.exe
+
+//Path to a program.
+GITCOMMAND:FILEPATH=C:/Users/k24095864/Git/cmd/git.exe
+
+//Git command line client
+GIT_EXECUTABLE:FILEPATH=C:/Users/k24095864/Git/cmd/git.exe
+
 //Use Abseil and RE2. Requires Abseil and RE2 to be separately
 // added to the build.
 GTEST_HAS_ABSL:BOOL=OFF
+
+//Use 64 bit integers indexing
+HIGHSINT64:BOOL=OFF
+
+//Value Computed by CMake
+HIGHS_BINARY_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/highs-build
+
+//Activate the code coverage compilation
+HIGHS_COVERAGE:BOOL=OFF
+
+//Value Computed by CMake
+HIGHS_IS_TOP_LEVEL:STATIC=OFF
+
+//Disable multithreading
+HIGHS_NO_DEFAULT_THREADS:BOOL=OFF
+
+//Value Computed by CMake
+HIGHS_SOURCE_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/highs-src
+
+//Build HIPO
+HIPO:BOOL=OFF
 
 //The directory relative to CMAKE_INSTALL_PREFIX where Eigen header
 // files are installed
@@ -397,12 +492,24 @@ INCLUDE_INSTALL_DIR:PATH=include/eigen3
 // may want to turn this OFF.)
 INSTALL_GTEST:BOOL=ON
 
-//Path to a library.
-OSI_LIBRARY:FILEPATH=OSI_LIBRARY-NOTFOUND
+//Command to build the project
+MAKECOMMAND:STRING=C:/Users/k24095864/msys2/ucrt64/bin/cmake.exe --build . --config "${CTEST_CONFIGURATION_TYPE}"
+
+//Path to the memory checking command, used for memory error detection.
+MEMORYCHECK_COMMAND:FILEPATH=MEMORYCHECK_COMMAND-NOTFOUND
+
+//File that contains suppressions for the memory checker
+MEMORYCHECK_SUPPRESSIONS_FILE:FILEPATH=
 
 //The directory relative to CMAKE_INSTALL_PREFIX where eigen3.pc
 // is installed
 PKGCONFIG_INSTALL_DIR:PATH=share/pkgconfig
+
+//Build Python interface from setup.py
+PYTHON_BUILD_SETUP:BOOL=OFF
+
+//Name of the computer/site where compile is being run
+SITE:STRING=KCLFTPF1D4
 
 //Value Computed by CMake
 SSN_PMM_BINARY_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM
@@ -412,6 +519,21 @@ SSN_PMM_IS_TOP_LEVEL:STATIC=ON
 
 //Value Computed by CMake
 SSN_PMM_SOURCE_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN
+
+//Use .Net Standard 2.1 support
+USE_DOTNET_STD_21:BOOL=ON
+
+//ZLIB
+ZLIB:BOOL=ON
+
+//Path to a file.
+ZLIB_INCLUDE_DIR:PATH=C:/Users/k24095864/msys2/ucrt64/include
+
+//Path to a library.
+ZLIB_LIBRARY_DEBUG:FILEPATH=ZLIB_LIBRARY_DEBUG-NOTFOUND
+
+//Path to a library.
+ZLIB_LIBRARY_RELEASE:FILEPATH=C:/Users/k24095864/msys2/ucrt64/lib/libz.dll.a
 
 //Value Computed by CMake
 gmock_BINARY_DIR:STATIC=C:/Users/k24095864/C++project/PD-PMM_SSN/out/build/preset_SSN_PMM/_deps/googletest-build/googlemock
@@ -464,6 +586,8 @@ gtest_hide_internal_symbols:BOOL=OFF
 # INTERNAL cache entries
 ########################
 
+//Build the testing tree.
+BUILD_TESTING:INTERNAL=ON
 //ADVANCED property for variable: CMAKE_ADDR2LINE
 CMAKE_ADDR2LINE-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_AR
@@ -482,6 +606,8 @@ CMAKE_COLOR_MAKEFILE-ADVANCED:INTERNAL=1
 CMAKE_COMMAND:INTERNAL=C:/Users/k24095864/msys2/ucrt64/bin/cmake.exe
 //Path to cpack program executable.
 CMAKE_CPACK_COMMAND:INTERNAL=C:/Users/k24095864/msys2/ucrt64/bin/cpack.exe
+//ADVANCED property for variable: CMAKE_CTEST_COMMAND
+CMAKE_CTEST_COMMAND-ADVANCED:INTERNAL=1
 //Path to ctest program executable.
 CMAKE_CTEST_COMMAND:INTERNAL=C:/Users/k24095864/msys2/ucrt64/bin/ctest.exe
 //ADVANCED property for variable: CMAKE_CXX_COMPILER
@@ -522,8 +648,6 @@ CMAKE_C_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
 CMAKE_C_STANDARD_LIBRARIES-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_DLLTOOL
 CMAKE_DLLTOOL-ADVANCED:INTERNAL=1
-//Path to cache edit program executable.
-CMAKE_EDIT_COMMAND:INTERNAL=C:/Users/k24095864/cmake/bin/cmake-gui.exe
 //Executable file format
 CMAKE_EXECUTABLE_FORMAT:INTERNAL=Unknown
 //ADVANCED property for variable: CMAKE_EXE_LINKER_FLAGS
@@ -546,6 +670,8 @@ CMAKE_GENERATOR_INSTANCE:INTERNAL=
 CMAKE_GENERATOR_PLATFORM:INTERNAL=
 //Name of generator toolset.
 CMAKE_GENERATOR_TOOLSET:INTERNAL=
+//Test CMAKE_HAVE_LIBC_PTHREAD
+CMAKE_HAVE_LIBC_PTHREAD:INTERNAL=1
 //Source directory with the top level CMakeLists.txt file for this
 // project
 CMAKE_HOME_DIRECTORY:INTERNAL=C:/Users/k24095864/C++project/PD-PMM_SSN
@@ -600,7 +726,7 @@ CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_NM
 CMAKE_NM-ADVANCED:INTERNAL=1
 //number of local generators
-CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=8
+CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=13
 //ADVANCED property for variable: CMAKE_OBJCOPY
 CMAKE_OBJCOPY-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_OBJDUMP
@@ -656,8 +782,90 @@ CMAKE_STRIP-ADVANCED:INTERNAL=1
 CMAKE_TAPI-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_VERBOSE_MAKEFILE
 CMAKE_VERBOSE_MAKEFILE-ADVANCED:INTERNAL=1
+//Compiler support for a deprecated attribute
+COMPILER_HAS_DEPRECATED:INTERNAL=1
+//Test COMPILER_HAS_DEPRECATED_ATTR
+COMPILER_HAS_DEPRECATED_ATTR:INTERNAL=1
+//Test COMPILER_SUPPORTS_INVALID_OFFSET
+COMPILER_SUPPORTS_INVALID_OFFSET:INTERNAL=1
+//Test COMPILER_SUPPORTS_POPCNT
+COMPILER_SUPPORTS_POPCNT:INTERNAL=1
+//ADVANCED property for variable: COVERAGE_COMMAND
+COVERAGE_COMMAND-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: COVERAGE_EXTRA_FLAGS
+COVERAGE_EXTRA_FLAGS-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CTEST_SUBMIT_RETRY_COUNT
+CTEST_SUBMIT_RETRY_COUNT-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: CTEST_SUBMIT_RETRY_DELAY
+CTEST_SUBMIT_RETRY_DELAY-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: DART_TESTING_TIMEOUT
+DART_TESTING_TIMEOUT-ADVANCED:INTERNAL=1
 //Details about finding Python3
 FIND_PACKAGE_MESSAGE_DETAILS_Python3:INTERNAL=[C:/Users/k24095864/msys2/ucrt64/bin/python3.12.exe][found components: Interpreter ][v3.12.12()]
+//Details about finding Threads
+FIND_PACKAGE_MESSAGE_DETAILS_Threads:INTERNAL=[TRUE][v()]
+//Details about finding ZLIB
+FIND_PACKAGE_MESSAGE_DETAILS_ZLIB:INTERNAL=[C:/Users/k24095864/msys2/ucrt64/lib/libz.dll.a][C:/Users/k24095864/msys2/ucrt64/include][ ][v1.3.1(1.2.3)]
+//ADVANCED property for variable: GITCOMMAND
+GITCOMMAND-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: GIT_EXECUTABLE
+GIT_EXECUTABLE-ADVANCED:INTERNAL=1
+//Test HAVE_CXX_ATOMICS64_WITHOUT_LIB
+HAVE_CXX_ATOMICS64_WITHOUT_LIB:INTERNAL=1
+//Test HAVE_CXX_ATOMICS_WITHOUT_LIB
+HAVE_CXX_ATOMICS_WITHOUT_LIB:INTERNAL=1
+//Result of TRY_COMPILE
+HAVE_SIZEOF_INT64_T:INTERNAL=TRUE
+//Result of TRY_COMPILE
+HAVE_SIZEOF_INT_P:INTERNAL=TRUE
+//Result of TRY_COMPILE
+HAVE_SIZEOF_LONG:INTERNAL=TRUE
+//Result of TRY_COMPILE
+HAVE_SIZEOF_LONG_LONG:INTERNAL=TRUE
+//Result of TRY_COMPILE
+HAVE_SIZEOF_UINT64_T:INTERNAL=TRUE
+//Result of TRY_COMPILE
+HAVE_SIZEOF_ULONG:INTERNAL=TRUE
+//Result of TRY_COMPILE
+HAVE_SIZEOF_ULONG_LONG:INTERNAL=TRUE
+//Have include stddef.h
+HAVE_STDDEF_H:INTERNAL=1
+//Have include stdint.h
+HAVE_STDINT_H:INTERNAL=1
+//Have include sys/types.h
+HAVE_SYS_TYPES_H:INTERNAL=1
+//Test HIGHS_HAVE_BUILTIN_CLZ
+HIGHS_HAVE_BUILTIN_CLZ:INTERNAL=1
+//Test HIGHS_HAVE_MM_PAUSE
+HIGHS_HAVE_MM_PAUSE:INTERNAL=1
+//ADVANCED property for variable: MAKECOMMAND
+MAKECOMMAND-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: MEMORYCHECK_COMMAND
+MEMORYCHECK_COMMAND-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: MEMORYCHECK_SUPPRESSIONS_FILE
+MEMORYCHECK_SUPPRESSIONS_FILE-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: SITE
+SITE-ADVANCED:INTERNAL=1
+//CHECK_TYPE_SIZE: sizeof(int64_t)
+SIZEOF_INT64_T:INTERNAL=8
+//CHECK_TYPE_SIZE: sizeof(int *)
+SIZEOF_INT_P:INTERNAL=8
+//CHECK_TYPE_SIZE: sizeof(long)
+SIZEOF_LONG:INTERNAL=4
+//CHECK_TYPE_SIZE: sizeof(long long)
+SIZEOF_LONG_LONG:INTERNAL=8
+//CHECK_TYPE_SIZE: sizeof(uint64_t)
+SIZEOF_UINT64_T:INTERNAL=8
+//CHECK_TYPE_SIZE: sizeof(unsigned long)
+SIZEOF_ULONG:INTERNAL=4
+//CHECK_TYPE_SIZE: sizeof(unsigned long long)
+SIZEOF_ULONG_LONG:INTERNAL=8
+//ADVANCED property for variable: ZLIB_INCLUDE_DIR
+ZLIB_INCLUDE_DIR-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: ZLIB_LIBRARY_DEBUG
+ZLIB_LIBRARY_DEBUG-ADVANCED:INTERNAL=1
+//ADVANCED property for variable: ZLIB_LIBRARY_RELEASE
+ZLIB_LIBRARY_RELEASE-ADVANCED:INTERNAL=1
 //CMAKE_INSTALL_PREFIX during last run
 _GNUInstallDirs_LAST_CMAKE_INSTALL_PREFIX:INTERNAL=C:/Users/k24095864/C++project/PD-PMM_SSN/out/install/preset_SSN_PMM
 //Compiler reason failure
@@ -669,7 +877,7 @@ _Python3_EXECUTABLE:INTERNAL=C:/Users/k24095864/msys2/ucrt64/bin/python3.12.exe
 //Path to a program.
 _Python3_EXECUTABLE_DEBUG:INTERNAL=_Python3_EXECUTABLE_DEBUG-NOTFOUND
 //Python3 Properties
-_Python3_INTERPRETER_PROPERTIES:INTERNAL=Python;3;12;12;64;32;<none>;cp312-mingw_x86_64_ucrt_gnu;;C:/Users/k24095864/msys2/ucrt64/lib/python3.12;C:/Users/k24095864/msys2/ucrt64/lib/python3.12;C:/Users/k24095864/msys2/ucrt64/lib/python3.12/site-packages;C:/Users/k24095864/msys2/ucrt64/lib/python3.12/site-packages
+_Python3_INTERPRETER_PROPERTIES:INTERNAL=Python;3;12;12;64;32;<none>;cp312-mingw_x86_64_ucrt_gnu;;C:\Users\k24095864\msys2\ucrt64\lib\python3.12;C:\Users\k24095864\msys2\ucrt64\lib\python3.12;C:\Users\k24095864\msys2\ucrt64\lib\python3.12\site-packages;C:\Users\k24095864\msys2\ucrt64\lib\python3.12\site-packages
 _Python3_INTERPRETER_SIGNATURE:INTERNAL=847267b01aac903daae1ef7cd6a274d4
 //NumPy reason failure
 _Python3_NumPy_REASON_FAILURE:INTERNAL=

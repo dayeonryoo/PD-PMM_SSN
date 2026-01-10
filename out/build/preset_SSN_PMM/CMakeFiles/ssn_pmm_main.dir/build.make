@@ -95,6 +95,8 @@ ssn_pmm_main_EXTERNAL_OBJECTS =
 
 ssn_pmm_main.exe: CMakeFiles/ssn_pmm_main.dir/src/main.cpp.obj
 ssn_pmm_main.exe: CMakeFiles/ssn_pmm_main.dir/build.make
+ssn_pmm_main.exe: bin/libhighs.a
+ssn_pmm_main.exe: C:/Users/k24095864/msys2/ucrt64/lib/libz.dll.a
 ssn_pmm_main.exe: CMakeFiles/ssn_pmm_main.dir/linkLibs.rsp
 ssn_pmm_main.exe: CMakeFiles/ssn_pmm_main.dir/objects1.rsp
 ssn_pmm_main.exe: CMakeFiles/ssn_pmm_main.dir/link.txt

@@ -97,6 +97,8 @@ test_ssn.exe: CMakeFiles/test_ssn.dir/tests/SSN_tests.cpp.obj
 test_ssn.exe: CMakeFiles/test_ssn.dir/build.make
 test_ssn.exe: lib/libgtest.a
 test_ssn.exe: lib/libgtest_main.a
+test_ssn.exe: bin/libhighs.a
+test_ssn.exe: C:/Users/k24095864/msys2/ucrt64/lib/libz.dll.a
 test_ssn.exe: lib/libgtest.a
 test_ssn.exe: CMakeFiles/test_ssn.dir/linkLibs.rsp
 test_ssn.exe: CMakeFiles/test_ssn.dir/objects1.rsp

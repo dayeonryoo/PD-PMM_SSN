@@ -11,6 +11,7 @@
 #include "Problem.hpp"
 #include "Printing.hpp"
 
+#include "Highs.h"
 #include "load_mps_lp.hpp"
 #include "lp_to_pdpmm.hpp"
 
@@ -25,6 +26,47 @@ struct NetlibTestResult {
     T abs_err;
 };
 
+int main() {
+
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/25FV47.mps";
+    
+    // Solving via HiGHS
+    Highs h;
+    h.setOptionValue("output_flag", true);
+    h.readModel(filename);
+    h.run();
+    double ref_obj_val = h.getObjectiveValue();
+
+    // Extract problem data from the mps file
+    const HighsLp& lp = h.getLp();
+    PDPMMdata<T> pd = lp_to_pdpmm<T>(lp);
+
+    // Construct the problem and solver
+    T tol = 1e-6;
+    int max_iter = 1e3;
+    PrintWhen PMM_print_when = PrintWhen::ALWAYS;
+    PrintWhat PMM_print_what = PrintWhat::MINIMAL;
+    PrintWhen SSN_print_when = PrintWhen::NEVER;
+    PrintWhat SSN_print_what = PrintWhat::NONE;
+
+    Problem<T> prob(pd.Q, pd.A, pd.B, pd.c, pd.b, pd.lx, pd.ux, pd.lw, pd.uw,
+                    tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
+    SSN_PMM<T> solver(prob);
+
+    // Solve the LP using PD-PMM_SSN solver
+    Solution<T> sol = solver.solve();
+    T obj_val = sol.obj_val;
+    
+    // Compare
+    T abs_err = std::abs(obj_val - ref_obj_val);
+    bool agree = abs_err <= 1e-4;
+    if (agree) std::cout << "CORRECT!\n";
+    else std::cout << "Incorrect. Absolute error = " << abs_err << "\n";
+
+    return 0;
+}
+
+/*
 int main() {
 
     // Filenames and corresponding optimal objective values
@@ -133,3 +175,4 @@ int main() {
 
     return 0;
 }
+*/

@@ -10,6 +10,7 @@ enum class PrintWhen {
 
 enum class PrintWhat {
     NONE,
+    MINIMAL, // iter, tol
     SUMMARY, // iter, x, y2, tol, 
     FULL // iter, obj_val, x, y1, y2, z, tol
 };
@@ -27,6 +28,34 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
         if (when == PrintWhen::NEVER) return;
         if (when == PrintWhen::END_ONLY && opt == -1) return;
 
+        if (what == PrintWhat::MINIMAL) {
+            switch (label) {
+                case PrintLabel::SSN:
+                    std::cout << "SSN ";
+                    break;
+                case PrintLabel::PMM:
+                    std::cout << "PMM ";
+                    break;
+            }
+            std::cout << "iter " << iter << ":\n";
+            std::cout << "  tol = " << tol << "\n";
+            switch (label) {
+                case PrintLabel::PMM:
+                    if (opt == 0) {
+                        std::cout << "Optimal solution found at PMM iteration " << iter << ".\n";
+                    } else if (opt == 1) {
+                        std::cout << "Optimal solution not found within the maximum number of PMM iterations.\n";
+                    }
+                    break;
+                case PrintLabel::SSN:
+                    if (opt == 0) {
+                        std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
+                    } else if (opt == 1) {
+                        std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
+                    }
+                    break;
+            }
+        }
         if (what == PrintWhat::SUMMARY) {
             switch (label) {
                 case PrintLabel::SSN:

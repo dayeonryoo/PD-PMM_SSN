@@ -18,6 +18,7 @@ struct LPdata {
     Vec c;
     Vec lb; // lb <= x <= ub
     Vec ub;
+    std::vector<char> row_sense;
 };
 
 template <typename T>
@@ -27,8 +28,8 @@ LPdata<T> load_mps_lp(const std::string& filename) {
     using Triplet = Eigen::Triplet<T>;
 
     CoinMpsIO mps;
-    mps.messageHandler()->setLogLevel(0);
-    
+    // mps.messageHandler()->setLogLevel(0);
+
     int status = mps.readMps(filename.c_str());
     if (status) {
         throw std::runtime_error("Failed to read MPS file: " + filename);
@@ -105,14 +106,22 @@ LPdata<T> load_mps_lp(const std::string& filename) {
         rhs_hi(i) = (hi >=  thresh) ? plusInf  : static_cast<T>(hi);
     }
 
+    // Row senses
+    const char* sense = mps.getRowSense();
+    std::vector<char> row_sense(m);
+    for (int i = 0; i < m; ++i) {
+        row_sense[i] = sense[i];
+    }
+
     // Construct problem data
     LPdata<T> data;
-    data.A      = std::move(A);
-    data.rhs_lo = std::move(rhs_lo);
-    data.rhs_hi = std::move(rhs_hi);
-    data.c      = std::move(c);
-    data.lb     = std::move(lb);
-    data.ub     = std::move(ub);
+    data.A         = std::move(A);
+    data.rhs_lo    = std::move(rhs_lo);
+    data.rhs_hi    = std::move(rhs_hi);
+    data.c         = std::move(c);
+    data.lb        = std::move(lb);
+    data.ub        = std::move(ub);
+    data.row_sense = std::move(row_sense);
     
     return data;
 };
