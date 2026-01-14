@@ -1,6 +1,9 @@
 #pragma once
 #include <iostream>
 #include <vector>
+#include <chrono>
+
+
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <Eigen/SparseCholesky>
@@ -78,74 +81,79 @@ typename SSN<T>::Vec SSN<T>::Clarke_subgrad_of_proj(const Vec& u, const Vec& low
 }
 
 template <typename T>
-typename SSN<T>::SpMat SSN<T>::build_diag_matrix(const Vec& diag) {
-    using Vec = typename SSN<T>::Vec;
-    using SpMat = typename SSN<T>::SpMat;
-    using Triplet = typename SSN<T>::Triplet;
+void SSN<T>::split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel) {
+    int t = static_cast<int>(mask.count());
+    u_sel.resize(t);
+    u_unsel.resize(mask.size() - t);
 
-    int t = diag.size();
-    SpMat M(t, t);
-    std::vector<Triplet> trpl;
-    trpl.reserve(t);
-    for (int i = 0; i < t; ++i) {
-        trpl.emplace_back(i, i, diag(i));
+    int i_sel = 0;
+    int i_unsel = 0;
+    for (int i = 0; i < mask.size(); ++i) {
+        if (mask(i)) {
+            u_sel(i_sel++) = u(i);
+        } else {
+            u_unsel(i_unsel++) = u(i);
+        }
     }
-    M.setFromTriplets(trpl.begin(), trpl.end());
-    
-    return M;
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::separate_rows(const Vec& u, const BoolArr& mask) {
-    using Vec = typename SSN<T>::Vec;
-    using SpMat = typename SSN<T>::SpMat;
+void SSN<T>::build_B_active_inactive(const SpMat& B, const BoolArr& active, SpMat& B_active, SpMat& B_inactive) {
     using Triplet = typename SSN<T>::Triplet;
-    using BoolArr = typename SSN<T>::BoolArr;
 
-    int t = mask.count();
-    Vec u_separated(u.size());
-    int selected_row = 0;
-    int unselected_row = 0;
-    for (int i = 0; i < u.size(); ++i) {
-        if (mask(i)) {
-            u_separated(selected_row++) = u(i);
+    const int l = B.rows();
+    const int n = B.cols();
+
+    const int n_active = static_cast<int>(active.count());
+    const int n_inactive = l - n_active;
+
+    B_active.resize(n_active, n);
+    B_inactive.resize(n_inactive, n);
+
+    std::vector<Triplet> trip_act;
+    std::vector<Triplet> trip_inact;
+    trip_act.reserve(B.nonZeros());
+    trip_inact.reserve(B.nonZeros());
+
+    Eigen::VectorXi row_map_act(l);
+    Eigen::VectorXi row_map_inact(l);
+
+    int i_act = 0;
+    int i_inact = 0;
+    for (int i = 0; i < l; ++i) {
+        if (active(i)) {
+            row_map_act(i) = i_act++;
         } else {
-            u_separated(t + unselected_row++) = u(i);
+            row_map_inact(i) = i_inact++;
         }
     }
+
+    for (int col = 0; col < n; ++col) {
+        for (typename SpMat::InnerIterator it(B, col); it; ++it) {
+            const int i = it.row();
+            if (active(i)) {
+                trip_act.emplace_back(row_map_act(i), col, it.value());
+            } else {
+                trip_inact.emplace_back(row_map_inact(i), col, it.value());
+            }
+        }
+    }
+
+    B_active.setFromTriplets(trip_act.begin(), trip_act.end());
+    B_inactive.setFromTriplets(trip_inact.begin(), trip_inact.end());
     
-    return u_separated;
 }
 
 template <typename T>
-typename SSN<T>::SpMat SSN<T>::separate_rows(const SpMat& M, const BoolArr& mask) {
-    using Vec = typename SSN<T>::Vec;
-    using SpMat = typename SSN<T>::SpMat;
-    using Triplet = typename SSN<T>::Triplet;
-    using BoolArr = typename SSN<T>::BoolArr;
+void SSN<T>::scale_columns(SpMat& M, const Vec& d) {
+    assert(M.cols() == d.size());
 
-    int t = mask.count();
-    Eigen::VectorXi row_map(M.rows());
-    int selected_row = 0;
-    int unselected_row = 0;
-    for (int i = 0; i < M.rows(); ++i) {
-        if (mask(i)) {
-            row_map(i) = selected_row++;
-        } else {
-            row_map(i) = t + unselected_row++;
+    for (int j = 0; j < M.outerSize(); ++j) {
+        T scale = d(j);
+        for (typename SpMat::InnerIterator it(M, j); it; ++it) {
+            it.valueRef() *= scale;
         }
     }
-    SpMat M_separated(M.rows(), M.cols());
-    std::vector<Triplet> trpl;
-    trpl.reserve(M.nonZeros());
-    for (int col = 0; col < M.cols(); ++col) {
-        for (typename SpMat::InnerIterator it(M, col); it; ++it) {
-            trpl.emplace_back(row_map(it.row()), col, it.value());
-        }
-    }
-    M_separated.setFromTriplets(trpl.begin(), trpl.end());
-    
-    return M_separated;
 }
 
 template <typename T>
@@ -282,6 +290,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // End
         // ----------------------------------------------
 
+        // TIMER FOR SSN ITERATION
+        auto t0_ssn = std::chrono::steady_clock::now();
+
         // Compute gradient of Lagrangian at current (x, y2)
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
         result.SSN_tol_achieved = grad_L.norm();
@@ -289,12 +300,16 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // Check termination criterion
         if (result.SSN_tol_achieved < eps) {
             result.SSN_opt = 0; // Optimality achieved
+            printer(result.SSN_in_iter, result.SSN_opt, result.SSN_opt, result.x, y1, result.y2, z, result.SSN_tol_achieved);
             break;
         }
         result.SSN_in_iter++;
 
         // Print current iteration info
-        printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+        printer(result.SSN_in_iter, result.SSN_opt, result.SSN_opt, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+
+        // TIMER FOR CHOL DECOMP PREP
+        auto t0_chol_prep = std::chrono::steady_clock::now();
 
         // Compute Clarke subgradient of Proj_K(z/mu + x_new)
         Vec u = z / mu + result.x;
@@ -314,35 +329,28 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         int n_active_W = active_W.count();
         int n_inactive_W = l - n_active_W;
 
-        // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; -G D]:
+        // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; G D]:
 
         // H_tilde = diag(Q) + mu(I_n - P_K) + I_n / rho
         Vec H_tilde_diag = Q_diag + mu * (ones_n - diag_P_K) + ones_n / rho;
         Vec H_tilde_diag_inv = H_tilde_diag.cwiseInverse();
-        SpMat H_tilde_inv = build_diag_matrix(H_tilde_diag_inv);
 
         // Active and inactive parts of B w.r.t. W = [lw, uw]
-        SpMat B_sep = separate_rows(B, active_W);
-        SpMat B_active_W = B_sep.topRows(n_active_W);
-        SpMat B_inactive_W = B_sep.bottomRows(n_inactive_W);
+        SpMat B_active_W, B_inactive_W;
+        build_B_active_inactive(B, active_W, B_active_W, B_inactive_W);
 
         // G = [A ; B_active_W]
         SpMat G = stack_rows(A, B_active_W);
         SpMat G_tr = G.transpose();
 
-        // D = [I_m / mu, 0 ; 0, (I_m - P_W/2)_active_W / mu]
-        SpMat D = build_diag_matrix(Vec::Ones(m + n_active_W) / mu);
-
         // Compute dy2 in inactive_W:
         // dy2_inactive_W = ((I - P_W/2)^{-1} - mu * dist_W(v) - y2/2)(inactive_W)
         //                = 2 - mu * dist_W(v)(inactive_W) - y2(inactive_W)/2 
-        Vec y2_sep = separate_rows(result.y2, active_W);
-        Vec y2_active_W = y2_sep.head(n_active_W);
-        Vec y2_inactive_W = y2_sep.tail(n_inactive_W);
+        Vec y2_active_W, y2_inactive_W;
+        split_by_mask(result.y2, active_W, y2_active_W, y2_inactive_W);
 
-        Vec dist_W_v_sep = separate_rows(dist_W_v, active_W);
-        Vec dist_W_v_active_W = dist_W_v_sep.head(n_active_W);
-        Vec dist_W_v_inactive_W = dist_W_v_sep.tail(n_inactive_W);
+        Vec dist_W_v_active_W, dist_W_v_inactive_W;
+        split_by_mask(dist_W_v, active_W, dist_W_v_active_W, dist_W_v_inactive_W);
 
         Vec dy2_inactive_W = -2 * (mu * dist_W_v_inactive_W + y2_inactive_W / 2);
 
@@ -354,26 +362,50 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         r2.head(m) = y1 / mu - A * result.x + b;
         r2.tail(n_active_W) = -dist_W_v_active_W - y2_active_W / (2 * mu);
 
-        // Compute the Schur complement of J_tilde
-        SpMat Schur_tilde = G * H_tilde_inv * G_tr + D; // Self-adjoint and PD
+        // Compute the Schur complement of J_tilde (self-adjoint and PD)
+        // Schur = G H_tilde_inv G^T + D, where D = diag(1/mu)
+        SpMat GH_inv = G; // G * H_tilde_inv
+        scale_columns(GH_inv, H_tilde_diag_inv);
+        SpMat Schur_tilde = GH_inv * G_tr; 
+        for (int i = 0; i < m + n_active_W; ++i) {
+            Schur_tilde.coeffRef(i, i) += 1 / mu;
+        }
+        Schur_tilde.makeCompressed(); // G * H_tilde_inv * G^T + D
 
         // Perform Cholesky factorization on the approximated Schur complement
         // to solve Schur_tilde * dy_ = G * H_tilde_inv * r1 + r2, where dy_ = [dy1; dy2_active].
-        Vec rhs = G * H_tilde_inv * r1 + r2;
+        Vec H_inv_r1 = H_tilde_diag_inv.array() * r1.array(); // elementwise
+        Vec rhs = G * H_inv_r1 + r2;
+
+        auto t1_chol_prep = std::chrono::steady_clock::now();
+        double timer_chol_prep = time_diff_ms(t0_chol_prep, t1_chol_prep);
+        // std::cout << "  Prep for Cholesky decomposition took " << timer_chol_prep << " ms.\n";
+
+        auto t0_chol = std::chrono::steady_clock::now(); // TIMER FOR CHOL DECOMP
         Vec dy_ = solve_via_chol(Schur_tilde, rhs);
+        auto t1_chol = std::chrono::steady_clock::now();
+        double timer_chol = time_diff_ms(t0_chol, t1_chol);
+        // std::cout << "  Cholesky decomposition took " << timer_chol << " ms.\n";
 
         // Retrive dx and dy2
-        Vec dx = H_tilde_inv * (G_tr * dy_ - r1);
+        Vec dx = H_tilde_diag_inv.array() * (G_tr * dy_ - r1).array(); // elementwise
         Vec dy2_active_W = dy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
-        // Backtracking line search to find a Newton step size alpha
+        // TIMER FOR BACKTRACKING LINESEARCH
+        auto t0_alpha = std::chrono::steady_clock::now();
+
+        // Backtracking linesearch to find a Newton step size alpha
         T alpha;
         if (result.SSN_in_iter == 1) {
             alpha = 0.995;
         } else {
             alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
         }
+
+        auto t1_alpha = std::chrono::steady_clock::now();
+        double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
+        // std::cout << "  Backtracking linesearch took " << timer_alpha << " ms.\n";
 
         // Udpate x and y2
         result.x += alpha * dx;
@@ -382,10 +414,16 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         x = result.x;
         y2 = result.y2;
 
+        auto t1_ssn = std::chrono::steady_clock::now();
+        double timer_ssn = time_diff_ms(t0_ssn, t1_ssn);
+        // std::cout << "  SSN iteration took " << timer_ssn << " ms.\n";
+
     }
 
-    if (result.SSN_opt != 0) result.SSN_opt = 1; // Maximum number of SSN iterations reached without convergence
-    printer(result.SSN_in_iter, result.SSN_opt, 0, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+    if (result.SSN_opt != 0) {
+        result.SSN_opt = 1; // Maximum number of SSN iterations reached without convergence
+        printer(result.SSN_in_iter, result.SSN_opt, result.SSN_opt, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+    }
 
     return result;
 }

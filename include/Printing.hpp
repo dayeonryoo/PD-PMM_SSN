@@ -1,6 +1,13 @@
 #pragma once
 #include <iostream>
 #include <functional>
+#include <chrono>
+
+inline double time_diff_ms(const std::chrono::steady_clock::time_point& start,
+                           const std::chrono::steady_clock::time_point& end) {
+    using namespace std::chrono;
+    return duration<double, std::milli>(end - start).count();
+}
 
 enum class PrintWhen {
     NEVER,

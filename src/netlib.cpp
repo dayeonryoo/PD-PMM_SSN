@@ -52,9 +52,11 @@ int main() {
     Problem<T> prob(pd.Q, pd.A, pd.B, pd.c, pd.b, pd.lx, pd.ux, pd.lw, pd.uw,
                     tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
     SSN_PMM<T> solver(prob);
+    
 
     // Solve the LP using PD-PMM_SSN solver
     Solution<T> sol = solver.solve();
+    sol.print_summary();
     T obj_val = sol.obj_val;
     
     // Compare

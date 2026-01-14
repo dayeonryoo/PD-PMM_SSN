@@ -79,9 +79,9 @@ public:
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper);
-    SpMat build_diag_matrix(const Vec& diag);
-    Vec separate_rows(const Vec& u, const BoolArr& mask);
-    SpMat separate_rows(const SpMat& M, const BoolArr& mask);
+    void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
+    void build_B_active_inactive(const SpMat& B, const BoolArr& mask, SpMat& B_active, SpMat& B_inactive);
+    void scale_columns(SpMat& M, const Vec& d);
     Vec retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
     Vec solve_via_chol(const SpMat& M, const Vec& r);
