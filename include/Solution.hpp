@@ -39,7 +39,7 @@ public:
     {}
 
     void print_summary() const {
-        std::cout << "=====================================================\n";
+        std::cout << "\n";
         std::cout << "Solution Summary:" << std::endl;
         std::cout << "Termination status (opt): " << opt << std::endl;
         std::cout << "Optimal objective value (obj_val): " << obj_val << std::endl;

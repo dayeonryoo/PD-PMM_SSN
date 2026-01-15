@@ -103,21 +103,11 @@ public:
 
         A_tr = A.transpose();
         B_tr = B.transpose();
-
-        std::cout << "c = " << c.transpose() << "\n";
-        std::cout << "b = " << b.transpose() << "\n";
-        std::cout << "lx = " << lx.transpose() << "\n";
-        std::cout << "ux = " << ux.transpose() << "\n";
-        std::cout << "lw = " << lw.transpose() << "\n";
-        std::cout << "uw = " << uw.transpose() << "\n";
-        std::cout << "A' =\n" << Eigen::MatrixXd(A) << "\n";
-        std::cout << "B' =\n" << Eigen::MatrixXd(B) << "\n";
-        std::cout << "L =\n" << Eigen::MatrixXd(L) << "\n";
-        std::cout << "Q_diag = " << Q_diag.transpose() << "\n";
     }
 
     void determine_dimensions(const Problem<T>& problem);
     void get_Q_info(const SpMat& Q);
+    void set_L_from_LLT(const SpMat& Q);
     void set_default(const Problem<T>& problem);
     void check_dimensions();
     void check_infeasibility();

@@ -35,13 +35,6 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
             }
         }
     }
-    if (Q_info == QInfo::Zero) {
-        std::cout << "Given Q is zero.\n";
-    } else if (Q_info == QInfo::Diagonal) {
-        std::cout << "Given Q is diagonal.\n";
-    } else {
-        std::cout << "Given Q is general.\n";
-    }
 
 }
 
@@ -84,7 +77,51 @@ void SSN_PMM<T>::determine_dimensions(const Problem<T>& problem) {
     } else {
         l = 0;
     }
+}
 
+template <typename T>
+void SSN_PMM<T>::set_L_from_LLT(const SpMat& Q) {
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+    using Triplet = Eigen::Triplet<T>;
+
+    SpMat Qc = Q;
+    Qc.makeCompressed();
+
+    Eigen::SimplicialLDLT<SpMat> ldlt;
+    ldlt.compute(Qc);
+
+    if (ldlt.info() != Eigen::Success) {
+        throw std::runtime_error("LDLT factorization on Q failed. Q is possibly singular.");
+    }
+
+    const Vec D = ldlt.vectorD();
+    for (int i = 0; i < D.size(); ++i) {
+        if (D(i) < -1e-8) {
+            throw std::invalid_argument("Q is not PSD.");
+        }
+    }
+
+    const int n = Q.rows();
+    std::vector<Triplet> trip;
+    trip.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        T val;
+        if (D(i) > T(0)) {
+            val = std::sqrt(D(i));
+        } else {
+            val = T(0);
+        }
+        if (val != T(0)) {
+            trip.emplace_back(i, i, val);
+        }
+    }
+    SpMat D_sqrt(n, n);
+    D_sqrt.setFromTriplets(trip.begin(), trip.end());
+
+    SpMat L_D = ldlt.matrixL(); // lower triangular from LDL^T
+    L = L_D * D_sqrt; // lower triangular from LL^T
+    
 }
 
 template <typename T>
@@ -141,14 +178,15 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
         Q_diag << Vec::Zero(n), Vec::Ones(n);
 
         // L s.t. Q = LL^T
-        SpMat Qc = problem.Q;
-        Qc.makeCompressed();
-        Eigen::SimplicialLLT<SpMat> llt;
-        llt.compute(Qc);
-        if (llt.info() != Eigen::Success) {
-            throw std::runtime_error("Cholesky factorization of Q failed.");
-        }
-        L = llt.matrixL();
+        set_L_from_LLT(problem.Q);
+        // SpMat Qc = problem.Q;
+        // Qc.makeCompressed();
+        // Eigen::SimplicialLLT<SpMat> llt;
+        // llt.compute(Qc);
+        // if (llt.info() != Eigen::Success) {
+        //     throw std::runtime_error("Cholesky factorization on Q failed.");
+        // }
+        // L = llt.matrixL();
 
         // A' = [A 0; L^T -I]
         {

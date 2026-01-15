@@ -62,8 +62,8 @@ int main() {
     // Compare
     T abs_err = std::abs(obj_val - ref_obj_val);
     bool agree = abs_err <= 1e-4;
-    if (agree) std::cout << "CORRECT!\n";
-    else std::cout << "Incorrect. Absolute error = " << abs_err << "\n";
+    if (agree) std::cout << "\nCORRECT!\n";
+    else std::cout << "\nIncorrect. Absolute error = " << abs_err << "\n";
 
     return 0;
 }
