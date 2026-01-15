@@ -2,6 +2,8 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include "Printing.hpp"
+#include "QInfo.hpp"
+
 
 template <typename T>
 struct SSN_result {
@@ -22,11 +24,11 @@ public:
     using Triplet = Eigen::Triplet<T>;
 
     // Inputs
-    SpMat Q, A, B;
-    Vec c, b;
-    Vec lx, ux;
-    Vec lw, uw;
-    int n, m, l;
+    QInfo Q_info;
+    Vec Q_diag;
+    SpMat L, A, B;
+    Vec c, b, lx, ux, lw, uw;
+    int N, M, l;
     Vec x, y1, y2, z;
     int SSN_max_in_iter;
     T mu, rho, SSN_tol;
@@ -35,9 +37,8 @@ public:
     PrintLabel SSN_print_label = PrintLabel::SSN;
 
     // Useful vectors and matrices
-    Vec ones_n, ones_m, ones_l;
-    Vec Q_diag;
-    SpMat A_tr, B_tr;
+    Vec ones_N, ones_M, ones_l;
+    SpMat A_tr, B_tr, L_tr;
 
     // Outputs
     int SSN_in_iter;
@@ -52,26 +53,26 @@ public:
     
     SSN() {}
 
-    SSN(const SpMat& Q_, const SpMat& A_, const SpMat& B_,
+    SSN(const QInfo& Q_info_, const Vec& Q_diag_, SpMat& L_,
+        const SpMat& A_, const SpMat& B_, const SpMat& A_tr_, const SpMat& B_tr_,
         const Vec& c_, const Vec& b_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
         const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-        T mu_, T rho_, int n_, int m_, int l_,
+        T mu_, T rho_, int N_, int M_, int l_,
         T SSN_tol_, int SSN_max_in_iter_,
         PrintWhen SSN_print_when_, PrintWhat SSN_print_what_)
-    : Q(Q_), A(A_), B(B_), c(c_), b(b_),
+    : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), A(A_), B(B_),
+      A_tr(A_tr_), B_tr(B_tr_), c(c_), b(b_),
       lx(lx_), ux(ux_), lw(lw_), uw(uw_),
       x(x_), y1(y1_), y2(y2_), z(z_),
-      mu(mu_), rho(rho_), n(n_), m(m_), l(l_),
+      mu(mu_), rho(rho_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
       SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_)
     {
-        ones_n = Vec::Ones(n);
-        ones_m = Vec::Ones(m);
+        ones_N = Vec::Ones(N);
+        ones_M = Vec::Ones(M);
         ones_l = Vec::Ones(l);
-        Q_diag = Q.diagonal();
-        A_tr = A.transpose();
-        B_tr = B.transpose();
+        L_tr = L.transpose();
     }
 
     Vec proj(const Vec& u, const Vec& lower, const Vec& upper);

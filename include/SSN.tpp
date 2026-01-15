@@ -3,7 +3,6 @@
 #include <vector>
 #include <chrono>
 
-
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <Eigen/SparseCholesky>
@@ -32,15 +31,23 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
     Vec dist_W = compute_dist_box(B * x_new + (0.5 * y2_new - y2) / mu, lw, uw);
 
     // Evaluate primal residual A x_new - b
-    Vec pr_res = A * x_new - b;
+    Vec res_p = A * x_new - b;
 
     // Compute Lagrangian
-    T L = c.dot(x_new) + 0.5 * x_new.dot(Q * x_new)
-          - y1.dot(pr_res) + (mu / 2) * pr_res.squaredNorm()
-          - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
-          + mu * dist_W.squaredNorm() + y2_new.squaredNorm() / (4 * mu) - y2.squaredNorm() / (2 * mu)
-          + (x_new - x).squaredNorm() / (2 * rho);
-
+    T L;
+    if (Q_info == QInfo::Zero) {
+        L = c.dot(x_new)
+            - y1.dot(res_p) + (mu / 2) * res_p.squaredNorm()
+            - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
+            + mu * dist_W.squaredNorm() + y2_new.squaredNorm() / (4 * mu) - y2.squaredNorm() / (2 * mu)
+            + (x_new - x).squaredNorm() / (2 * rho);
+    } else {
+        L = c.dot(x_new) + 0.5 * Q_diag.cwiseProduct(x_new).dot(x_new)
+            - y1.dot(res_p) + (mu / 2) * res_p.squaredNorm()
+            - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
+            + mu * dist_W.squaredNorm() + y2_new.squaredNorm() / (4 * mu) - y2.squaredNorm() / (2 * mu)
+            + (x_new - x).squaredNorm() / (2 * rho);
+    }
     return L;
 }
 
@@ -55,14 +62,22 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     Vec dist_W = compute_dist_box(B * x_new + (0.5 * y2_new - y2) / mu, lw, uw);
 
     // Compute gradient of Lagrangian
-    Vec grad_L_x = c + Q * x_new - A_tr * y1 + mu * A_tr * (A * x_new - b)
-                   + mu * dist_K
-                   + 2 * mu * B_tr * dist_W
-                   + (x_new - x) / rho;
+    Vec grad_L_x;
+    if (Q_info == QInfo::Zero) {
+        grad_L_x = c - A_tr * y1 + mu * A_tr * (A * x_new - b)
+                    + mu * dist_K
+                    + 2 * mu * B_tr * dist_W
+                    + (x_new - x) / rho;
+    } else {
+        grad_L_x = c + Q_diag.cwiseProduct(x_new) - A_tr * y1 + mu * A_tr * (A * x_new - b)
+                    + mu * dist_K
+                    + 2 * mu * B_tr * dist_W
+                    + (x_new - x) / rho; 
+    }
     Vec grad_L_y2 = dist_W + y2_new / (2 * mu);
 
     // Combine gradients
-    Vec grad_L(n + l);
+    Vec grad_L(N + l);
     grad_L << grad_L_x, grad_L_y2;
 
     return grad_L;
@@ -102,13 +117,13 @@ void SSN<T>::build_B_active_inactive(const SpMat& B, const BoolArr& active, SpMa
     using Triplet = typename SSN<T>::Triplet;
 
     const int l = B.rows();
-    const int n = B.cols();
+    const int N = B.cols();
 
     const int n_active = static_cast<int>(active.count());
     const int n_inactive = l - n_active;
 
-    B_active.resize(n_active, n);
-    B_inactive.resize(n_inactive, n);
+    B_active.resize(n_active, N);
+    B_inactive.resize(n_inactive, N);
 
     std::vector<Triplet> trip_act;
     std::vector<Triplet> trip_inact;
@@ -128,7 +143,7 @@ void SSN<T>::build_B_active_inactive(const SpMat& B, const BoolArr& active, SpMa
         }
     }
 
-    for (int col = 0; col < n; ++col) {
+    for (int col = 0; col < N; ++col) {
         for (typename SpMat::InnerIterator it(B, col); it; ++it) {
             const int i = it.row();
             if (active(i)) {
@@ -236,7 +251,7 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
     T L = compute_Lagrangian(x_curr, y2_curr);
     Vec grad_L = compute_grad_Lagrangian(x_curr, y2_curr);
 
-    T grad_desc = grad_L.head(n).dot(dx) + grad_L.tail(l).dot(dy2);
+    T grad_desc = grad_L.head(N).dot(dx) + grad_L.tail(l).dot(dy2);
 
     // Iterate until finding the largest step size satisfying the Armijo-Goldstein condition
     while (true) {
@@ -329,11 +344,16 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         int n_active_W = active_W.count();
         int n_inactive_W = l - n_active_W;
 
-        // Build of Clarke subgradient matrix J_tilde = [-H_tilde G^T; G D]:
+        // Build of Clarke subgradient matrix [-H G^T; G D]:
 
-        // H_tilde = diag(Q) + mu(I_n - P_K) + I_n / rho
-        Vec H_tilde_diag = Q_diag + mu * (ones_n - diag_P_K) + ones_n / rho;
-        Vec H_tilde_diag_inv = H_tilde_diag.cwiseInverse();
+        // H = Q_diag + mu(I_N - P_K) + I_N / rho
+        Vec H_diag;
+        if (Q_info == QInfo::Zero) {
+            H_diag = mu * (ones_N - diag_P_K) + ones_N / rho;
+        } else {
+            H_diag = Q_diag + mu * (ones_N - diag_P_K) + ones_N / rho;
+        }
+        Vec H_diag_inv = H_diag.cwiseInverse();
 
         // Active and inactive parts of B w.r.t. W = [lw, uw]
         SpMat B_active_W, B_inactive_W;
@@ -344,8 +364,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         SpMat G_tr = G.transpose();
 
         // Compute dy2 in inactive_W:
-        // dy2_inactive_W = ((I - P_W/2)^{-1} - mu * dist_W(v) - y2/2)(inactive_W)
-        //                = 2 - mu * dist_W(v)(inactive_W) - y2(inactive_W)/2 
+        // dy2_inactive_W = - 2 mu * dist_W(v)(inactive_W) - y2(inactive_W)
         Vec y2_active_W, y2_inactive_W;
         split_by_mask(result.y2, active_W, y2_active_W, y2_inactive_W);
 
@@ -355,26 +374,34 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dy2_inactive_W = -2 * (mu * dist_W_v_inactive_W + y2_inactive_W / 2);
 
         // Compute the RHS vector
-        Vec r1 = c + Q * result.x + mu * dist_K_u
+        Vec r1;
+        if (Q_info == QInfo::Zero) {
+            r1 = c + mu * dist_K_u
                  - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W
                  + (result.x - x) / rho;
-        Vec r2(m + n_active_W);
-        r2.head(m) = y1 / mu - A * result.x + b;
+        } else {
+            r1 = c + Q_diag.cwiseProduct(result.x) + mu * dist_K_u
+                 - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W
+                 + (result.x - x) / rho;
+        }
+        
+        Vec r2(M + n_active_W);
+        r2.head(M) = y1 / mu - A * result.x + b;
         r2.tail(n_active_W) = -dist_W_v_active_W - y2_active_W / (2 * mu);
 
-        // Compute the Schur complement of J_tilde (self-adjoint and PD)
-        // Schur = G H_tilde_inv G^T + D, where D = diag(1/mu)
-        SpMat GH_inv = G; // G * H_tilde_inv
-        scale_columns(GH_inv, H_tilde_diag_inv);
-        SpMat Schur_tilde = GH_inv * G_tr; 
-        for (int i = 0; i < m + n_active_W; ++i) {
-            Schur_tilde.coeffRef(i, i) += 1 / mu;
+        // Compute the Schur complement of J (self-adjoint and PD)
+        // Schur = G H_inv G^T + D, where D = diag(1/mu)
+        SpMat GH_inv = G; // G * H_inv
+        scale_columns(GH_inv, H_diag_inv);
+        SpMat Schur = GH_inv * G_tr; 
+        for (int i = 0; i < M + n_active_W; ++i) {
+            Schur.coeffRef(i, i) += 1 / mu;
         }
-        Schur_tilde.makeCompressed(); // G * H_tilde_inv * G^T + D
+        Schur.makeCompressed(); // G * H_inv * G^T + D
 
-        // Perform Cholesky factorization on the approximated Schur complement
-        // to solve Schur_tilde * dy_ = G * H_tilde_inv * r1 + r2, where dy_ = [dy1; dy2_active].
-        Vec H_inv_r1 = H_tilde_diag_inv.array() * r1.array(); // elementwise
+        // Perform Cholesky factorization on Schur complement to solve
+        // Schur * dy_ = G * H_inv * r1 + r2, where dy_ = [dy1; dy2_active].
+        Vec H_inv_r1 = H_diag_inv.array() * r1.array(); // elementwise
         Vec rhs = G * H_inv_r1 + r2;
 
         auto t1_chol_prep = std::chrono::steady_clock::now();
@@ -382,13 +409,13 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // std::cout << "  Prep for Cholesky decomposition took " << timer_chol_prep << " ms.\n";
 
         auto t0_chol = std::chrono::steady_clock::now(); // TIMER FOR CHOL DECOMP
-        Vec dy_ = solve_via_chol(Schur_tilde, rhs);
+        Vec dy_ = solve_via_chol(Schur, rhs);
         auto t1_chol = std::chrono::steady_clock::now();
         double timer_chol = time_diff_ms(t0_chol, t1_chol);
         // std::cout << "  Cholesky decomposition took " << timer_chol << " ms.\n";
 
         // Retrive dx and dy2
-        Vec dx = H_tilde_diag_inv.array() * (G_tr * dy_ - r1).array(); // elementwise
+        Vec dx = H_diag_inv.array() * (G_tr * dy_ - r1).array(); // elementwise
         Vec dy2_active_W = dy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 

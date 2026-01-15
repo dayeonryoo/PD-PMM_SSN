@@ -127,29 +127,29 @@ int main() {
     //       0, 0,  0, 0,  0, 0]
 
 
-    SpMat SPSD_Q(n, n);
-    std::vector<Triplet> SPSD_Q_trpl;
-    SPSD_Q_trpl.emplace_back(0, 0, 2.0);
-    SPSD_Q_trpl.emplace_back(0, 2, -1.0);
-    SPSD_Q_trpl.emplace_back(2, 0, -1.0);
-    SPSD_Q_trpl.emplace_back(2, 2, 2.0);
-    SPSD_Q_trpl.emplace_back(2, 4, -1.0);
-    SPSD_Q_trpl.emplace_back(4, 2, -1.0);
-    SPSD_Q_trpl.emplace_back(4, 4, 2.0);
-    SPSD_Q.setFromTriplets(SPSD_Q_trpl.begin(), SPSD_Q_trpl.end());
+    // SpMat SPSD_Q(n, n);
+    // std::vector<Triplet> SPSD_Q_trpl;
+    // SPSD_Q_trpl.emplace_back(0, 0, 2.0);
+    // SPSD_Q_trpl.emplace_back(0, 2, -1.0);
+    // SPSD_Q_trpl.emplace_back(2, 0, -1.0);
+    // SPSD_Q_trpl.emplace_back(2, 2, 2.0);
+    // SPSD_Q_trpl.emplace_back(2, 4, -1.0);
+    // SPSD_Q_trpl.emplace_back(4, 2, -1.0);
+    // SPSD_Q_trpl.emplace_back(4, 4, 2.0);
+    // SPSD_Q.setFromTriplets(SPSD_Q_trpl.begin(), SPSD_Q_trpl.end());
 
-    std::cout << "Q is symmetric positive semidefinite.\n";
+    // std::cout << "Q is symmetric positive semidefinite.\n";
 
-    // Create Problem instance with quadratic term
-    Problem<T> SPSD_QP(SPSD_Q, A, B, c, b, lx, ux, lw, uw, tol, max_iter,
-                    PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
+    // // Create Problem instance with quadratic term
+    // Problem<T> SPSD_QP(SPSD_Q, A, B, c, b, lx, ux, lw, uw, tol, max_iter,
+    //                 PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
     
-    // Solve the problem using SSN_PMM
-    SSN_PMM<T> SPSD_QP_solver(SPSD_QP);
-    Solution<T> SPSD_QP_sol = SPSD_QP_solver.solve();
-    SPSD_QP_sol.print_summary();
+    // // Solve the problem using SSN_PMM
+    // SSN_PMM<T> SPSD_QP_solver(SPSD_QP);
+    // Solution<T> SPSD_QP_sol = SPSD_QP_solver.solve();
+    // SPSD_QP_sol.print_summary();
 
-    std::cout << "===================================================================\n";
+    // std::cout << "===================================================================\n";
 
 // ==============================================================
 //     min  c^T x + (1/2) x^T Q x,

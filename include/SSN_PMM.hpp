@@ -1,10 +1,12 @@
 #pragma once
+
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include "Problem.hpp"
 #include "Solution.hpp"
 #include "SSN.hpp"
 #include "Printing.hpp"
+#include "QInfo.hpp"
 
 
 // =============================================================
@@ -59,6 +61,11 @@ public:
     int max_iter = 0;
 
     int n, m, l;
+    int N, M;
+    QInfo Q_info;
+    Vec Q_diag;
+    SpMat L;
+    SpMat A_tr, B_tr;
 
     // PMM parameters
     T mu, rho;
@@ -83,23 +90,36 @@ public:
 
     // Constructors
     SSN_PMM() {}
-    SSN_PMM(Problem<T>& problem)
-    : Q(problem.Q), A(problem.A), B(problem.B), c(problem.c), b(problem.b),
-      lx(problem.lx), ux(problem.ux), lw(problem.lw), uw(problem.uw),
-      tol(problem.tol), max_iter(problem.max_iter),
+    SSN_PMM(const Problem<T>& problem)
+    : tol(problem.tol), max_iter(problem.max_iter),
       PMM_print_when(problem.PMM_print_when), PMM_print_what(problem.PMM_print_what),
       SSN_print_when(problem.SSN_print_when), SSN_print_what(problem.SSN_print_what)
     {
-        determine_dimensions();
-        set_default();
-        check_dimensionality();
+        get_Q_info(problem.Q);
+        determine_dimensions(problem);
+        set_default(problem);
+        check_dimensions();
         check_infeasibility();
+
+        A_tr = A.transpose();
+        B_tr = B.transpose();
+
+        std::cout << "c = " << c.transpose() << "\n";
+        std::cout << "b = " << b.transpose() << "\n";
+        std::cout << "lx = " << lx.transpose() << "\n";
+        std::cout << "ux = " << ux.transpose() << "\n";
+        std::cout << "lw = " << lw.transpose() << "\n";
+        std::cout << "uw = " << uw.transpose() << "\n";
+        std::cout << "A' =\n" << Eigen::MatrixXd(A) << "\n";
+        std::cout << "B' =\n" << Eigen::MatrixXd(B) << "\n";
+        std::cout << "L =\n" << Eigen::MatrixXd(L) << "\n";
+        std::cout << "Q_diag = " << Q_diag.transpose() << "\n";
     }
 
-    void determine_dimensions();
-    void set_default();
-    void check_dimensionality();
-    bool is_PSD(const SpMat& Q);
+    void determine_dimensions(const Problem<T>& problem);
+    void get_Q_info(const SpMat& Q);
+    void set_default(const Problem<T>& problem);
+    void check_dimensions();
     void check_infeasibility();
     Vec proj(const Vec& u, const Vec& lower, const Vec& upper);
     Vec compute_residual_norms();
