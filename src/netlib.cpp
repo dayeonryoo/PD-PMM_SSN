@@ -28,7 +28,7 @@ struct NetlibTestResult {
 
 int main() {
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/25FV47.mps";
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/seba.mps";
     
     // Solving via HiGHS
     Highs h;
@@ -37,13 +37,20 @@ int main() {
     h.run();
     double ref_obj_val = h.getObjectiveValue();
 
+    std::cout << "===============================================\n";
+
     // Extract problem data from the mps file
     const HighsLp& lp = h.getLp();
     PDPMMdata<T> pd = lp_to_pdpmm<T>(lp);
 
+    std::cout << "Problem dimensions:\n";
+    std::cout << "  Number of variables (n): " << pd.c.size() << "\n";
+    std::cout << "  Number of equality constraints (m): " << pd.b.size() << "\n";
+    std::cout << "  Number of inequality constraints (l): " << pd.lw.size() << "\n";
+
     // Construct the problem and solver
     T tol = 1e-6;
-    int max_iter = 1e3;
+    int max_iter = 1e2;
     PrintWhen PMM_print_when = PrintWhen::ALWAYS;
     PrintWhat PMM_print_what = PrintWhat::MINIMAL;
     PrintWhen SSN_print_when = PrintWhen::NEVER;
@@ -58,12 +65,35 @@ int main() {
     Solution<T> sol = solver.solve();
     sol.print_summary();
     T obj_val = sol.obj_val;
-    
+   
     // Compare
     T abs_err = std::abs(obj_val - ref_obj_val);
     bool agree = abs_err <= 1e-4;
-    if (agree) std::cout << "\nCORRECT!\n";
-    else std::cout << "\nIncorrect. Absolute error = " << abs_err << "\n";
+    if (agree) std::cout << "\nCORRECT! Asolute error = " << abs_err << ", relative error = " << abs_err / std::abs(ref_obj_val) << "\n";
+    else std::cout << "\nIncorrect. Absolute error = " << abs_err << ", relative error = " << abs_err / std::abs(ref_obj_val) << "\n";
+
+    std::cout << "\nChecking feasibility with reference solution x_h from HiGHS:\n";
+    const HighsSolution& h_sol = h.getSolution();
+    Vec x_h(pd.c.size());
+    for (int i = 0; i < pd.c.size(); ++i) {
+        x_h[i] = h_sol.col_value[i];
+    }
+    std::cout << "||Ax_h - b|| = " << (pd.A * x_h - pd.b).norm() << "\n";
+    std::cout << "Elements of x outside bounds:\n";
+    for (int i = 0; i < pd.c.size(); ++i) {
+        if (x_h[i] < pd.lx[i] - 1e-8 || x_h[i] > pd.ux[i] + 1e-8) {
+            std::cout << "Variable " << i << " out of bounds: x_h = " << x_h[i]
+                      << ", [" << pd.lx[i] << ", " << pd.ux[i] << "]\n";
+        }
+    }
+    std::cout << "Elements of Bx_h outside bounds:\n";
+    for (int i = 0; i < pd.lw.size(); ++i) {
+        if ((pd.B * x_h)[i] < pd.lw[i] - 1e-8 || (pd.B * x_h)[i] > pd.uw[i] + 1e-8) {
+            std::cout << "Variable " << i << " out of bounds: Bx_h = " << (pd.B * x_h)[i]
+                      << ", [" << pd.lw[i] << ", " << pd.uw[i] << "]\n";
+        }
+    }
+    std::cout << "===============================================\n";
 
     return 0;
 }

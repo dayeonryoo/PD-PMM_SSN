@@ -7,18 +7,6 @@
 #include <Eigen/Sparse>
 #include <Eigen/SparseCholesky>
 
-template <typename T>
-typename SSN<T>::Vec SSN<T>::proj(const Vec& u, const Vec& lower, const Vec& upper) {
-    return u.cwiseMax(lower).cwiseMin(upper);
-}
-
-template <typename T>
-typename SSN<T>::Vec SSN<T>::compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
-    using Vec = typename SSN<T>::Vec;
-
-    Vec dist = v - proj(v, lower, upper);
-    return dist;
-}
 
 template <typename T>
 T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
@@ -58,18 +46,21 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     // Evalueate Dist_K (z/mu + x_new)
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
 
-    // Evaluate Dist_W (B*x_new - (y2 - y2_new/2)/mu)
-    Vec dist_W = compute_dist_box(B * x_new + (0.5 * y2_new - y2) / mu, lw, uw);
+    // Evaluate Dist_W (B*x_new + (y2_new/2 - y2)/mu)
+    Vec dist_W = compute_dist_box(B * x_new + (y2_new / 2 - y2) / mu, lw, uw);
+
+    // Primal residual: A x_new - b
+    Vec res_p = A * x_new - b;
 
     // Compute gradient of Lagrangian
     Vec grad_L_x;
     if (Q_info == QInfo::Zero) {
-        grad_L_x = c - A_tr * y1 + mu * A_tr * (A * x_new - b)
+        grad_L_x = c - A_tr * y1 + mu * A_tr * res_p
                     + mu * dist_K
                     + 2 * mu * B_tr * dist_W
                     + (x_new - x) / rho;
     } else {
-        grad_L_x = c + Q_diag.cwiseProduct(x_new) - A_tr * y1 + mu * A_tr * (A * x_new - b)
+        grad_L_x = c + Q_diag.cwiseProduct(x_new) - A_tr * y1 + mu * A_tr * res_p
                     + mu * dist_K
                     + 2 * mu * B_tr * dist_W
                     + (x_new - x) / rho; 
@@ -263,10 +254,10 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
 
         if (L_new <= L + beta * alpha * grad_desc) break;
 
-        m += 200;
+        m += 50;
         alpha = pow(delta, m);
 
-        if (alpha < 1e-3) break; // Lower bound on alpha
+        if (alpha < 1e-5) break; // Lower bound on alpha 
     }
 
     return alpha;
@@ -311,6 +302,10 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // Compute gradient of Lagrangian at current (x, y2)
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
         result.SSN_tol_achieved = grad_L.norm();
+
+        if (result.SSN_in_iter == 0 || result.SSN_in_iter % 5 == 0 || result.SSN_in_iter % 10 == 0) {
+            std::cout << "SSN iter " << result.SSN_in_iter << ": ||grad_L|| = " << result.SSN_tol_achieved << "\n";
+        }
 
         // Check termination criterion
         if (result.SSN_tol_achieved < eps) {
@@ -371,7 +366,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dist_W_v_active_W, dist_W_v_inactive_W;
         split_by_mask(dist_W_v, active_W, dist_W_v_active_W, dist_W_v_inactive_W);
 
-        Vec dy2_inactive_W = -2 * (mu * dist_W_v_inactive_W + y2_inactive_W / 2);
+        Vec dy2_inactive_W = -2 * mu * dist_W_v_inactive_W - y2_inactive_W;
 
         // Compute the RHS vector
         Vec r1;
@@ -401,7 +396,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Perform Cholesky factorization on Schur complement to solve
         // Schur * dy_ = G * H_inv * r1 + r2, where dy_ = [dy1; dy2_active].
-        Vec H_inv_r1 = H_diag_inv.array() * r1.array(); // elementwise
+        Vec H_inv_r1 = H_diag_inv.cwiseProduct(r1);
         Vec rhs = G * H_inv_r1 + r2;
 
         auto t1_chol_prep = std::chrono::steady_clock::now();
@@ -415,7 +410,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // std::cout << "  Cholesky decomposition took " << timer_chol << " ms.\n";
 
         // Retrive dx and dy2
-        Vec dx = H_diag_inv.array() * (G_tr * dy_ - r1).array(); // elementwise
+        Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
         Vec dy2_active_W = dy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
@@ -434,12 +429,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Backtracking linesearch took " << timer_alpha << " ms.\n";
 
-        // Udpate x and y2
+        // Update x and y2
         result.x += alpha * dx;
         result.y2 += alpha * dy2;
-        
-        x = result.x;
-        y2 = result.y2;
 
         auto t1_ssn = std::chrono::steady_clock::now();
         double timer_ssn = time_diff_ms(t0_ssn, t1_ssn);

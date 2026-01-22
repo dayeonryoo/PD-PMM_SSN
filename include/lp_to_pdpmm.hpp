@@ -21,13 +21,37 @@ struct PDPMMdata {
 
 template <typename T>
 PDPMMdata<T> lp_to_pdpmm(const HighsLp& lp) {
+    /*
+    HiGHS LP data structure
+    ------------------------------------------------
+    min  c^T x
+    s.t. row_lower <= A_full x <= row_upper
+         col_lower <= x <= col_upper
+    ------------------------------------------------
+    num_col_ : number of variables (n)
+    num_row_ : number of constraints, i.e. rows of A_full (m)
+    col_cost_  : objective coefficients c
+    col_lower_ : variable lower bounds
+    col_upper_ : variable upper bounds
+    row_lower_ : constraint lower bounds
+    row_upper_ : constraint upper bounds
+    a_matrix_  : constraint matrix
+    sense_     : optimization sense (min)
+    offset_    : objective offset (0.0)
+    model_name_:  name of the model
+    objective_name_: name of the objective
+    col_names_ : names of the variables
+    row_names_ : names of the constraints
+    integer_columns_ : indices of integer variables
+    ------------------------------------------------
+    */
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using SpMat = Eigen::SparseMatrix<T>;
     using Triplet = Eigen::Triplet<T>;
     using Map = Eigen::Map<const Vec>;
 
-    const int n = lp.num_col_; // total number of variables (x + w)
-    const int m = lp.num_row_; // number of constraints
+    const int n = lp.num_col_; // number of variables (n)
+    const int ml = lp.num_row_; // number of constraints (m + l)
 
     // Objective
     Vec c = Map(lp.col_cost_.data(), n);
@@ -36,55 +60,35 @@ PDPMMdata<T> lp_to_pdpmm(const HighsLp& lp) {
     Vec lx = Map(lp.col_lower_.data(), n);
     Vec ux = Map(lp.col_upper_.data(), n);
 
+    // Constraints bounds
+    Vec row_lower = Map(lp.row_lower_.data(), ml);
+    Vec row_upper = Map(lp.row_upper_.data(), ml);
+
     // Constraint matrix
     const HighsSparseMatrix& A_highs = lp.a_matrix_;
-    SpMat A_full(m, n);
-    {
-        std::vector<Triplet> trips;
-        trips.reserve(A_highs.value_.size());
-
-        if (A_highs.format_ == MatrixFormat::kColwise) {
-            for (int col = 0; col < n; ++col) {
-                int k_start = A_highs.start_[col];
-                int k_end   = A_highs.start_[col + 1];
-                for (int k = k_start; k < k_end; ++k) {
-                    int row    = A_highs.index_[k];
-                    double val = A_highs.value_[k];
-                    trips.emplace_back(row, col, val);
-                }
-            }
-        } else if (A_highs.format_ == MatrixFormat::kRowwise) {
-            for (int row = 0; row < m; ++row) {
-                int k_start = A_highs.start_[row];
-                int k_end   = A_highs.start_[row + 1];
-                for (int k = k_start; k < k_end; ++k) {
-                    int col    = A_highs.index_[k];
-                    double val = A_highs.value_[k];
-                    trips.emplace_back(row, col, val);
-                }
-            }
-        } else {
-            throw std::runtime_error("Unknown matrix format in HiGHS");
+    SpMat A_full(ml, n);
+    A_full.reserve(A_highs.value_.size());
+    for (int col = 0; col < n; ++col) { // HiGHS uses column-wise storage
+        int k_start = A_highs.start_[col];
+        int k_end   = A_highs.start_[col + 1];
+        for (int k = k_start; k < k_end; ++k) {
+            int row    = A_highs.index_[k];
+            double val = A_highs.value_[k];
+            A_full.insert(row, col) = val;
         }
-
-        A_full.setFromTriplets(trips.begin(), trips.end());
     }
+    A_full.makeCompressed();
 
-    // Constraints
-    Vec row_lower = Map(lp.row_lower_.data(), m);
-    Vec row_upper = Map(lp.row_upper_.data(), m);
-
-    // Split constraints into equalities and inequalities
+    // Split A_full into equality and inequality rows
     const double tol = 1e-9;
     std::vector<int> eq_rows;
     std::vector<int> ineq_rows;
-    eq_rows.reserve(m);
-    ineq_rows.reserve(m);
-    
-    for (int i = 0; i < m; ++i) {
+    eq_rows.reserve(ml);
+    ineq_rows.reserve(ml);
+
+    for (int i = 0; i < ml; ++i) {
         double lo = row_lower[i];
         double hi = row_upper[i];
-
         if (std::abs(hi - lo) < tol) {
             eq_rows.push_back(i);
         } else {
@@ -92,18 +96,18 @@ PDPMMdata<T> lp_to_pdpmm(const HighsLp& lp) {
         }
     }
 
-    int m_eq = static_cast<int>(eq_rows.size());
-    int m_ineq = static_cast<int>(ineq_rows.size());
+    int m = static_cast<int>(eq_rows.size()); // number of equality constraints
+    int l = static_cast<int>(ineq_rows.size()); // number of inequality constraints
 
     // Construct A and b (equality constraints)
-    SpMat A(m_eq, n);
-    Vec b(m_eq);
+    SpMat A(m, n);
+    Vec b(m);
     {
         std::vector<Triplet> trips;
         trips.reserve(A_full.nonZeros());
 
-        std::vector<int> row_map(m, -1);
-        for (int k = 0; k < m_eq; ++k) {
+        std::vector<int> row_map(ml, -1);
+        for (int k = 0; k < m; ++k) {
             row_map[eq_rows[k]] = k;
             b[k] = row_lower[eq_rows[k]];
         }
@@ -117,19 +121,19 @@ PDPMMdata<T> lp_to_pdpmm(const HighsLp& lp) {
                 }
             }
         }
-
         A.setFromTriplets(trips.begin(), trips.end());
+        A.makeCompressed();
     }
 
     // Build B, lw and uw (inequalities)
-    SpMat B(m_ineq, n);
-    Vec lw(m_ineq), uw(m_ineq);
+    SpMat B(l, n);
+    Vec lw(l), uw(l);
     {
         std::vector<Triplet> trips;
         trips.reserve(A_full.nonZeros());
 
-        std::vector<int> row_map(m, -1);
-        for (int k = 0; k < m_ineq; ++k) {
+        std::vector<int> row_map(ml, -1);
+        for (int k = 0; k < l; ++k) {
             int r = ineq_rows[k];
             row_map[r] = k;
             lw[k] = row_lower[r];
@@ -145,8 +149,8 @@ PDPMMdata<T> lp_to_pdpmm(const HighsLp& lp) {
                 }
             }
         }
-
         B.setFromTriplets(trips.begin(), trips.end());
+        B.makeCompressed();
     }
 
     // Q = 0

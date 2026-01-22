@@ -75,8 +75,12 @@ public:
         L_tr = L.transpose();
     }
 
-    Vec proj(const Vec& u, const Vec& lower, const Vec& upper);
-    Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper);
+    static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
+        return u.cwiseMax(lower).cwiseMin(upper);
+    }
+    static inline Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
+        return (v - proj(v, lower, upper));
+    }
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper);

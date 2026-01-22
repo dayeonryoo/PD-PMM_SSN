@@ -67,6 +67,11 @@ public:
     SpMat L;
     SpMat A_tr, B_tr;
 
+    SpMat A_ruiz;
+    Vec b_ruiz, lx_ruiz, ux_ruiz;
+    Vec D1_diag, D2_diag;
+    Vec x_descaled, y1_descaled;
+
     // PMM parameters
     T mu, rho;
 
@@ -111,8 +116,17 @@ public:
     void set_default(const Problem<T>& problem);
     void check_dimensions();
     void check_infeasibility();
-    Vec proj(const Vec& u, const Vec& lower, const Vec& upper);
+
+    static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
+        return u.cwiseMax(lower).cwiseMin(upper);
+    }
+    static inline T inf_norm(const Vec& v) {
+        return v.cwiseAbs().maxCoeff();
+    }
+    
     Vec compute_residual_norms();
+    Vec compute_residual_norms_inf();
+    T objective_value();
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
     Solution<T> solve();
 };
