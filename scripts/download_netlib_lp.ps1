@@ -1,3 +1,7 @@
+# To run this script, open PowerShell and execute:
+#   .\scripts\download_netlib_lp.ps1
+
+# Downloading Netlib LP test problems and preparing .mps files
 $base   = "https://www.netlib.org/lp/data/"
 $target = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib"
 
@@ -26,7 +30,7 @@ foreach ($f in $files) {
     Invoke-WebRequest -Uri $url -OutFile $out
 }
 
-Write-Host "Done downloading compressed LP files to $target."
+Write-Host "Done downloading compressed LP files from $base to $target."
 
 # -------- Ensure emps.exe exists (download + decompress if necessary) --------
 

@@ -1,8 +1,10 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <vector>
 #include <filesystem>
 #include <map>
+#include <chrono>
 
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
@@ -21,14 +23,46 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 struct NetlibTestResult {
+    // Comparison result for a Netlib test problem
     std::string name;
-    bool agree;
+    bool abs_agree;
     T abs_err;
+    bool rel_agree;
+    T rel_err;
+
+    // Result summary from PD-PMM_SSN solver
+    int opt_status;
+    T obj_val;
+    int PMM_iter;
+    int SSN_iter;
+    T PMM_tol_achieved;
+    T SSN_tol_achieved;
+    double solving_time_sec;
 };
 
+void write_csv_header(const std::string& path) {
+    namespace fs = std::filesystem;
+    if (!fs::exists(fs::path(path)) || fs::is_empty(fs::path(path))) {
+        std::ofstream csv(path);
+        csv << "name,abs_agree,abs_err,rel_agree,rel_err,opt_status,obj_val,"
+            << "PMM_iter,SSN_iter,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec\n";
+    }
+}
+
+void append_csv_result(const std::string& path, const NetlibTestResult& r) {
+    std::ofstream csv(path, std::ios::out | std::ios::app);
+    csv << r.name << "," << (r.abs_agree ? "1" : "0") << "," << r.abs_err << ","
+        << (r.rel_agree ? "1" : "0") << "," << r.rel_err << ","
+        << r.opt_status << "," << r.obj_val << ","
+        << r.PMM_iter << "," << r.SSN_iter << ","
+        << r.PMM_tol_achieved << "," << r.SSN_tol_achieved << ","
+        << r.solving_time_sec << "\n";
+    csv.close();
+}
+/*
 int main() {
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/seba.mps";
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/bnl2.mps";
     
     // Solving via HiGHS
     Highs h;
@@ -49,7 +83,7 @@ int main() {
     std::cout << "  Number of inequality constraints (l): " << pd.lw.size() << "\n";
 
     // Construct the problem and solver
-    T tol = 1e-6;
+    T tol = 1e-4;
     int max_iter = 1e2;
     PrintWhen PMM_print_when = PrintWhen::ALWAYS;
     PrintWhat PMM_print_what = PrintWhat::MINIMAL;
@@ -68,9 +102,11 @@ int main() {
    
     // Compare
     T abs_err = std::abs(obj_val - ref_obj_val);
-    bool agree = abs_err <= 1e-4;
-    if (agree) std::cout << "\nCORRECT! Asolute error = " << abs_err << ", relative error = " << abs_err / std::abs(ref_obj_val) << "\n";
-    else std::cout << "\nIncorrect. Absolute error = " << abs_err << ", relative error = " << abs_err / std::abs(ref_obj_val) << "\n";
+    T rel_err = abs_err / std::abs(ref_obj_val);
+    bool abs_agree = abs_err <= 1e-4;
+    bool rel_agree = rel_err <= 1e-4;
+    if (rel_agree) std::cout << "\nCORRECT! Asolute error = " << abs_err << ", relative error = " << rel_err << "\n";
+    else std::cout << "\nIncorrect. Absolute error = " << abs_err << ", relative error = " << rel_err << "\n";
 
     std::cout << "\nChecking feasibility with reference solution x_h from HiGHS:\n";
     const HighsSolution& h_sol = h.getSolution();
@@ -97,79 +133,54 @@ int main() {
 
     return 0;
 }
+*/
 
-/*
 int main() {
 
-    // Filenames and corresponding optimal objective values
-    std::map<std::string, T> netlib_opt = {
-        {"25fv47",5501.845883}, {"80bau3b",987232.16}, {"adlittle",225494.96316},
-        {"afiro",-464.75314286}, {"agg",-35995300.0}, {"agg2",-20239250.0},
-        {"agg3",10312110.0}, {"bandm",-158.6}, {"beaconfd",33594.759},
-        {"blend",-30.81214}, {"bnl1",1977.9496}, {"bnl2",1811.236},
-        {"boeing1",-335.21356751}, {"boeing2",-315.013502}, {"bore3d",1373.080394},
-        {"brandy",1518.0}, {"capri",2690.012003}, {"cycle",-5.226393024},
-        {"czprob",2185023.0}, {"d2q06c",122700.0}, {"d6cube",315.49166667},
-        {"degen2",-1435.178}, {"degen3",-987.294}, {"dfl001",11266000.0},
-        {"e226",-18.75192666}, {"etamacro",-755.571999}, {"fffff800",555600.0},
-        {"finnis",172769.96547}, {"fit1d",-9146.378923}, {"fit1p",9146.378923},
-        {"fit2d",-68463.78}, {"fit2p",68463.783232}, {"forplan",-664.2187},
-        {"ganges",-109586.3}, {"gfrd-pnc",6902235.999}, {"greenbea",-72460000.0},
-        {"greenbeb",-4302000.0}, {"grow15",-106834000.0}, {"grow22",-160834300.0},
-        {"grow7",-47778118.81}, {"israel",-896644.8}, {"kb2",-1749.900129},
-        {"lotfi",-25.269}, {"maros",-58063.74}, {"maros-r7",1497185.0},
-        {"modszk1",320.6197}, {"nesm",14076070.0}, {"perold",-9380.758},
-        {"pilot",-557.4043}, {"pilot.ja",-6113.134411}, {"pilot.we",-2720043.0},
-        {"pilot4",-2581.139264}, {"pilot87",301.71072827}, {"pilotnov",-4497.276},
-        {"qap8",203.50}, {"qap12",522.89435056}, {"qap15",1040.9940410},
-        {"recipe",-266.616}, {"sc105",-52.20206121}, {"sc205",-52.20206121},
-        {"sc50a",-64.575077059}, {"sc50b",-70.0}, {"scagr25",-14753433.06},
-        {"scagr7",-2331333.0}, {"scfxm1",18416.0}, {"scfxm2",36660.0},
-        {"scfxm3",54901.25}, {"scorpion",1878.124}, {"scrs8",904.29998613},
-        {"scsd1",8.6666666743}, {"scsd6",50.5}, {"scsd8",904.99999993},
-        {"sctap1",1412.25}, {"sctap2",1724.8071429}, {"sctap3",1424.0},
-        {"seba",15711.6}, {"share1b",-76589.31857}, {"share2b",-415.7322},
-        {"shell",1208825346.0}, {"ship04l",1793324.38}, {"ship04s",1798714.70},
-        {"ship08l",1909055.21}, {"ship08s",1920098.70}, {"ship12l",1470187.19},
-        {"ship12s",1489236.14}, {"sierra",15394368.4}, {"stair",-251.2669},
-        {"standata",1257.6995}, {"standmps",1406.0175}, {"stocfor1",-41131.97},
-        {"stocfor2",-39024.40}, {"stocfor3",-39976.661576}, {"truss",458815.8471},
-        {"tuff",0.292147747}, {"vtp.base",129814.6246}, {"wood1p",1.442902411},
-        {"woodw",1.304476333}
-    };
+    // Filenames of Netlib test problems (without .mps extension)
+    std::vector<std::string> netlib_names = {"CRE-A","CRE-C","KEN-07","PDS-02"};
+    // std::vector<std::string> netlib_names = {"25FV47","80BAU3B","ADLITTLE","AFIRO","AGG","AGG2","AGG3","BANDM","BEACONFD","BLEND","BNL1","BNL2","BOEING1","BOEING2","BORE3D","BRANDY","CAPRI","CYCLE","CZPROB","D2Q06C","D6CUBE","DEGEN2","DEGEN3","DFL001",
+    //                                         "E226","ETAMACRO","FFFFF800","FINNIS","FIT1D","FIT1P","FIT2D","FIT2P","FORPLAN","GANGES","GFRD-PNC","GREENBEA","GREENBEB","GROW15","GROW22","GROW7","ISRAEL","KB2","LOTFI","MAROS","MAROS-R7","MODSZK1","NESM",
+    //                                         "PEROLD","PILOT","PILOT.JA","PILOT.WE","PILOT4","PILOT87","PILOTNOV","QAP8","QAP12","QAP15","RECIPE","SC105","SC205","SC50A","SC50B","SCAGR25","SCAGR7","SCFXM1","SCFXM2","SCFXM3","SCORPION","SCRS8","SCSD1","SCSD6","SCSD8","SCTAP1","SCTAP2","SCTAP3",
+    //                                         "SEBA","SHARE1B","SHARE2B","SHELL","SHIP04L","SHIP04S","SHIP08L","SHIP08S","SHIP12L","SHIP12S","SIERRA","STAIR","STANDATA","STANDGUB","STANDMPS","STOCFOR1","STOCFOR2","STOCFOR3","TRUSS","TUFF","VTP.BASE","WOOD1P","WOODW"};
+    // std::vector<std::string> kennington_names = {"CRE-A","CRE-B","CRE-C","CRE-D","KEN-07","KEN-11","KEN-13","KEN-18","OSA-07","OSA-14","OSA-30","OSA-60","PDS-02","PDS-06","PDS-10","PDS-20"};
+
+    // Root
+    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
 
     // Parameters in common
-    T tol = 1e-6;
-    int max_iter = 1e3;
-    PrintWhen PMM_print_when = PrintWhen::NEVER;
-    PrintWhat PMM_print_what = PrintWhat::NONE;
+    T tol = 1e-4;
+    int max_iter = 1e2;
+    PrintWhen PMM_print_when = PrintWhen::EVERY10;
+    PrintWhat PMM_print_what = PrintWhat::MINIMAL;
     PrintWhen SSN_print_when = PrintWhen::NEVER;
     PrintWhat SSN_print_what = PrintWhat::NONE;
 
     // Solver result
-    std::vector<NetlibTestResult> results;
-    results.reserve(netlib_opt.size());
+    std::string csv_path = root + "results/netlib_test_results.csv";
+    write_csv_header(csv_path);
 
-    // Looping over all LPs to solve and compare with the reference optimal objective values
-    for (const auto& data : netlib_opt) {
-        const std::string& name = data.first; // e.g. "afiro"
-        T ref_obj_val = data.second; // optimal objective value
+    for (const auto& name : netlib_names) {
 
-        // Build full path
-        std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/" + name + ".mps";
-        
+        // Build full path and check if file exists
+        std::string filename = root + "data/kennington/" + name + ".mps";
         if (!std::filesystem::exists(filename)) {
             std::cerr << "SKIP: File not found: " << name << "\n";
             continue;
         }
 
-        std::cout << "\n---Solving " << name << "---\n";
+        std::cout << "\n==========Solving " << name << "==========\n";
         
         try {
-            // 1. Load LP data from MPS
-            LPdata<T> lp = load_mps_lp<T>(filename);
+            // 1. Solve using HiGHS
+            Highs h;
+            h.setOptionValue("output_flag", false);
+            h.readModel(filename);
+            h.run();
+            double ref_obj_val = h.getObjectiveValue();
 
-            // 2. Convert to PD-PMM structure
+            // 2. Extract problem data from the mps file
+            const HighsLp& lp = h.getLp();
             PDPMMdata<T> pd = lp_to_pdpmm<T>(lp);
 
             // 3. Construct the problem and solver
@@ -178,33 +189,47 @@ int main() {
             SSN_PMM<T> solver(prob);
 
             // 4. Solve the LP
+            auto t0 = std::chrono::steady_clock::now();
             Solution<T> sol = solver.solve();
+            auto t1 = std::chrono::steady_clock::now();
+            double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
+            std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
+
+            int opt_status = sol.opt;
             T obj_val = sol.obj_val;
-            
+            int PMM_iter = sol.PMM_iter;
+            int SSN_iter = sol.SSN_iter;
+            T PMM_tol_achieved = sol.PMM_tol_achieved;
+            T SSN_tol_achieved = sol.SSN_tol_achieved;
+
             // 5. Compare
             T abs_err = std::abs(obj_val - ref_obj_val);
-            bool agree = abs_err <= 1e-4;
-            if (agree) std::cout << "CORRECT!\n";
-            else std::cout << "Incorrect. Absolute error = " << abs_err << "\n";
+            T rel_err = abs_err / std::abs(ref_obj_val);
+            bool abs_agree = abs_err <= 1e-4;
+            bool rel_agree = rel_err <= 1e-4;
+            if (rel_agree) std::cout << "\nCORRECT! Asolute error = " << abs_err << ", relative error = " << rel_err << "\n";
+            else std::cout << "\nIncorrect. Absolute error = " << abs_err << ", relative error = " << rel_err << "\n";
 
             // 6. Store result
-            results.push_back(NetlibTestResult{name, agree, abs_err});
+            NetlibTestResult result = {
+                name, abs_agree, abs_err, rel_agree, rel_err,
+                opt_status, obj_val, PMM_iter, SSN_iter,
+                PMM_tol_achieved, SSN_tol_achieved,
+                solving_time_sec
+            };
+            append_csv_result(csv_path, result);
 
         } catch (const std::exception& e) {
             std::cerr << "ERROR solving " << name << ": " << e.what() << "\n"; 
-            results.push_back(NetlibTestResult{name, false, 1e100});
+            NetlibTestResult result = {
+                name, false, -1.0, false, -1.0,
+                -1, -1.0, -1, -1,
+                -1.0, -1.0,
+                -1.0
+            };
+            append_csv_result(csv_path, result);
         }
     }
 
-    // Write CSV file
-    std::ofstream csv("netlib_results.csv");
-    csv << "name, correct?, abs_err\n";
-    for (const auto& r : results) {
-        csv << r.name << ", " << (r.agree ? "1" : "0") << ", " << r.abs_err << "\n";
-    }
-    csv.close();
-    std::cout << "\nResults written to netlib_results.csv\n";
-
     return 0;
 }
-*/

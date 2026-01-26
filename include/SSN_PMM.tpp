@@ -17,7 +17,7 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
 
     if (Q.nonZeros() == 0) {
         Q_info = QInfo::Zero;
-        std::cout << "QInfo: Zero matrix.\n";
+        // std::cout << "QInfo: Zero matrix.\n";
         return;
     }
 
@@ -42,13 +42,13 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
         }
     }
 
-    if (Q_info == QInfo::Zero) {
-        std::cout << "QInfo: Zero matrix.\n";
-    } else if (Q_info == QInfo::Diagonal) {
-        std::cout << "QInfo: Diagonal matrix.\n";
-    } else {
-        std::cout << "QInfo: General SPD matrix.\n";
-    }
+    // if (Q_info == QInfo::Zero) {
+    //     std::cout << "QInfo: Zero matrix.\n";
+    // } else if (Q_info == QInfo::Diagonal) {
+    //     std::cout << "QInfo: Diagonal matrix.\n";
+    // } else {
+    //     std::cout << "QInfo: General SPD matrix.\n";
+    // }
 
 }
 
@@ -146,12 +146,12 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
     // PMM parameters
     mu = 1e0; // (5e1)
     rho = 1e0; // (1e2)
-    if (problem.tol == 0.0) tol = 1e-6;
+    if (problem.tol == 0.0) tol = 1e-4;
     if (problem.max_iter == 0) max_iter = 1e2;
 
     // SSN parameters
     SSN_max_iter = 2000;
-    SSN_max_in_iter = 30;
+    SSN_max_in_iter = 150;
     SSN_tol = tol * 1e2;
     reg_limit = 1e6;
 
@@ -410,13 +410,34 @@ void SSN_PMM<T>::update_PMM_parameters(const T res_p, const T res_d, const T new
     if (cond_p || cond_d){
         mu = std::min(reg_limit, 1.2*mu);
         rho = std::min(1e2*reg_limit, 1.4*rho);
-        std::cout << "Aggressive update of PMM parameters.\n";
+        // std::cout << "Aggressive update of PMM parameters.\n";
     } else {
         mu = std::min(reg_limit, 1.05*mu);
         rho = std::min(1e2*reg_limit, 1.05*rho);
-        std::cout << "Mild update of PMM parameters.\n";
+        // std::cout << "Mild update of PMM parameters.\n";
     };
 
+}
+
+template <typename T>
+void SSN_PMM<T>::update_PMM_parameters(const Vec res_norms, const Vec new_res_norms) {
+    T max_res = res_norms.maxCoeff();
+    T new_max_res = new_res_norms.maxCoeff();
+    T min_res = res_norms.minCoeff();
+    T new_min_res = new_res_norms.minCoeff();
+
+    bool cond_max = 0.95 * max_res > new_max_res;
+    bool cond_min = 0.60 * min_res > new_min_res;
+
+    if (cond_max && cond_min){
+        mu = std::min(reg_limit, 1.2*mu);
+        rho = std::min(1e2*reg_limit, 1.4*rho);
+        std::cout << "Aggressive update of PMM parameters.\n";
+    } else {
+        mu = std::min(reg_limit, 1.02*mu);
+        rho = std::min(1e2*reg_limit, 1.04*rho);
+        std::cout << "Mild update of PMM parameters.\n";
+    };
 }
 
 template <typename T>
@@ -480,8 +501,8 @@ Solution<T> SSN_PMM<T>::solve() {
         }
 
         // PRINTING ALL RESIDUALS
-        std::cout << "  res_p = " << res_p << "\n  res_d = " << res_d
-                  << "\n  compl_x = " << res_norms(2) << "\n  compl_w = " << res_norms(3) << "\n";
+        // std::cout << "  res_p = " << res_p << "\n  res_d = " << res_d
+        //           << "\n  compl_x = " << res_norms(2) << "\n  compl_w = " << res_norms(3) << "\n";
 
         // Update the Newton system
         NS.x = x;
@@ -500,8 +521,8 @@ Solution<T> SSN_PMM<T>::solve() {
         
         T eps1 = std::max(1e0*max_res_vec, min_res_vec);
         T eps2 = std::max(min_res_vec, SSN_tol);
-        std::cout << "  eps_k = " << eps1 << " (outer), " << eps2 << " (inner)\n";
-        std::cout << "  mu = " << mu << ", rho = " << rho << "\n";
+        // std::cout << "  eps_k = " << eps1 << " (outer), " << eps2 << " (inner)\n";
+        // std::cout << "  mu = " << mu << ", rho = " << rho << "\n";
 
         // Call semismooth Newton method to update x and y2
         while (SSN_tol_achieved > eps1) {
@@ -516,8 +537,11 @@ Solution<T> SSN_PMM<T>::solve() {
             SSN_tol_achieved = NS_solution.SSN_tol_achieved;
             SSN_iter += NS_solution.SSN_in_iter;
             if (SSN_iter >= SSN_max_iter) break;
+            // if (SSN_tol_achieved > 1e6) {
+            //     throw std::runtime_error("SSN diverging: ||grad_L|| too large.");
+            // }
         }
-        std::cout << "SSN iter: " << SSN_iter << "\n    tol = " << SSN_tol_achieved << "\n";
+        // std::cout << "SSN iter: " << SSN_iter << "\n    tol = " << SSN_tol_achieved << "\n";
         
         // Update multipliers
         y1 -= mu * (A * x - b);
@@ -538,12 +562,13 @@ Solution<T> SSN_PMM<T>::solve() {
 
         // Update penalty parameters
         update_PMM_parameters(res_p, res_d, new_res_p, new_res_d);
+        // update_PMM_parameters(res_norms, new_res_norms);
     
         // TIMER FOR PMM ITERATION
         auto t1_pmm = std::chrono::steady_clock::now();
         double timer_pmm = time_diff_ms(t0_pmm, t1_pmm);
-        std::cout << "PMM iteration took " << timer_pmm << " ms.\n";
-        std::cout << "=====================================================\n";
+        // std::cout << "PMM iteration took " << timer_pmm << " ms.\n";
+        // std::cout << "=====================================================\n";
 
     }
 

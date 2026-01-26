@@ -123,11 +123,12 @@ public:
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
     }
-    
+
     Vec compute_residual_norms();
     Vec compute_residual_norms_inf();
     T objective_value();
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
+    void update_PMM_parameters(const Vec res_norms, const Vec new_res_norms);
     Solution<T> solve();
 };
 
