@@ -42,6 +42,7 @@ public:
         std::cout << "\n";
         std::cout << "Solution Summary:" << std::endl;
         std::cout << "Termination status (opt): " << opt << std::endl;
+        std::cout << "Problem dimensions: n = " << x.size() << ", m = " << y1.size() << ", l = " << y2.size() << std::endl;
         std::cout << "Optimal objective value (obj_val): " << obj_val << std::endl;
         // std::cout << "Optimal solution (x): (" << x.transpose() << ")\n";
         std::cout << "Number of PMM iterations (PMM_iter): " << PMM_iter << std::endl;

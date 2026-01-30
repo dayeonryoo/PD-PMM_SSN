@@ -7,6 +7,38 @@
 #include <Eigen/Sparse>
 #include <Eigen/SparseCholesky>
 
+template <typename T>
+typename SSN<T>::Vec SSN<T>::ruiz_descale_x(const Vec& x) {
+    using Vec = typename SSN<T>::Vec;
+    if (Q_info == QInfo::General) {
+        x_descaled = x;
+        x_descaled.head(n).array() *= D2_diag.array();
+    } else {
+        x_descaled = x.cwiseProduct(D2_diag);
+    }
+    return x_descaled;
+}
+
+template <typename T>
+T SSN<T>::get_obj_val(const Vec& x) {
+    T obj_val = c.dot(x);
+    if (Q_info != QInfo::Zero) {
+        obj_val += T(0.5) * Q_diag.cwiseProduct(x).dot(x);
+    }
+    return obj_val;
+}
+
+template <typename T>
+typename SSN<T>::Vec SSN<T>::get_x_in_original_dim(const Vec& x) {
+    using Vec = typename SSN<T>::Vec;
+    Vec x_sol;
+    if (Q_info == QInfo::General) {
+        x_sol = x.head(n);
+    } else {
+        x_sol = x;
+    }
+    return x_sol;
+}
 
 template <typename T>
 T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
@@ -16,7 +48,7 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
 
     // Evaluate dist_W(B*x_new - (y2 - y2_new/2)/mu)
-    Vec dist_W = compute_dist_box(B * x_new + (0.5 * y2_new - y2) / mu, lw, uw);
+    Vec dist_W = compute_dist_box(B * x_new + (y2_new / 2 - y2) / mu, lw, uw);
 
     // Evaluate primal residual A x_new - b
     Vec res_p = A * x_new - b;
@@ -254,9 +286,8 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
 
         if (L_new <= L + beta * alpha * grad_desc) break;
 
-        m += 200;
+        m += 50;
         alpha = pow(delta, m);
-
         if (alpha < 1e-7) break; // Lower bound on alpha 
     }
 
@@ -301,28 +332,26 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // Compute gradient of Lagrangian at current (x, y2)
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
         result.SSN_tol_achieved = grad_L.norm();
+        // Ruiz-descale x and shrink x to the original dimension (n, m, l) for printing
+        x_descaled = ruiz_descale_x(result.x);
+        x_sol = get_x_in_original_dim(x_descaled);
 
-        if (result.SSN_in_iter == 0 || result.SSN_in_iter % 5 == 0 || result.SSN_in_iter % 10 == 0) {
-            // std::cout << "SSN iter " << result.SSN_in_iter << ": ||grad_L|| = " << result.SSN_tol_achieved << "\n";
-        }
-
-        if (result.SSN_tol_achieved > 1e6) {
-            // std::cout << "(!!!) SSN iter " << result.SSN_in_iter << ": ||grad_L|| = " << result.SSN_tol_achieved << "\n";
-            // throw std::runtime_error("SSN diverging: ||grad_L|| too large.");
-        }
+        // Compute objective value for printing
+        result.obj_val = get_obj_val(result.x);
 
         // Check termination criterion
         if (result.SSN_tol_achieved < eps) {
             result.SSN_opt = 0; // Optimality achieved
-            printer(result.SSN_in_iter, result.SSN_opt, result.SSN_opt, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+            printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
             break;
         }
-        result.SSN_in_iter++;
 
         // Print current iteration info
-        printer(result.SSN_in_iter, result.SSN_opt, result.SSN_opt, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+        printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
 
-        // TIMER FOR CHOL DECOMP PREP
+        result.SSN_in_iter++;
+
+        // ========== Preporation for Cholesky decomposition ==========
         auto t0_chol_prep = std::chrono::steady_clock::now();
 
         // Compute Clarke subgradient of Proj_K(z/mu + x_new)
@@ -343,7 +372,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         int n_active_W = active_W.count();
         int n_inactive_W = l - n_active_W;
 
-        // Build of Clarke subgradient matrix [-H G^T; G D]:
+        // Build Clarke subgradient matrix [-H G^T; G D]:
 
         // H = Q_diag + mu(I_N - P_K) + I_N / rho
         Vec H_diag;
@@ -371,7 +400,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         split_by_mask(dist_W_v, active_W, dist_W_v_active_W, dist_W_v_inactive_W);
 
         Vec dy2_inactive_W = -2 * mu * dist_W_v_inactive_W - y2_inactive_W;
-
+        
         // Compute the RHS vector
         Vec r1;
         if (Q_info == QInfo::Zero) {
@@ -398,15 +427,14 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         }
         Schur.makeCompressed(); // G * H_inv * G^T + D
 
-        // Perform Cholesky factorization on Schur complement to solve
-        // Schur * dy_ = G * H_inv * r1 + r2, where dy_ = [dy1; dy2_active].
+        // Solve: Schur * dy_ = G * H_inv * r1 + r2, where dy_ = [dy1; dy2_active].
         Vec H_inv_r1 = H_diag_inv.cwiseProduct(r1);
         Vec rhs = G * H_inv_r1 + r2;
-
         auto t1_chol_prep = std::chrono::steady_clock::now();
         double timer_chol_prep = time_diff_ms(t0_chol_prep, t1_chol_prep);
         // std::cout << "  Prep for Cholesky decomposition took " << timer_chol_prep << " ms.\n";
 
+        // ========== Perform Cholesky decomposition ==========
         auto t0_chol = std::chrono::steady_clock::now(); // TIMER FOR CHOL DECOMP
         Vec dy_ = solve_via_chol(Schur, rhs);
         auto t1_chol = std::chrono::steady_clock::now();
@@ -418,7 +446,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dy2_active_W = dy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
-        // TIMER FOR BACKTRACKING LINESEARCH
+        // ========== Backtracking linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
 
         // Backtracking linesearch to find a Newton step size alpha
@@ -434,7 +462,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Backtracking linesearch took " << timer_alpha << " ms.\n";
 
-        // Update x and y2
+        // ========== Update x and y2 ==========
         result.x += alpha * dx;
         result.y2 += alpha * dy2;
 
@@ -445,8 +473,14 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     }
 
     if (result.SSN_opt != 0) {
-        result.SSN_opt = 1; // Maximum number of SSN iterations reached without convergence
-        printer(result.SSN_in_iter, result.SSN_opt, result.SSN_opt, result.x, y1, result.y2, z, result.SSN_tol_achieved);
+        result.SSN_opt = 3; // Maximum number of SSN inner iterations reached without convergence
+
+        // Modify x for printing. (This modification is not saved as SSN result.)
+        x_descaled = ruiz_descale_x(result.x);
+        x_sol = get_x_in_original_dim(x_descaled);
+        result.obj_val = get_obj_val(result.x);
+    
+        printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
     }
 
     return result;

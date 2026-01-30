@@ -13,6 +13,7 @@ struct SSN_result {
     int SSN_in_iter;
     T SSN_tol_achieved;
     int SSN_opt;
+    T obj_val;
 };
 
 template <typename T>
@@ -27,9 +28,11 @@ public:
     QInfo Q_info;
     Vec Q_diag;
     SpMat L, A, B;
+    Vec D1_diag, D2_diag;
     Vec c, b, lx, ux, lw, uw;
-    int N, M, l;
+    int n, m, N, M, l;
     Vec x, y1, y2, z;
+    Vec y1_sol, z_sol;
     int SSN_max_in_iter;
     T mu, rho, SSN_tol;
     PrintWhen SSN_print_when;
@@ -37,8 +40,10 @@ public:
     PrintLabel SSN_print_label = PrintLabel::SSN;
 
     // Useful vectors and matrices
+    Vec x_descaled, x_sol;
     Vec ones_N, ones_M, ones_l;
     SpMat A_tr, B_tr, L_tr;
+    T obj_val;
 
     // Outputs
     int SSN_in_iter;
@@ -51,21 +56,23 @@ public:
     T eta = 0.1 * SSN_tol;
     T gamma = 0.1;
     
-    SSN() {}
+    SSN() = default;
 
     SSN(const QInfo& Q_info_, const Vec& Q_diag_, SpMat& L_,
         const SpMat& A_, const SpMat& B_, const SpMat& A_tr_, const SpMat& B_tr_,
-        const Vec& c_, const Vec& b_,
+        const Vec& c_, const Vec& b_, const Vec& D1_diag_, const Vec& D2_diag_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
         const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-        T mu_, T rho_, int N_, int M_, int l_,
+        const Vec& y1_sol_, const Vec& z_sol_,
+        T mu_, T rho_, int n_, int m_, int N_, int M_, int l_,
         T SSN_tol_, int SSN_max_in_iter_,
         PrintWhen SSN_print_when_, PrintWhat SSN_print_what_)
-    : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), A(A_), B(B_),
-      A_tr(A_tr_), B_tr(B_tr_), c(c_), b(b_),
+    : Q_info(Q_info_), Q_diag(Q_diag_), L(L_),
+      A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
+      c(c_), b(b_), D1_diag(D1_diag_), D2_diag(D2_diag_),
       lx(lx_), ux(ux_), lw(lw_), uw(uw_),
-      x(x_), y1(y1_), y2(y2_), z(z_),
-      mu(mu_), rho(rho_), N(N_), M(M_), l(l_),
+      x(x_), y1(y1_), y2(y2_), z(z_), y1_sol(y1_sol_), z_sol(z_sol_),
+      mu(mu_), rho(rho_), n(n_), m(m_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
       SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_)
     {
@@ -75,12 +82,27 @@ public:
         L_tr = L.transpose();
     }
 
+    void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
+                           const Vec& y1_sol_, const Vec& z_sol_, T mu_, T rho_) {
+        x = x_;
+        y1 = y1_;
+        y2 = y2_;
+        z = z_;
+        y1_sol = y1_sol_;
+        z_sol = z_sol_;
+        mu = mu_;
+        rho = rho_;
+    }
+
     static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
         return u.cwiseMax(lower).cwiseMin(upper);
     }
     static inline Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
         return (v - proj(v, lower, upper));
     }
+    Vec ruiz_descale_x(const Vec& x);
+    T get_obj_val(const Vec& x);
+    Vec get_x_in_original_dim(const Vec& x);
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper);

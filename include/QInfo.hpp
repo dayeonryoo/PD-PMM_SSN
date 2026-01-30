@@ -5,3 +5,4 @@ enum class QInfo {
     Diagonal, // Q = diag(q)
     General   // general SPD, use LLT
 };
+

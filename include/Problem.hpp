@@ -22,10 +22,12 @@ public:
     SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux, lw, uw;
-    T tol;
-    int max_iter;
-    PrintWhen PMM_print_when, SSN_print_when;
-    PrintWhat PMM_print_what, SSN_print_what;
+    T tol = 1e-4;
+    int max_iter = 1e2;
+    PrintWhen PMM_print_when = PrintWhen::END_ONLY;
+    PrintWhen SSN_print_when = PrintWhen::END_ONLY;
+    PrintWhat PMM_print_what = PrintWhat::SUMMARY;
+    PrintWhat SSN_print_what = PrintWhat::SUMMARY;
 
     Problem(){}
     Problem(const SpMat& Q_, const SpMat& A_, const SpMat& B_,

@@ -2,6 +2,7 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
+
 #include "Problem.hpp"
 #include "Solution.hpp"
 #include "SSN.hpp"
@@ -67,10 +68,11 @@ public:
     SpMat L;
     SpMat A_tr, B_tr;
 
-    SpMat A_ruiz;
-    Vec b_ruiz, lx_ruiz, ux_ruiz;
+    SpMat Q_ruiz, A_ruiz, B_ruiz;
+    Vec problem_Q_diag, Q_diag_ruiz, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz;
     Vec D1_diag, D2_diag;
-    Vec x_descaled, y1_descaled;
+    Vec x_descaled, y1_descaled, z_descaled;
+    Vec x_sol, y1_sol, z_sol;
 
     // PMM parameters
     T mu, rho;
@@ -101,20 +103,19 @@ public:
       SSN_print_when(problem.SSN_print_when), SSN_print_what(problem.SSN_print_what)
     {
         get_Q_info(problem.Q);
-        determine_dimensions(problem);
+        check_dimensions(problem);
+        ruiz_scaling(problem.Q, problem_Q_diag, problem.A, problem.B, problem.c, problem.b, problem.lx, problem.ux);
         set_default(problem);
-        check_dimensions();
         check_infeasibility();
-
         A_tr = A.transpose();
         B_tr = B.transpose();
     }
 
-    void determine_dimensions(const Problem<T>& problem);
     void get_Q_info(const SpMat& Q);
+    void check_dimensions(const Problem<T>& problem);
+    void ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A, const SpMat& B, const Vec& c, const Vec& b, const Vec& lx, const Vec& ux);
     void set_L_from_LLT(const SpMat& Q);
     void set_default(const Problem<T>& problem);
-    void check_dimensions();
     void check_infeasibility();
 
     static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
@@ -126,7 +127,9 @@ public:
 
     Vec compute_residual_norms();
     Vec compute_residual_norms_inf();
-    T objective_value();
+    void ruiz_descale(const Vec& x, const Vec& y1, const Vec& z);
+    T objective_value(const Vec& x);
+    void get_sol_in_original_dim(const Vec& x, const Vec& y1, const Vec& z);
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
     void update_PMM_parameters(const Vec res_norms, const Vec new_res_norms);
     Solution<T> solve();

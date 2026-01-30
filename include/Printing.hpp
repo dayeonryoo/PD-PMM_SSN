@@ -123,7 +123,9 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                 case PrintLabel::SSN:
                     if (opt == 0) {
                         std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
-                    } else if (opt == 1) {
+                    } else if (opt == 3) {
+                        std::cout << "Optimal solution not found within the maximum number of SSN inner iterations.\n";
+                    } else if (opt == 2) {
                         std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
                     }
                     break;

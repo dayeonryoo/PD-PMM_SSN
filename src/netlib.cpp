@@ -14,7 +14,6 @@
 #include "Printing.hpp"
 
 #include "Highs.h"
-#include "load_mps_lp.hpp"
 #include "lp_to_pdpmm.hpp"
 
 using T = double;
@@ -59,10 +58,11 @@ void append_csv_result(const std::string& path, const NetlibTestResult& r) {
         << r.solving_time_sec << "\n";
     csv.close();
 }
+
 /*
 int main() {
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/bnl2.mps";
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/25FV47.mps";
     
     // Solving via HiGHS
     Highs h;
@@ -77,24 +77,18 @@ int main() {
     const HighsLp& lp = h.getLp();
     PDPMMdata<T> pd = lp_to_pdpmm<T>(lp);
 
-    std::cout << "Problem dimensions:\n";
-    std::cout << "  Number of variables (n): " << pd.c.size() << "\n";
-    std::cout << "  Number of equality constraints (m): " << pd.b.size() << "\n";
-    std::cout << "  Number of inequality constraints (l): " << pd.lw.size() << "\n";
-
     // Construct the problem and solver
     T tol = 1e-4;
     int max_iter = 1e2;
     PrintWhen PMM_print_when = PrintWhen::ALWAYS;
     PrintWhat PMM_print_what = PrintWhat::MINIMAL;
     PrintWhen SSN_print_when = PrintWhen::NEVER;
-    PrintWhat SSN_print_what = PrintWhat::NONE;
+    PrintWhat SSN_print_what = PrintWhat::MINIMAL;
 
     Problem<T> prob(pd.Q, pd.A, pd.B, pd.c, pd.b, pd.lx, pd.ux, pd.lw, pd.uw,
                     tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
     SSN_PMM<T> solver(prob);
     
-
     // Solve the LP using PD-PMM_SSN solver
     Solution<T> sol = solver.solve();
     sol.print_summary();
@@ -108,41 +102,63 @@ int main() {
     if (rel_agree) std::cout << "\nCORRECT! Asolute error = " << abs_err << ", relative error = " << rel_err << "\n";
     else std::cout << "\nIncorrect. Absolute error = " << abs_err << ", relative error = " << rel_err << "\n";
 
-    std::cout << "\nChecking feasibility with reference solution x_h from HiGHS:\n";
-    const HighsSolution& h_sol = h.getSolution();
-    Vec x_h(pd.c.size());
-    for (int i = 0; i < pd.c.size(); ++i) {
-        x_h[i] = h_sol.col_value[i];
-    }
-    std::cout << "||Ax_h - b|| = " << (pd.A * x_h - pd.b).norm() << "\n";
-    std::cout << "Elements of x outside bounds:\n";
-    for (int i = 0; i < pd.c.size(); ++i) {
-        if (x_h[i] < pd.lx[i] - 1e-8 || x_h[i] > pd.ux[i] + 1e-8) {
-            std::cout << "Variable " << i << " out of bounds: x_h = " << x_h[i]
-                      << ", [" << pd.lx[i] << ", " << pd.ux[i] << "]\n";
+    std::cout << std::setprecision(5) << std::scientific;
+
+    // std::cout << "\nChecking feasibility with reference solution x_h from HiGHS:\n";
+    // const HighsSolution& h_sol = h.getSolution();
+    // Vec x_h(pd.c.size());
+    // for (int i = 0; i < pd.c.size(); ++i) {
+    //     x_h[i] = h_sol.col_value[i];
+    // }
+    // std::cout << "  ||Ax_h - b||_inf = " << (pd.A * x_h - pd.b).cwiseAbs().maxCoeff() << "\n";
+    // std::cout << "  Elements of x_h outside bounds:\n";
+    // for (int i = 0; i < pd.c.size(); ++i) {
+    //     if (x_h[i] < pd.lx[i] - tol || x_h[i] > pd.ux[i] + tol) {
+    //         std::cout << "  Variable " << i << " out of bounds: x_h = " << x_h[i]
+    //                   << ", [" << pd.lx[i] << ", " << pd.ux[i] << "]\n";
+    //     }
+    // }
+    // std::cout << "  Elements of Bx_h outside bounds:\n";
+    // for (int i = 0; i < pd.lw.size(); ++i) {
+    //     T Bx_i = (pd.B * x_h)[i];
+    //     if (Bx_i < pd.lw[i] - tol || Bx_i > pd.uw[i] + tol) {
+    //         std::cout << "  Variable " << i << " out of bounds: Bx_h = " << Bx_i
+    //                   << ", [" << pd.lw[i] << ", " << pd.uw[i] << "]\n";
+    //     }
+    // }
+
+    std::cout << "\nChecking feasibility of solution x from PMM_SSN solver:\n";
+    std::cout << "  ||Ax - b||_inf = ";
+    if (prob.A.rows() == 0) std::cout << "0 (m = 0)\n";
+    else std::cout << (prob.A * sol.x - prob.b).cwiseAbs().maxCoeff() << "\n";
+
+    std::cout << "\n  Elements of x outside bounds:\n";
+    for (int i = 0; i < prob.c.size(); ++i) {
+        if (sol.x[i] < prob.lx[i] - tol || sol.x[i] > prob.ux[i] + tol) {
+            std::cout << "      Variable " << i << " out of bounds: x = " << sol.x[i]
+                      << ", [" << prob.lx[i] << ", " << prob.ux[i] << "]\n";
         }
     }
-    std::cout << "Elements of Bx_h outside bounds:\n";
-    for (int i = 0; i < pd.lw.size(); ++i) {
-        if ((pd.B * x_h)[i] < pd.lw[i] - 1e-8 || (pd.B * x_h)[i] > pd.uw[i] + 1e-8) {
-            std::cout << "Variable " << i << " out of bounds: Bx_h = " << (pd.B * x_h)[i]
-                      << ", [" << pd.lw[i] << ", " << pd.uw[i] << "]\n";
+    std::cout << "\n  Elements of Bx outside bounds:\n";
+    for (int i = 0; i < prob.lw.size(); ++i) {
+        T Bx_i = (prob.B * sol.x)[i];
+        if (Bx_i < prob.lw[i] - tol || Bx_i > prob.uw[i] + tol) {
+            std::cout << "      Variable " << i << " out of bounds: Bx = " << Bx_i
+                      << ", [" << prob.lw[i] << ", " << prob.uw[i] << "]\n";
         }
     }
-    std::cout << "===============================================\n";
 
     return 0;
 }
 */
 
+
 int main() {
 
     // Filenames of Netlib test problems (without .mps extension)
-    std::vector<std::string> netlib_names = {"CRE-A","CRE-C","KEN-07","PDS-02"};
-    // std::vector<std::string> netlib_names = {"25FV47","80BAU3B","ADLITTLE","AFIRO","AGG","AGG2","AGG3","BANDM","BEACONFD","BLEND","BNL1","BNL2","BOEING1","BOEING2","BORE3D","BRANDY","CAPRI","CYCLE","CZPROB","D2Q06C","D6CUBE","DEGEN2","DEGEN3","DFL001",
-    //                                         "E226","ETAMACRO","FFFFF800","FINNIS","FIT1D","FIT1P","FIT2D","FIT2P","FORPLAN","GANGES","GFRD-PNC","GREENBEA","GREENBEB","GROW15","GROW22","GROW7","ISRAEL","KB2","LOTFI","MAROS","MAROS-R7","MODSZK1","NESM",
-    //                                         "PEROLD","PILOT","PILOT.JA","PILOT.WE","PILOT4","PILOT87","PILOTNOV","QAP8","QAP12","QAP15","RECIPE","SC105","SC205","SC50A","SC50B","SCAGR25","SCAGR7","SCFXM1","SCFXM2","SCFXM3","SCORPION","SCRS8","SCSD1","SCSD6","SCSD8","SCTAP1","SCTAP2","SCTAP3",
-    //                                         "SEBA","SHARE1B","SHARE2B","SHELL","SHIP04L","SHIP04S","SHIP08L","SHIP08S","SHIP12L","SHIP12S","SIERRA","STAIR","STANDATA","STANDGUB","STANDMPS","STOCFOR1","STOCFOR2","STOCFOR3","TRUSS","TUFF","VTP.BASE","WOOD1P","WOODW"};
+    std::vector<std::string> netlib_names = {"E226","ETAMACRO","FFFFF800","FINNIS","FIT1D","FIT1P","FIT2D","FORPLAN","GANGES","GFRD-PNC","GREENBEA","GREENBEB","GROW15","GROW22","GROW7","ISRAEL","KB2","LOTFI","MAROS","MAROS-R7","MODSZK1","NESM",
+                                            "PEROLD","PILOT","PILOT.JA","PILOT.WE","PILOT4","PILOT87","PILOTNOV","QAP8","QAP12","QAP15","RECIPE","SC105","SC205","SC50A","SC50B","SCAGR25","SCAGR7","SCFXM1","SCFXM2","SCFXM3","SCORPION","SCRS8","SCSD1","SCSD6","SCSD8","SCTAP1","SCTAP2","SCTAP3",
+                                            "SEBA","SHARE1B","SHARE2B","SHELL","SHIP04L","SHIP04S","SHIP08L","SHIP08S","SHIP12L","SHIP12S","SIERRA","STAIR","STANDATA","STANDGUB","STANDMPS","STOCFOR1","STOCFOR2","STOCFOR3","TRUSS","TUFF","VTP.BASE","WOOD1P","WOODW"};
     // std::vector<std::string> kennington_names = {"CRE-A","CRE-B","CRE-C","CRE-D","KEN-07","KEN-11","KEN-13","KEN-18","OSA-07","OSA-14","OSA-30","OSA-60","PDS-02","PDS-06","PDS-10","PDS-20"};
 
     // Root
@@ -157,13 +173,13 @@ int main() {
     PrintWhat SSN_print_what = PrintWhat::NONE;
 
     // Solver result
-    std::string csv_path = root + "results/netlib_test_results.csv";
+    std::string csv_path = root + "results/netlib_test_w_ruiz.csv";
     write_csv_header(csv_path);
 
     for (const auto& name : netlib_names) {
 
         // Build full path and check if file exists
-        std::string filename = root + "data/kennington/" + name + ".mps";
+        std::string filename = root + "data/netlib/" + name + ".mps";
         if (!std::filesystem::exists(filename)) {
             std::cerr << "SKIP: File not found: " << name << "\n";
             continue;
@@ -233,3 +249,4 @@ int main() {
 
     return 0;
 }
+
