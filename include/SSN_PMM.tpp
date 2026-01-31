@@ -281,7 +281,7 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
 
     // SSN parameters
     SSN_max_iter = 1000;
-    SSN_max_in_iter = 8;
+    SSN_max_in_iter = 15;
     SSN_tol = tol * 1e0;
     reg_limit = 1e6;
 
