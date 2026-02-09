@@ -17,7 +17,7 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
     if (Q.nonZeros() == 0) {
-        Q_info = QInfo::Zero;
+        Q_info = 0;
         // std::cout << "QInfo: Zero matrix.\n";
         return;
     }
@@ -31,24 +31,24 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
 
     // Is Q = 0?
     if (Q.rows() == 0) {
-        Q_info = QInfo::Zero;
+        Q_info = 0;
     } else { // Is Q diagonal or not?
-        Q_info = QInfo::Diagonal;
+        Q_info = 1;
         for (int k = 0; k < Q.outerSize(); ++k) {
             for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
                 if (it.row() != it.col()) {
-                    Q_info = QInfo::General;
+                    Q_info = 2;
                 }
             }
         }
     }
 
-    if (Q_info == QInfo::Diagonal) {
+    if (Q_info == 1) {
         problem_Q_diag = Q.diagonal();
         n = problem_Q_diag.size();
         // std::cout << "Q_info = diagonal\n";
     }
-    if (Q_info == QInfo::General) {
+    if (Q_info == 2) {
         n = Q.rows();
         // std::cout << "Q_info = general\n";
     }
@@ -58,7 +58,7 @@ template <typename T>
 void SSN_PMM<T>::check_dimensions(const Problem<T>& problem) {
 
     // Determine n (If Q is nonzero, then n is already determined by get_Q_info().)
-    if (Q_info == QInfo::Zero) {
+    if (Q_info == 0) {
         if (problem.c.size() != 0) {
             n = problem.c.size();
         } else if (problem.A.cols() != 0) {
@@ -136,7 +136,7 @@ void SSN_PMM<T>::ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A,
     b_ruiz = b;
     lx_ruiz = lx;
     ux_ruiz = ux;
-    if (Q_info == QInfo::General) {
+    if (Q_info == 2) {
         Q_ruiz = Q;
     } else {
         Q_diag_ruiz = Q_diag;
@@ -194,7 +194,7 @@ void SSN_PMM<T>::ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A,
         }
 
         // Scale Q_ruiz if Q is nonzero: Q <- D2 Q D2
-        if (Q_info == QInfo::General) {
+        if (Q_info == 2) {
             for (int j = 0; j < n; ++j) {
                 const T col_fac = dc_inv(j);
                 for (typename SpMat::InnerIterator it(Q_ruiz, j); it; ++it) {
@@ -202,7 +202,7 @@ void SSN_PMM<T>::ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A,
                     it.valueRef() *= dc_inv(i) * col_fac; // Q_ij *= d_i * d_j
                 }
             }
-        } else if (Q_info == QInfo::Diagonal) {
+        } else if (Q_info == 1) {
             Q_diag_ruiz.array() *= dc_inv.array().square();
         }
 
@@ -265,6 +265,7 @@ void SSN_PMM<T>::set_L_from_LLT(const SpMat& Q) {
 
     SpMat L_D = ldlt.matrixL(); // lower triangular from LDL^T
     L = L_D * D_sqrt; // lower triangular from LL^T
+    L_tr = L.transpose();
     
 }
 
@@ -287,7 +288,7 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
 
     T inf = std::numeric_limits<T>::infinity();
 
-    if (Q_info == QInfo::General) {
+    if (Q_info == 2) {
         N = 2 * n;
         M = m + n;
 
@@ -445,7 +446,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms() {
 
     // Dual residual norm
     T res_d;
-    if (Q_info == QInfo::Zero) {
+    if (Q_info == 0) {
         res_d = (c - A_tr * y1 - B_tr * y2 + z).norm() / (1 + c.norm());
     } else {
         res_d = (c + Q_diag.cwiseProduct(x) - A_tr * y1 - B_tr * y2 + z).norm() / (1 + c.norm());
@@ -476,7 +477,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
 
     // Dual residual norm
     T res_d;
-    if (Q_info == QInfo::Zero) {
+    if (Q_info == 0) {
         res_d = inf_norm(c - A_tr * y1 - B_tr * y2 + z) / (1 + inf_norm(c));
     } else {
         res_d = inf_norm(c + Q_diag.cwiseProduct(x) - A_tr * y1 - B_tr * y2 + z) / (1 + inf_norm(c));
@@ -500,7 +501,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
 
 template <typename T>
 void SSN_PMM<T>::ruiz_descale(const Vec& x, const Vec& y1, const Vec& z) {
-    if (Q_info == QInfo::General) {
+    if (Q_info == 2) {
         x_descaled = x;
         x_descaled.head(n).array() *= D2_diag.array();
         y1_descaled = y1;
@@ -517,7 +518,7 @@ void SSN_PMM<T>::ruiz_descale(const Vec& x, const Vec& y1, const Vec& z) {
 template <typename T>
 T SSN_PMM<T>::objective_value(const Vec& x) {
     T obj_val;
-    if (Q_info == QInfo::Zero) {
+    if (Q_info == 0) {
         obj_val = c.dot(x);
     } else {
         obj_val = c.dot(x) + T(0.5) * Q_diag.cwiseProduct(x).dot(x);
@@ -527,7 +528,7 @@ T SSN_PMM<T>::objective_value(const Vec& x) {
 
 template <typename T>
 void SSN_PMM<T>::get_sol_in_original_dim(const Vec& x, const Vec& y1, const Vec& z) {
-    if (Q_info == QInfo::General) {
+    if (Q_info == 2) {
         x_sol = x.head(n);
         y1_sol = y1.head(m);
         z_sol = z.head(n);
@@ -589,8 +590,12 @@ Solution<T> SSN_PMM<T>::solve() {
     PMM_iter = 0;
     SSN_iter = 0;
 
-    // Newton system (empty)
-    SSN<T> NS;
+    // Build the Newton system
+    SSN<T> NS(Q_info, Q_diag, L, L_tr,
+            A, B, A_tr, B_tr, c, b, D1_diag, D2_diag,
+            lx, ux, lw, uw, n, m, N, M, l,
+            SSN_tol, SSN_max_in_iter,
+            SSN_print_when, SSN_print_what);
 
     // Initialize printing functions
     auto printer = make_print_function<T, Vec>(PMM_print_label, PMM_print_when, PMM_print_what, max_iter);
@@ -644,25 +649,15 @@ Solution<T> SSN_PMM<T>::solve() {
         // std::cout << "  res_p = " << res_p << "\n  res_d = " << res_d
         //           << "\n  compl_x = " << res_norms(2) << "\n  compl_w = " << res_norms(3) << "\n";
         
-        // Build or update the Newton system.
-        if (PMM_iter == 1) {
-            NS = SSN<T>(Q_info, Q_diag, L, A, B,
-                        A_tr, B_tr, c, b, D1_diag, D2_diag,
-                        lx, ux, lw, uw,
-                        x, y1, y2, z, y1_sol, z_sol,
-                        mu, rho, n, m, N, M, l,
-                        SSN_tol, SSN_max_in_iter,
-                        SSN_print_when, SSN_print_what);
-        } else {
-            NS.x = x;
-            NS.y1 = y1;
-            NS.y2 = y2;
-            NS.z = z;
-            NS.y1_sol = y1_sol;
-            NS.z_sol = z_sol;
-            NS.mu = mu;
-            NS.rho = rho;
-        }
+        // Update the Newton system.
+        NS.x = x;
+        NS.y1 = y1;
+        NS.y2 = y2;
+        NS.z = z;
+        NS.y1_sol = y1_sol;
+        NS.z_sol = z_sol;
+        NS.mu = mu;
+        NS.rho = rho;
 
         // Calculate adaptive SSN tolerance eps_k
         Vec res_vec(3);

@@ -10,7 +10,7 @@
 template <typename T>
 typename SSN<T>::Vec SSN<T>::ruiz_descale_x(const Vec& x) {
     using Vec = typename SSN<T>::Vec;
-    if (Q_info == QInfo::General) {
+    if (Q_info == 2) {
         x_descaled = x;
         x_descaled.head(n).array() *= D2_diag.array();
     } else {
@@ -22,7 +22,7 @@ typename SSN<T>::Vec SSN<T>::ruiz_descale_x(const Vec& x) {
 template <typename T>
 T SSN<T>::get_obj_val(const Vec& x) {
     T obj_val = c.dot(x);
-    if (Q_info != QInfo::Zero) {
+    if (Q_info != 0) {
         obj_val += T(0.5) * Q_diag.cwiseProduct(x).dot(x);
     }
     return obj_val;
@@ -32,7 +32,7 @@ template <typename T>
 typename SSN<T>::Vec SSN<T>::get_x_in_original_dim(const Vec& x) {
     using Vec = typename SSN<T>::Vec;
     Vec x_sol;
-    if (Q_info == QInfo::General) {
+    if (Q_info == 2) {
         x_sol = x.head(n);
     } else {
         x_sol = x;
@@ -55,7 +55,7 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
 
     // Compute Lagrangian
     T L;
-    if (Q_info == QInfo::Zero) {
+    if (Q_info == 0) {
         L = c.dot(x_new)
             - y1.dot(res_p) + (mu / 2) * res_p.squaredNorm()
             - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
@@ -86,7 +86,7 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
 
     // Compute gradient of Lagrangian
     Vec grad_L_x;
-    if (Q_info == QInfo::Zero) {
+    if (Q_info == 0) {
         grad_L_x = c - A_tr * y1 + mu * A_tr * res_p
                     + mu * dist_K
                     + 2 * mu * B_tr * dist_W
@@ -376,7 +376,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // H = Q_diag + mu(I_N - P_K) + I_N / rho
         Vec H_diag;
-        if (Q_info == QInfo::Zero) {
+        if (Q_info == 0) {
             H_diag = mu * (ones_N - diag_P_K) + ones_N / rho;
         } else {
             H_diag = Q_diag + mu * (ones_N - diag_P_K) + ones_N / rho;
@@ -403,7 +403,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         
         // Compute the RHS vector
         Vec r1;
-        if (Q_info == QInfo::Zero) {
+        if (Q_info == 0) {
             r1 = c + mu * dist_K_u
                  - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W
                  + (result.x - x) / rho;

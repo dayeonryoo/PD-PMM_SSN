@@ -59,10 +59,10 @@ void append_csv_result(const std::string& path, const NetlibTestResult& r) {
     csv.close();
 }
 
-/*
+
 int main() {
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/25FV47.mps";
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/AGG.mps";
     
     // Solving via HiGHS
     Highs h;
@@ -90,8 +90,12 @@ int main() {
     SSN_PMM<T> solver(prob);
     
     // Solve the LP using PD-PMM_SSN solver
+    auto t0 = std::chrono::steady_clock::now();
     Solution<T> sol = solver.solve();
+    auto t1 = std::chrono::steady_clock::now();
+    double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
     sol.print_summary();
+    std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
     T obj_val = sol.obj_val;
    
     // Compare
@@ -150,9 +154,9 @@ int main() {
 
     return 0;
 }
-*/
 
 
+/*
 int main() {
 
     // Filenames of Netlib test problems (without .mps extension)
@@ -250,4 +254,4 @@ int main() {
 
     return 0;
 }
-
+*/

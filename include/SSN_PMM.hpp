@@ -63,9 +63,9 @@ public:
 
     int n, m, l;
     int N, M;
-    QInfo Q_info;
+    int Q_info; // 0 = zero; 1 = diagonal; 2 = general
     Vec Q_diag;
-    SpMat L;
+    SpMat L, L_tr;
     SpMat A_tr, B_tr;
 
     SpMat Q_ruiz, A_ruiz, B_ruiz;

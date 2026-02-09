@@ -25,12 +25,12 @@ public:
     using Triplet = Eigen::Triplet<T>;
 
     // Inputs
-    QInfo Q_info;
-    Vec Q_diag;
-    SpMat L, A, B;
-    Vec D1_diag, D2_diag;
-    Vec c, b, lx, ux, lw, uw;
-    int n, m, N, M, l;
+    const int Q_info;
+    const Vec& Q_diag;
+    const SpMat& L, A, B;
+    const Vec& D1_diag, D2_diag;
+    const Vec& c, b, lx, ux, lw, uw;
+    const int n, m, N, M, l;
     Vec x, y1, y2, z;
     Vec y1_sol, z_sol;
     int SSN_max_in_iter;
@@ -42,7 +42,7 @@ public:
     // Useful vectors and matrices
     Vec x_descaled, x_sol;
     Vec ones_N, ones_M, ones_l;
-    SpMat A_tr, B_tr, L_tr;
+    const SpMat& A_tr, B_tr, L_tr;
     T obj_val;
 
     // Outputs
@@ -56,30 +56,26 @@ public:
     T eta = 0.1 * SSN_tol;
     T gamma = 0.1;
     
-    SSN() = default;
+    // SSN() = default;
 
-    SSN(const QInfo& Q_info_, const Vec& Q_diag_, SpMat& L_,
+    SSN(const int Q_info_, const Vec& Q_diag_, const SpMat& L_, const SpMat& L_tr_,
         const SpMat& A_, const SpMat& B_, const SpMat& A_tr_, const SpMat& B_tr_,
         const Vec& c_, const Vec& b_, const Vec& D1_diag_, const Vec& D2_diag_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
-        const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-        const Vec& y1_sol_, const Vec& z_sol_,
-        T mu_, T rho_, int n_, int m_, int N_, int M_, int l_,
+        int n_, int m_, int N_, int M_, int l_,
         T SSN_tol_, int SSN_max_in_iter_,
         PrintWhen SSN_print_when_, PrintWhat SSN_print_what_)
-    : Q_info(Q_info_), Q_diag(Q_diag_), L(L_),
+    : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
       A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
       c(c_), b(b_), D1_diag(D1_diag_), D2_diag(D2_diag_),
       lx(lx_), ux(ux_), lw(lw_), uw(uw_),
-      x(x_), y1(y1_), y2(y2_), z(z_), y1_sol(y1_sol_), z_sol(z_sol_),
-      mu(mu_), rho(rho_), n(n_), m(m_), N(N_), M(M_), l(l_),
+      n(n_), m(m_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
       SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_)
     {
         ones_N = Vec::Ones(N);
         ones_M = Vec::Ones(M);
         ones_l = Vec::Ones(l);
-        L_tr = L.transpose();
     }
 
     void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
