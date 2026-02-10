@@ -101,7 +101,7 @@ public:
     Vec get_x_in_original_dim(const Vec& x);
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
-    Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper);
+    Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
     void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
     void build_B_active_inactive(const SpMat& B, const BoolArr& mask, SpMat& B_active, SpMat& B_inactive);
     void scale_columns(SpMat& M, const Vec& d);

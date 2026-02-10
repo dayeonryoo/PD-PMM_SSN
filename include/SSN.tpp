@@ -108,13 +108,15 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper) {
+typename SSN<T>::Vec SSN<T>::Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd) {
     using Vec = typename SSN<T>::Vec;
     using BoolArr = typename SSN<T>::BoolArr;
 
-    BoolArr mask = (u.array() > lower.array()) && (u.array() < upper.array());
-    Vec grad_proj = mask.cast<T>().matrix();
+    BoolArr mask;
+    if (include_bd) mask = (u.array() >= lower.array()) && (u.array() <= upper.array());
+    else mask = (u.array() > lower.array()) && (u.array() < upper.array());
 
+    Vec grad_proj = mask.cast<T>().matrix();
     return grad_proj;
 }
 
@@ -356,11 +358,11 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Compute Clarke subgradient of Proj_K(z/mu + x_new)
         Vec u = z / mu + result.x;
-        Vec diag_P_K = Clarke_subgrad_of_proj(u, lx, ux);
+        Vec diag_P_K = Clarke_subgrad_of_proj(u, lx, ux, false);
 
         // Compute Clarke subgradient of Proj_W(B*x_new + (y2_new/2 - y2)/mu)
         Vec v = B * result.x + (0.5 * result.y2 - y2) / mu;
-        Vec diag_P_W = Clarke_subgrad_of_proj(v, lw, uw);
+        Vec diag_P_W = Clarke_subgrad_of_proj(v, lw, uw, true);
 
         // Compute dist_K(u) and dist_W(v)
         Vec dist_K_u = compute_dist_box(u, lx, ux);
