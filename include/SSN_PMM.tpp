@@ -487,21 +487,6 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
     return res_norms;
 }
 
-template <typename T>
-void SSN_PMM<T>::ruiz_descale(const Vec& x, const Vec& y1, const Vec& z) {
-    if (Q_info == 2) {
-        x_descaled = x;
-        x_descaled.head(n).array() *= D2_diag.array();
-        y1_descaled = y1;
-        y1_descaled.head(m).array() *= D1_diag.array();
-        z_descaled = z;
-        z_descaled.head(n).array() /= D2_diag.array();
-    } else {
-        x_descaled = x.cwiseProduct(D2_diag);
-        y1_descaled = y1.cwiseProduct(D1_diag);
-        z_descaled = z.cwiseQuotient(D2_diag);
-    }
-}
 
 template <typename T>
 T SSN_PMM<T>::objective_value(const Vec& x) {
@@ -515,15 +500,16 @@ T SSN_PMM<T>::objective_value(const Vec& x) {
 }
 
 template <typename T>
-void SSN_PMM<T>::get_sol_in_original_dim(const Vec& x, const Vec& y1, const Vec& z) {
+void SSN_PMM<T>::printable_sol(const Vec& x, const Vec& y1, const Vec& z) {
+    // Ruiz descale, and shrink to original dimension if needed
     if (Q_info == 2) {
-        x_sol = x.head(n);
-        y1_sol = y1.head(m);
-        z_sol = z.head(n);
+        x_sol = x.head(n).array() * D2_diag.array();
+        y1_sol = y1.head(m).array() * D1_diag.array();
+        z_sol = z.head(n).array() / D2_diag.array();
     } else {
-        x_sol = x;
-        y1_sol = y1;
-        z_sol = z;
+        x_sol = x.cwiseProduct(D2_diag);
+        y1_sol = y1.cwiseProduct(D1_diag);
+        z_sol = z.cwiseQuotient(D2_diag);
     }
 }
 
@@ -613,8 +599,7 @@ Solution<T> SSN_PMM<T>::solve() {
         T res_d = res_norms(1);
 
         // Ruiz-descale and shrink to the original dimension (n, m, l) for printing
-        ruiz_descale(x, y1, z); // Note: y2_descaled = y2
-        get_sol_in_original_dim(x_descaled, y1_descaled, z_descaled);
+        printable_sol(x, y1, z);
 
         // Check termination criterion
         if (PMM_tol_achieved < tol) {
@@ -681,8 +666,7 @@ Solution<T> SSN_PMM<T>::solve() {
         z += mu * (x - proj(z / mu + x, lx, ux));
 
         // Ruiz-descale and shrink to the original dimensions (n, m, l) if needed
-        ruiz_descale(x, y1, z);
-        get_sol_in_original_dim(x_descaled, y1_descaled, z_descaled);
+        printable_sol(x, y1, z);
 
         obj_val = objective_value(x);
 
