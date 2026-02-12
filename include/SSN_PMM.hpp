@@ -58,8 +58,6 @@ public:
     SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux, lw, uw;
-    T tol = 0.0;
-    int max_iter = 0;
 
     int n, m, l;
     int N, M;
@@ -75,11 +73,16 @@ public:
     Vec x_sol, y1_sol, z_sol;
 
     // PMM parameters
-    T mu, rho;
+    T mu = 5e0;
+    T rho = 5e0;
+    T tol = 1e-4;
+    int max_iter = 1e2;
 
     // SSN parameters
-    int SSN_max_iter, SSN_max_in_iter;
-    T SSN_tol, reg_limit;
+    int SSN_max_iter = 1e3;
+    int SSN_max_in_iter = 15;
+    T SSN_tol = tol;
+    T reg_limit = 1e6;
 
     // Outputs:
     int opt;

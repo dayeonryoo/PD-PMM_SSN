@@ -274,18 +274,6 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
     using SpMat   = Eigen::SparseMatrix<T>;
     using Triplet = Eigen::Triplet<T>;
 
-    // PMM parameters
-    mu = 5e0; // (5e1)
-    rho = 5e0; // (1e2)
-    if (problem.tol == 0.0) tol = 1e-4;
-    if (problem.max_iter == 0) max_iter = 1e2;
-
-    // SSN parameters
-    SSN_max_iter = 1000;
-    SSN_max_in_iter = 15;
-    SSN_tol = tol * 1e0;
-    reg_limit = 1e6;
-
     T inf = std::numeric_limits<T>::infinity();
 
     if (Q_info == 2) {

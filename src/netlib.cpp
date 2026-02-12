@@ -99,37 +99,13 @@ int main() {
     T obj_val = sol.obj_val;
    
     // Compare
-    T abs_err = std::abs(obj_val - ref_obj_val);
-    T rel_err = abs_err / std::abs(ref_obj_val);
-    bool abs_agree = abs_err <= 1e-4;
-    bool rel_agree = rel_err <= 1e-4;
-    if (rel_agree) std::cout << "\nCORRECT! Asolute error = " << abs_err << ", relative error = " << rel_err << "\n";
-    else std::cout << "\nIncorrect. Absolute error = " << abs_err << ", relative error = " << rel_err << "\n";
-
     std::cout << std::setprecision(5) << std::scientific;
-
-    // std::cout << "\nChecking feasibility with reference solution x_h from HiGHS:\n";
-    // const HighsSolution& h_sol = h.getSolution();
-    // Vec x_h(pd.c.size());
-    // for (int i = 0; i < pd.c.size(); ++i) {
-    //     x_h[i] = h_sol.col_value[i];
-    // }
-    // std::cout << "  ||Ax_h - b||_inf = " << (pd.A * x_h - pd.b).cwiseAbs().maxCoeff() << "\n";
-    // std::cout << "  Elements of x_h outside bounds:\n";
-    // for (int i = 0; i < pd.c.size(); ++i) {
-    //     if (x_h[i] < pd.lx[i] - tol || x_h[i] > pd.ux[i] + tol) {
-    //         std::cout << "  Variable " << i << " out of bounds: x_h = " << x_h[i]
-    //                   << ", [" << pd.lx[i] << ", " << pd.ux[i] << "]\n";
-    //     }
-    // }
-    // std::cout << "  Elements of Bx_h outside bounds:\n";
-    // for (int i = 0; i < pd.lw.size(); ++i) {
-    //     T Bx_i = (pd.B * x_h)[i];
-    //     if (Bx_i < pd.lw[i] - tol || Bx_i > pd.uw[i] + tol) {
-    //         std::cout << "  Variable " << i << " out of bounds: Bx_h = " << Bx_i
-    //                   << ", [" << pd.lw[i] << ", " << pd.uw[i] << "]\n";
-    //     }
-    // }
+    T abs_err = std::abs(obj_val - ref_obj_val);
+    T err = abs_err / std::abs(ref_obj_val);
+    bool abs_agree = abs_err <= 1e-4;
+    bool agree = err <= 1e-4;
+    if (agree) std::cout << "\nCORRECT! Relative error = " << err << "\n";
+    else std::cout << "\nIncorrect. Relative error = " << err << "\n";
 
     std::cout << "\nChecking feasibility of solution x from PMM_SSN solver:\n";
     std::cout << "  ||Ax - b||_inf = ";
