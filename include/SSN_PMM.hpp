@@ -130,9 +130,8 @@ public:
 
     Vec compute_residual_norms();
     Vec compute_residual_norms_inf();
-    void ruiz_descale(const Vec& x, const Vec& y1, const Vec& z);
     T objective_value(const Vec& x);
-    void get_sol_in_original_dim(const Vec& x, const Vec& y1, const Vec& z);
+    void printable_sol(const Vec& x, const Vec& y1, const Vec& z);
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
     void update_PMM_parameters(const Vec res_norms, const Vec new_res_norms);
     Solution<T> solve();

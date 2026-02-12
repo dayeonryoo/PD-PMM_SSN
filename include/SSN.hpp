@@ -53,8 +53,6 @@ public:
     // Set the semismooth Newton parameters
     T beta = 0.4995 / 2;
     T delta = 0.995;
-    T eta = 0.1 * SSN_tol;
-    T gamma = 0.1;
     
     // SSN() = default;
 
