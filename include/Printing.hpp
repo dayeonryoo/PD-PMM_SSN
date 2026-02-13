@@ -20,7 +20,7 @@ enum class PrintWhat {
     NONE,
     MINIMAL, // iter, tol
     SUMMARY, // iter, x, y2, tol, 
-    FULL // iter, obj_val, x, y1, y2, z, tol
+    FULL, // iter, obj_val, x, y1, y2, z, tol
 };
 
 enum class PrintLabel {
@@ -34,7 +34,7 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
     return [label, when, what, max_iter](int iter, int opt, T obj_val, const Vec& x, const Vec& y1,
                                          const Vec& y2, const Vec& z, T tol) {
         if (when == PrintWhen::NEVER) return;
-        if (when == PrintWhen::END_ONLY && opt == -1) return;
+        if (when == PrintWhen::END_ONLY && iter < max_iter && opt != 0) return;
         if (when == PrintWhen::EVERY10 && iter % 10 != 0) return;
 
         if (what == PrintWhat::MINIMAL) {
@@ -59,7 +59,7 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                 case PrintLabel::SSN:
                     if (opt == 0) {
                         std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
-                    } else if (opt == 1) {
+                    } else if (opt == 2) {
                         std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
                     }
                     break;
@@ -89,7 +89,7 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                 case PrintLabel::SSN:
                     if (opt == 0) {
                         std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
-                    } else if (opt == 1) {
+                    } else if (opt == 2) {
                         std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
                     }
                     break;
@@ -123,8 +123,6 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                 case PrintLabel::SSN:
                     if (opt == 0) {
                         std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
-                    } else if (opt == 3) {
-                        std::cout << "Optimal solution not found within the maximum number of SSN inner iterations.\n";
                     } else if (opt == 2) {
                         std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
                     }
@@ -133,3 +131,4 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
         }
     };
 }
+

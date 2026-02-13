@@ -24,8 +24,6 @@ using Triplet = Eigen::Triplet<T>;
 struct NetlibTestResult {
     // Comparison result for a Netlib test problem
     std::string name;
-    bool abs_agree;
-    T abs_err;
     bool rel_agree;
     T rel_err;
 
@@ -43,15 +41,14 @@ void write_csv_header(const std::string& path) {
     namespace fs = std::filesystem;
     if (!fs::exists(fs::path(path)) || fs::is_empty(fs::path(path))) {
         std::ofstream csv(path);
-        csv << "name,abs_agree,abs_err,rel_agree,rel_err,opt_status,obj_val,"
+        csv << "name,rel_agree,rel_err,opt_status,obj_val,"
             << "PMM_iter,SSN_iter,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec\n";
     }
 }
 
 void append_csv_result(const std::string& path, const NetlibTestResult& r) {
     std::ofstream csv(path, std::ios::out | std::ios::app);
-    csv << r.name << "," << (r.abs_agree ? "1" : "0") << "," << r.abs_err << ","
-        << (r.rel_agree ? "1" : "0") << "," << r.rel_err << ","
+    csv << r.name << "," << (r.rel_agree ? "1" : "0") << "," << r.rel_err << ","
         << r.opt_status << "," << r.obj_val << ","
         << r.PMM_iter << "," << r.SSN_iter << ","
         << r.PMM_tol_achieved << "," << r.SSN_tol_achieved << ","
@@ -62,7 +59,7 @@ void append_csv_result(const std::string& path, const NetlibTestResult& r) {
 
 int main() {
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/AGG.mps";
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/AGG2.mps";
     
     // Solving via HiGHS
     Highs h;
@@ -79,10 +76,10 @@ int main() {
 
     // Construct the problem and solver
     T tol = 1e-4;
-    int max_iter = 1e2;
+    int max_iter = 100;
     PrintWhen PMM_print_when = PrintWhen::ALWAYS;
     PrintWhat PMM_print_what = PrintWhat::MINIMAL;
-    PrintWhen SSN_print_when = PrintWhen::NEVER;
+    PrintWhen SSN_print_when = PrintWhen::END_ONLY;
     PrintWhat SSN_print_what = PrintWhat::MINIMAL;
 
     Problem<T> prob(pd.Q, pd.A, pd.B, pd.c, pd.b, pd.lx, pd.ux, pd.lw, pd.uw,
@@ -107,30 +104,29 @@ int main() {
     if (agree) std::cout << "\nCORRECT! Relative error = " << err << "\n";
     else std::cout << "\nIncorrect. Relative error = " << err << "\n";
 
-    std::cout << "\nChecking feasibility of solution x from PMM_SSN solver:\n";
-    std::cout << "  ||Ax - b||_inf = ";
-    if (prob.A.rows() == 0) std::cout << "0 (m = 0)\n";
-    else std::cout << (prob.A * sol.x - prob.b).cwiseAbs().maxCoeff() << "\n";
+    // std::cout << "\nChecking feasibility of solution x from PMM_SSN solver:\n";
+    // std::cout << "  ||Ax - b||_inf = ";
+    // if (prob.A.rows() == 0) std::cout << "0 (m = 0)\n";
+    // else std::cout << (prob.A * sol.x - prob.b).cwiseAbs().maxCoeff() << "\n";
 
-    std::cout << "\n  Elements of x outside bounds:\n";
-    for (int i = 0; i < prob.c.size(); ++i) {
-        if (sol.x[i] < prob.lx[i] - tol || sol.x[i] > prob.ux[i] + tol) {
-            std::cout << "      Variable " << i << " out of bounds: x = " << sol.x[i]
-                      << ", [" << prob.lx[i] << ", " << prob.ux[i] << "]\n";
-        }
-    }
-    std::cout << "\n  Elements of Bx outside bounds:\n";
-    for (int i = 0; i < prob.lw.size(); ++i) {
-        T Bx_i = (prob.B * sol.x)[i];
-        if (Bx_i < prob.lw[i] - tol || Bx_i > prob.uw[i] + tol) {
-            std::cout << "      Variable " << i << " out of bounds: Bx = " << Bx_i
-                      << ", [" << prob.lw[i] << ", " << prob.uw[i] << "]\n";
-        }
-    }
+    // std::cout << "\n  Elements of x outside bounds:\n";
+    // for (int i = 0; i < prob.c.size(); ++i) {
+    //     if (sol.x[i] < prob.lx[i] - tol || sol.x[i] > prob.ux[i] + tol) {
+    //         std::cout << "      Variable " << i << " out of bounds: x = " << sol.x[i]
+    //                   << ", [" << prob.lx[i] << ", " << prob.ux[i] << "]\n";
+    //     }
+    // }
+    // std::cout << "\n  Elements of Bx outside bounds:\n";
+    // for (int i = 0; i < prob.lw.size(); ++i) {
+    //     T Bx_i = (prob.B * sol.x)[i];
+    //     if (Bx_i < prob.lw[i] - tol || Bx_i > prob.uw[i] + tol) {
+    //         std::cout << "      Variable " << i << " out of bounds: Bx = " << Bx_i
+    //                   << ", [" << prob.lw[i] << ", " << prob.uw[i] << "]\n";
+    //     }
+    // }
 
     return 0;
 }
-
 
 /*
 int main() {
@@ -154,7 +150,7 @@ int main() {
     PrintWhat SSN_print_what = PrintWhat::NONE;
 
     // Solver result
-    std::string csv_path = root + "results/netlib_test_w_ruiz.csv";
+    std::string csv_path = root + "results/netlib_test_w_bcl_ruiz.csv";
     write_csv_header(csv_path);
 
     for (const auto& name : netlib_names) {
@@ -202,14 +198,13 @@ int main() {
             // 5. Compare
             T abs_err = std::abs(obj_val - ref_obj_val);
             T rel_err = abs_err / std::abs(ref_obj_val);
-            bool abs_agree = abs_err <= 1e-4;
             bool rel_agree = rel_err <= 1e-4;
-            if (rel_agree) std::cout << "\nCORRECT! Asolute error = " << abs_err << ", relative error = " << rel_err << "\n";
-            else std::cout << "\nIncorrect. Absolute error = " << abs_err << ", relative error = " << rel_err << "\n";
+            if (rel_agree) std::cout << "\nCORRECT! Relative error = " << rel_err << "\n";
+            else std::cout << "\nIncorrect. Relative error = " << rel_err << "\n";
 
             // 6. Store result
             NetlibTestResult result = {
-                name, abs_agree, abs_err, rel_agree, rel_err,
+                name, rel_agree, rel_err,
                 opt_status, obj_val, PMM_iter, SSN_iter,
                 PMM_tol_achieved, SSN_tol_achieved,
                 solving_time_sec
@@ -219,7 +214,7 @@ int main() {
         } catch (const std::exception& e) {
             std::cerr << "ERROR solving " << name << ": " << e.what() << "\n"; 
             NetlibTestResult result = {
-                name, false, -1.0, false, -1.0,
+                name, false, -1.0,
                 -1, -1.0, -1, -1,
                 -1.0, -1.0,
                 -1.0

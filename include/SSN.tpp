@@ -475,7 +475,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     }
 
     if (result.SSN_opt != 0) {
-        result.SSN_opt = 3; // Maximum number of SSN inner iterations reached without convergence
+        result.SSN_opt = 2; // Maximum number of SSN inner iterations reached without convergence
 
         // Modify x for printing. (This modification is not saved as SSN result.)
         x_descaled = ruiz_descale_x(result.x);

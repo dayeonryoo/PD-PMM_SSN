@@ -72,18 +72,20 @@ public:
     Vec x_descaled, y1_descaled, z_descaled;
     Vec x_sol, y1_sol, z_sol;
 
-    // PMM parameters
-    T mu = 5e0;
-    T rho = 5e0;
+    // Constant parameters
     T tol = 1e-4;
-    int max_iter = 1e2;
-
-    // SSN parameters
-    int SSN_max_iter = 1e3;
+    int max_iter = 100;
+    int SSN_max_iter = 1000;
     int SSN_max_in_iter = 15;
-    T SSN_tol = tol;
     T reg_limit = 1e6;
+    T eps_limit = 1e-6;
 
+    // Updated parameters
+    T mu = 1e1;
+    T rho = 1e1;
+    T eps_bcl = 1e-1;
+    T SSN_tol = 1e1;
+    
     // Outputs:
     int opt;
     Vec x, y1, y2, z;
@@ -133,7 +135,9 @@ public:
     T objective_value(const Vec& x);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& z);
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
-    void update_PMM_parameters(const Vec res_norms, const Vec new_res_norms);
+    T compute_p(const Vec& x);
+    void update_with_bcl(const T p, const Vec& y2_hat);
+    void print_params(const int iter);
     Solution<T> solve();
 };
 
