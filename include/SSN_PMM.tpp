@@ -487,7 +487,6 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
     return res_norms;
 }
 
-
 template <typename T>
 T SSN_PMM<T>::objective_value(const Vec& x) {
     T obj_val;
@@ -634,14 +633,7 @@ Solution<T> SSN_PMM<T>::solve() {
         PMM_iter++;
 
         // Update the Newton system.
-        NS.x = x;
-        NS.y1 = y1;
-        NS.y2 = y2;
-        NS.z = z;
-        NS.y1_sol = y1_sol;
-        NS.z_sol = z_sol;
-        NS.mu = mu;
-        NS.rho = rho;
+        NS.update_SSN_system(x, y1, y2, z, y1_sol, z_sol, mu, rho, gamma);
 
         // Call semismooth Newton method to update x and y2_hat
         SSN_result<T> NS_solution = NS.solve_SSN(SSN_tol);
@@ -660,7 +652,6 @@ Solution<T> SSN_PMM<T>::solve() {
 
         // L_inf primal feasibility violation corresponding to lw <= Bx <= uw
         T p = compute_p(x);
-        // std::cout << "  p = " << p << "\n";
         // Update penalty parameters and y2 based on BCL
         update_with_bcl(p, y2_hat);
 

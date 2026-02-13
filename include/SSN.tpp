@@ -8,18 +8,6 @@
 #include <Eigen/SparseCholesky>
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::ruiz_descale_x(const Vec& x) {
-    using Vec = typename SSN<T>::Vec;
-    if (Q_info == 2) {
-        x_descaled = x;
-        x_descaled.head(n).array() *= D2_diag.array();
-    } else {
-        x_descaled = x.cwiseProduct(D2_diag);
-    }
-    return x_descaled;
-}
-
-template <typename T>
 T SSN<T>::get_obj_val(const Vec& x) {
     T obj_val = c.dot(x);
     if (Q_info != 0) {
@@ -29,13 +17,13 @@ T SSN<T>::get_obj_val(const Vec& x) {
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::get_x_in_original_dim(const Vec& x) {
+typename SSN<T>::Vec SSN<T>::printable_x(const Vec& x) {
     using Vec = typename SSN<T>::Vec;
     Vec x_sol;
     if (Q_info == 2) {
-        x_sol = x.head(n);
+        x_sol = x.head(n).array() * D2_diag.array();
     } else {
-        x_sol = x;
+        x_sol = x.cwiseProduct(D2_diag);
     }
     return x_sol;
 }
@@ -48,7 +36,7 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
 
     // Evaluate dist_W(B*x_new - (y2 - y2_new/2)/mu)
-    Vec dist_W = compute_dist_box(B * x_new + (y2_new / 2 - y2) / mu, lw, uw);
+    Vec dist_W = compute_dist_box(B * x_new + ((1 - gamma) * y2_new - y2) / mu, lw, uw);
 
     // Evaluate primal residual A x_new - b
     Vec res_p = A * x_new - b;
@@ -59,13 +47,13 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
         L = c.dot(x_new)
             - y1.dot(res_p) + (mu / 2) * res_p.squaredNorm()
             - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
-            + mu * dist_W.squaredNorm() + y2_new.squaredNorm() / (4 * mu) - y2.squaredNorm() / (2 * mu)
+            + (mu / (2 * gamma)) * dist_W.squaredNorm() + ((1 - gamma) / (2 * mu)) * y2_new.squaredNorm() - y2.squaredNorm() / (2 * mu)
             + (x_new - x).squaredNorm() / (2 * rho);
     } else {
         L = c.dot(x_new) + 0.5 * Q_diag.cwiseProduct(x_new).dot(x_new)
             - y1.dot(res_p) + (mu / 2) * res_p.squaredNorm()
             - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
-            + mu * dist_W.squaredNorm() + y2_new.squaredNorm() / (4 * mu) - y2.squaredNorm() / (2 * mu)
+            + (mu / (2 * gamma)) * dist_W.squaredNorm() + ((1 - gamma) / (2 * mu)) * y2_new.squaredNorm() - y2.squaredNorm() / (2 * mu)
             + (x_new - x).squaredNorm() / (2 * rho);
     }
     return L;
@@ -79,7 +67,7 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
 
     // Evaluate Dist_W (B*x_new + (y2_new/2 - y2)/mu)
-    Vec dist_W = compute_dist_box(B * x_new + (y2_new / 2 - y2) / mu, lw, uw);
+    Vec dist_W = compute_dist_box(B * x_new + ((1 - gamma) * y2_new - y2) / mu, lw, uw);
 
     // Primal residual: A x_new - b
     Vec res_p = A * x_new - b;
@@ -89,15 +77,15 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     if (Q_info == 0) {
         grad_L_x = c - A_tr * y1 + mu * A_tr * res_p
                     + mu * dist_K
-                    + 2 * mu * B_tr * dist_W
+                    + (mu / gamma) * B_tr * dist_W
                     + (x_new - x) / rho;
     } else {
         grad_L_x = c + Q_diag.cwiseProduct(x_new) - A_tr * y1 + mu * A_tr * res_p
                     + mu * dist_K
-                    + 2 * mu * B_tr * dist_W
+                    + (mu / gamma) * B_tr * dist_W
                     + (x_new - x) / rho; 
     }
-    Vec grad_L_y2 = dist_W + y2_new / (2 * mu);
+    Vec grad_L_y2 = ((1 - gamma) / gamma) * dist_W + ((1 - gamma) / mu) * y2_new;
 
     // Combine gradients
     Vec grad_L(N + l);
@@ -334,9 +322,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // Compute gradient of Lagrangian at current (x, y2)
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
         result.SSN_tol_achieved = grad_L.norm();
+
         // Ruiz-descale x and shrink x to the original dimension (n, m, l) for printing
-        x_descaled = ruiz_descale_x(result.x);
-        x_sol = get_x_in_original_dim(x_descaled);
+        x_sol = printable_x(result.x);
 
         // Compute objective value for printing
         result.obj_val = get_obj_val(result.x);
@@ -360,15 +348,15 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec u = z / mu + result.x;
         Vec diag_P_K = Clarke_subgrad_of_proj(u, lx, ux, false);
 
-        // Compute Clarke subgradient of Proj_W(B*x_new + (y2_new/2 - y2)/mu)
-        Vec v = B * result.x + (0.5 * result.y2 - y2) / mu;
+        // Compute Clarke subgradient of Proj_W(B*x_new + ((1 - gamma)*y2_new - y2)/mu)
+        Vec v = B * result.x + ((1 - gamma) * result.y2 - y2) / mu;
         Vec diag_P_W = Clarke_subgrad_of_proj(v, lw, uw, true);
 
         // Compute dist_K(u) and dist_W(v)
         Vec dist_K_u = compute_dist_box(u, lx, ux);
         Vec dist_W_v = compute_dist_box(v, lw, uw);
 
-        // Compute active and inactive sets for (I - P_W)(v)
+        // Compute active and inactive sets for (P_W)(v)
         BoolArr active_W = (diag_P_W.array() == 0);
         BoolArr inactive_W = (diag_P_W.array() == 1);
         int n_active_W = active_W.count();
@@ -394,14 +382,14 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         SpMat G_tr = G.transpose();
 
         // Compute dy2 in inactive_W:
-        // dy2_inactive_W = - 2 mu * dist_W(v)(inactive_W) - y2(inactive_W)
+        // dy2_inactive_W = - (mu / gamma) * dist_W(v)(inactive_W) - y2(inactive_W)
         Vec y2_active_W, y2_inactive_W;
         split_by_mask(result.y2, active_W, y2_active_W, y2_inactive_W);
 
         Vec dist_W_v_active_W, dist_W_v_inactive_W;
         split_by_mask(dist_W_v, active_W, dist_W_v_active_W, dist_W_v_inactive_W);
 
-        Vec dy2_inactive_W = -2 * mu * dist_W_v_inactive_W - y2_inactive_W;
+        Vec dy2_inactive_W = -(mu / gamma) * dist_W_v_inactive_W - y2_inactive_W;
         
         // Compute the RHS vector
         Vec r1;
@@ -417,17 +405,17 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         
         Vec r2(M + n_active_W);
         r2.head(M) = y1 / mu - A * result.x + b;
-        r2.tail(n_active_W) = -dist_W_v_active_W - y2_active_W / (2 * mu);
+        r2.tail(n_active_W) = -dist_W_v_active_W - (gamma / mu) * y2_active_W;
 
         // Compute the Schur complement of J (self-adjoint and PD)
-        // Schur = G H_inv G^T + D, where D = diag(1/mu)
-        SpMat GH_inv = G; // G * H_inv
+        // Schur = G H_inv G^T + D, where D = 1/mu I_{m + n_active_W}
+        SpMat GH_inv = G; 
         scale_columns(GH_inv, H_diag_inv);
         SpMat Schur = GH_inv * G_tr; 
         for (int i = 0; i < M + n_active_W; ++i) {
             Schur.coeffRef(i, i) += 1 / mu;
         }
-        Schur.makeCompressed(); // G * H_inv * G^T + D
+        Schur.makeCompressed();
 
         // Solve: Schur * dy_ = G * H_inv * r1 + r2, where dy_ = [dy1; dy2_active].
         Vec H_inv_r1 = H_diag_inv.cwiseProduct(r1);
@@ -454,11 +442,6 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // Backtracking linesearch to find a Newton step size alpha
         T alpha;
         alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
-        // if (result.SSN_in_iter == 1) {
-        //     alpha = 0.995;
-        // } else {
-        //     alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
-        // }
 
         auto t1_alpha = std::chrono::steady_clock::now();
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
@@ -476,12 +459,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
     if (result.SSN_opt != 0) {
         result.SSN_opt = 2; // Maximum number of SSN inner iterations reached without convergence
-
         // Modify x for printing. (This modification is not saved as SSN result.)
-        x_descaled = ruiz_descale_x(result.x);
-        x_sol = get_x_in_original_dim(x_descaled);
+        x_sol = printable_x(result.x);
         result.obj_val = get_obj_val(result.x);
-    
         printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
     }
 

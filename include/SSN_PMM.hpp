@@ -79,6 +79,7 @@ public:
     int SSN_max_in_iter = 15;
     T reg_limit = 1e6;
     T eps_limit = 1e-6;
+    T gamma = 0.5;
 
     // Updated parameters
     T mu = 1e1;

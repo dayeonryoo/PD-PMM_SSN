@@ -34,7 +34,7 @@ public:
     Vec x, y1, y2, z;
     Vec y1_sol, z_sol;
     int SSN_max_in_iter;
-    T mu, rho, SSN_tol;
+    T mu, rho, gamma, SSN_tol;
     PrintWhen SSN_print_when;
     PrintWhat SSN_print_what;
     PrintLabel SSN_print_label = PrintLabel::SSN;
@@ -77,7 +77,7 @@ public:
     }
 
     void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-                           const Vec& y1_sol_, const Vec& z_sol_, T mu_, T rho_) {
+                           const Vec& y1_sol_, const Vec& z_sol_, T mu_, T rho_, T gamma_) {
         x = x_;
         y1 = y1_;
         y2 = y2_;
@@ -86,6 +86,7 @@ public:
         z_sol = z_sol_;
         mu = mu_;
         rho = rho_;
+        gamma = gamma_; // although it's constant
     }
 
     static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
@@ -94,9 +95,8 @@ public:
     static inline Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
         return (v - proj(v, lower, upper));
     }
-    Vec ruiz_descale_x(const Vec& x);
     T get_obj_val(const Vec& x);
-    Vec get_x_in_original_dim(const Vec& x);
+    Vec printable_x(const Vec& x);
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
