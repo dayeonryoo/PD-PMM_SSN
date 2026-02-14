@@ -59,7 +59,7 @@ void append_csv_result(const std::string& path, const NetlibTestResult& r) {
 
 int main() {
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/AGG.mps";
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/25FV47.mps";
     
     // Solving via HiGHS
     Highs h;

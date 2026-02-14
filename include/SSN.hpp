@@ -43,12 +43,17 @@ public:
     Vec x_descaled, x_sol;
     Vec ones_N, ones_M, ones_l;
     const SpMat& A_tr, B_tr, L_tr;
-    T obj_val;
+    Vec H_diag, H_diag_inv;
+    Vec diag_P_K, diag_P_W;
+    BoolArr active_W, inactive_W;
+    int n_active_W, n_inactive_W;
+    SpMat B_active_W, B_inactive_W, G, G_tr;
 
     // Outputs
     int SSN_in_iter;
     T SSN_tol_achieved;
     int SSN_opt;
+    T obj_val;
 
     // Set the semismooth Newton parameters
     T beta = 0.4995 / 2;
@@ -100,6 +105,7 @@ public:
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
+    bool is_P_unchanged(const Vec& diag_P, const Vec& new_diag_P);
     void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
     void build_B_active_inactive(const SpMat& B, const BoolArr& mask, SpMat& B_active, SpMat& B_inactive);
     void scale_columns(SpMat& M, const Vec& d);

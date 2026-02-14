@@ -109,6 +109,15 @@ typename SSN<T>::Vec SSN<T>::Clarke_subgrad_of_proj(const Vec& u, const Vec& low
 }
 
 template <typename T>
+bool SSN<T>::is_P_unchanged(const Vec& diag_P, const Vec& new_diag_P) {
+    if (diag_P.size() == 0) return false; // At first SSN iteration.
+    for (int i = 0; i < diag_P.size(); ++i) {
+        if (diag_P[i] != new_diag_P[i]) return false;
+    }
+    return true;
+}
+
+template <typename T>
 void SSN<T>::split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel) {
     int t = static_cast<int>(mask.count());
     u_sel.resize(t);
@@ -346,40 +355,51 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Compute Clarke subgradient of Proj_K(z/mu + x_new)
         Vec u = z / mu + result.x;
-        Vec diag_P_K = Clarke_subgrad_of_proj(u, lx, ux, false);
+        Vec new_diag_P_K = Clarke_subgrad_of_proj(u, lx, ux, false);
 
         // Compute Clarke subgradient of Proj_W(B*x_new + ((1 - gamma)*y2_new - y2)/mu)
         Vec v = B * result.x + ((1 - gamma) * result.y2 - y2) / mu;
-        Vec diag_P_W = Clarke_subgrad_of_proj(v, lw, uw, true);
+        Vec new_diag_P_W = Clarke_subgrad_of_proj(v, lw, uw, true);
 
         // Compute dist_K(u) and dist_W(v)
         Vec dist_K_u = compute_dist_box(u, lx, ux);
         Vec dist_W_v = compute_dist_box(v, lw, uw);
 
-        // Compute active and inactive sets for (P_W)(v)
-        BoolArr active_W = (diag_P_W.array() == 0);
-        BoolArr inactive_W = (diag_P_W.array() == 1);
-        int n_active_W = active_W.count();
-        int n_inactive_W = l - n_active_W;
+        // Compare the new P_K to the previous P_K
+        if (!is_P_unchanged(diag_P_K, new_diag_P_K)) {
+            // If P_K is unchanged, reconstruct H_diag, H_diag_inv.
+            // Otherwise, reuse them from the previous iteration.
+            diag_P_K = new_diag_P_K;
 
-        // Build Clarke subgradient matrix [-H G^T; G D]:
-
-        // H = Q_diag + mu(I_N - P_K) + I_N / rho
-        Vec H_diag;
-        if (Q_info == 0) {
-            H_diag = mu * (ones_N - diag_P_K) + ones_N / rho;
-        } else {
-            H_diag = Q_diag + mu * (ones_N - diag_P_K) + ones_N / rho;
+            // H = Q + mu(I_N - P_K) + I_N / rho
+            if (Q_info == 0) {
+                H_diag = mu * (ones_N - diag_P_K) + ones_N / rho;
+            } else {
+                H_diag = Q_diag + mu * (ones_N - diag_P_K) + ones_N / rho;
+            }
+            H_diag_inv = H_diag.cwiseInverse();
         }
-        Vec H_diag_inv = H_diag.cwiseInverse();
 
-        // Active and inactive parts of B w.r.t. W = [lw, uw]
-        SpMat B_active_W, B_inactive_W;
-        build_B_active_inactive(B, active_W, B_active_W, B_inactive_W);
+        // Compare the new P_W to the previous P_W
+        if (!is_P_unchanged(diag_P_W, new_diag_P_W)) {
+            // If P_W is changed, reconstruct:
+            // active_W, inactive_W, H_diag, H_diag_inv, B_active_W, B_inactive_W, G, G_tr.
+            // Otherwise, reuse them from the previous iteration.
+            diag_P_W = new_diag_P_W;
 
-        // G = [A ; B_active_W]
-        SpMat G = stack_rows(A, B_active_W);
-        SpMat G_tr = G.transpose();
+            // Active and inactive sets for (P_W)(v)
+            active_W = (diag_P_W.array() == 0);
+            inactive_W = (diag_P_W.array() == 1);
+            n_active_W = active_W.count();
+            n_inactive_W = l - n_active_W;
+
+            // Active and inactive parts of B w.r.t. W = [lw, uw]
+            build_B_active_inactive(B, active_W, B_active_W, B_inactive_W);
+
+            // G = [A ; B_active_W]
+            G = stack_rows(A, B_active_W);
+            G_tr = G.transpose();
+        }
 
         // Compute dy2 in inactive_W:
         // dy2_inactive_W = - (mu / gamma) * dist_W(v)(inactive_W) - y2(inactive_W)
