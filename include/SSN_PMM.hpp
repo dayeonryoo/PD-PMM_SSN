@@ -74,12 +74,12 @@ public:
 
     // Constant parameters
     T tol = 1e-4;
-    int max_iter = 100;
-    int SSN_max_iter = 1000;
+    int max_iter = 1e2;
+    int SSN_max_iter = 1e3;
     int SSN_max_in_iter = 15;
     T reg_limit = 1e6;
     T eps_limit = 1e-6;
-    T gamma = 0.5;
+    T gamma = 0.7;
 
     // Updated parameters
     T mu = 1e1;

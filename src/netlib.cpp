@@ -56,10 +56,10 @@ void append_csv_result(const std::string& path, const NetlibTestResult& r) {
     csv.close();
 }
 
-
+/*
 int main() {
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/25FV47.mps";
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/80BAU3B.mps";
     
     // Solving via HiGHS
     Highs h;
@@ -127,8 +127,8 @@ int main() {
 
     return 0;
 }
+*/
 
-/*
 int main() {
 
     // Filenames of Netlib test problems (without .mps extension)
@@ -150,7 +150,7 @@ int main() {
     PrintWhat SSN_print_what = PrintWhat::NONE;
 
     // Solver result
-    std::string csv_path = root + "results/netlib_test_w_bcl_ruiz.csv";
+    std::string csv_path = root + "results/netlib_test_w_bcl_ruiz_gamma=07.csv";
     write_csv_header(csv_path);
 
     for (const auto& name : netlib_names) {
@@ -225,4 +225,4 @@ int main() {
 
     return 0;
 }
-*/
+

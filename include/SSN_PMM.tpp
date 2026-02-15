@@ -557,7 +557,7 @@ void SSN_PMM<T>::update_with_bcl(const T p, const Vec& y2_hat) {
         // Reject y2 from SSN; increase mu and rho; reset eps
         // std::cout << "  SSN result rejected.\n";
         mu = std::min(reg_limit, 1.2 * mu);
-        rho = std::min(reg_limit, 1.2 * rho); // try 1.4
+        rho = std::min(reg_limit, 1.2 * rho);
         eps_bcl = std::max(eps_limit, 1 / std::pow(mu, 0.1));
         SSN_tol = std::max(eps_limit, 1 / std::pow(mu, 0.1));
     }
