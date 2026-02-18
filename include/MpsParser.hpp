@@ -29,6 +29,20 @@ struct ParsedModel {
 };
 
 template <typename T>
+struct PDPMMdata {
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    bool is_qp = false;
+    bool is_min = true;
+
+    int n, m, l;
+    SpMat Q, A, B;
+    Vec c, b;
+    Vec lx, ux, lw, uw;
+};
+
+template <typename T>
 class MpsParser {
 public:
     using SpMat = Eigen::SparseMatrix<T>;
@@ -36,6 +50,7 @@ public:
     using Triplet = Eigen::Triplet<T>;
 
     ParsedModel<T> parse(const std::string& filename);
+    PDPMMdata<T> to_pdpmm(const ParsedModel<T>& model, T eq_tol = 1e-8, T inf_cap = 1e20);
 
 private:
     enum class Section {

@@ -14,6 +14,10 @@ struct PDPMMdata {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using SpMat = Eigen::SparseMatrix<T>;
 
+    bool is_qp = false;
+    bool is_min = true;
+
+    int n, m, l;
     SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux, lw, uw;

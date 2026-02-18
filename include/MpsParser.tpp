@@ -47,6 +47,123 @@ ParsedModel<T> MpsParser<T>::parse(const std::string& filename) {
 }
 
 template <typename T>
+PDPMMdata<T> MpsParser<T>::to_pdpmm(const ParsedModel<T>& model, T eq_tol, T inf_cap) {
+    using Vec = typename MpsParser<T>::Vec;
+    using SpMat = typename MpsParser<T>::SpMat;
+    using Triplet = typename MpsParser<T>::Triplet;
+
+    auto is_inf = [inf_cap](T val) {
+        return std::isinf((double)val) || std::abs((double)val) >= (double)inf_cap;
+    };
+
+    auto cap_inf = [inf_cap, is_inf](T val) {
+        if (is_inf(val)) return (val > 0 ? inf_cap : -inf_cap);
+        else return val;
+    };
+
+    PDPMMdata<T> pd;
+    pd.is_qp = model.is_qp;
+    pd.is_min = model.is_min;
+    pd.n = model.num_cols;
+
+    pd.c = model.c;
+    pd.lx = model.col_lower;
+    pd.ux = model.col_upper;
+    for (int i = 0; i < pd.n; ++i) {
+        pd.lx(i) = cap_inf(pd.lx(i));
+        pd.ux(i) = cap_inf(pd.ux(i));
+    }
+
+    if (pd.is_qp) pd.Q = model.Q;
+    else { pd.Q = SpMat(pd.n, pd.n); pd.Q.setZero(); }
+
+    // If MAX, convert to MIN by negating objective
+    if (!pd.is_min) {
+        pd.c = -pd.c;
+        if (pd.is_qp) pd.Q = -pd.Q;
+        pd.is_min = true;
+    }
+
+    // Process constraints
+    std::vector<int> eq_rows, ineq_rows;
+    eq_rows.reserve(model.num_rows);
+    ineq_rows.reserve(model.num_rows);
+
+    for (int i = 0; i < model.num_rows; ++i) {
+        T lb = cap_inf(model.row_lower(i));
+        T ub = cap_inf(model.row_upper(i));
+        if (is_inf(lb) && is_inf(ub)) {
+            continue; // Skip free constraints
+        } else if (std::abs(lb - ub) <= eq_tol) {
+            eq_rows.push_back(i);
+        } else {
+            ineq_rows.push_back(i);
+        }
+    }
+
+    pd.m = (int)eq_rows.size();
+    pd.l = (int)ineq_rows.size();
+
+    // Construct A and b for equality constraints
+    pd.A = SpMat(pd.m, pd.n);
+    pd.b = Vec(pd.m);
+    {
+        std::vector<Triplet> triplets;
+        triplets.reserve(model.A.nonZeros());
+        
+        // Row map to track which rows correspond to equality constraints
+        std::vector<int> row_map(model.num_rows, -1);
+        for (int i = 0; i < eq_rows.size(); ++i) {
+            row_map[eq_rows[i]] = i;
+            pd.b(i) = model.row_lower(eq_rows[i]);
+        }
+
+        for (int col = 0; col < model.A.outerSize(); ++col) {
+            for (typename SpMat::InnerIterator it(model.A, col); it; ++it) {
+                int r = it.row();
+                int loc = row_map[r];
+                if (loc != -1) {
+                    triplets.emplace_back(loc, col, it.value());
+                }
+            }
+        }
+        pd.A.setFromTriplets(triplets.begin(), triplets.end());
+        pd.A.makeCompressed();
+    }
+
+    // Construct B, lw, uw for inequality constraints
+    pd.B = SpMat(pd.l, pd.n);
+    pd.lw = Vec(pd.l);
+    pd.uw = Vec(pd.l);
+    {
+        std::vector<Triplet> triplets;
+        triplets.reserve(model.A.nonZeros());
+
+        std::vector<int> row_map(model.num_rows, -1);
+        for (int i = 0; i < ineq_rows.size(); ++i) {
+            int r = ineq_rows[i];
+            row_map[r] = i;
+            pd.lw(i) = model.row_lower(r);
+            pd.uw(i) = model.row_upper(r);
+        }
+
+        for (int col = 0; col < model.A.outerSize(); ++col) {
+            for (typename SpMat::InnerIterator it(model.A, col); it; ++it) {
+                int r = it.row();
+                int loc = row_map[r];
+                if (loc != -1) {
+                    triplets.emplace_back(loc, col, it.value());
+                }
+            }
+        }
+        pd.B.setFromTriplets(triplets.begin(), triplets.end());
+        pd.B.makeCompressed();
+    }
+
+    return pd;
+}
+
+template <typename T>
 bool MpsParser<T>::set_section(const std::vector<std::string>& tokens) {
     const std::string& sec = tokens[0];
     if (sec == "NAME") {section_ = Section::NAME; return true;}

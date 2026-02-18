@@ -14,7 +14,8 @@
 #include "Printing.hpp"
 
 #include "Highs.h"
-#include "lp_to_pdpmm.hpp"
+#include "MpsParser.hpp"
+// #include "lp_to_pdpmm.hpp"
 
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
@@ -56,10 +57,10 @@ void append_csv_result(const std::string& path, const NetlibTestResult& r) {
     csv.close();
 }
 
-/*
+
 int main() {
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/80BAU3B.mps";
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/ADLITTLE.mps";
     
     // Solving via HiGHS
     Highs h;
@@ -70,11 +71,7 @@ int main() {
 
     std::cout << "===============================================\n";
 
-    // Extract problem data from the mps file
-    const HighsLp& lp = h.getLp();
-    PDPMMdata<T> pd = lp_to_pdpmm<T>(lp);
-
-    // Construct the problem and solver
+    // Parameters for PD-PMM_SSN solver
     T tol = 1e-4;
     int max_iter = 100;
     PrintWhen PMM_print_when = PrintWhen::ALWAYS;
@@ -82,8 +79,18 @@ int main() {
     PrintWhen SSN_print_when = PrintWhen::END_ONLY;
     PrintWhat SSN_print_what = PrintWhat::MINIMAL;
 
-    Problem<T> prob(pd.Q, pd.A, pd.B, pd.c, pd.b, pd.lx, pd.ux, pd.lw, pd.uw,
-                    tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
+    // Extract problem data from the mps file using HiGHs and construct solver
+    // const HighsLp& lp = h.getLp();
+    // PDPMMdata<T> pd = lp_to_pdpmm<T>(lp);
+    // Problem<T> prob(pd.Q, pd.A, pd.B, pd.c, pd.b, pd.lx, pd.ux, pd.lw, pd.uw,
+    //                 tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
+    // SSN_PMM<T> solver(prob);
+
+    // Extract problem data from the mps file using our MpsParser and construct solver
+    MpsParser<T> parser;
+    ParsedModel<T> model = parser.parse(filename);
+    PDPMMdata<T> pd = parser.to_pdpmm(model);
+    Problem<T> prob(pd, tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
     SSN_PMM<T> solver(prob);
     
     // Solve the LP using PD-PMM_SSN solver
@@ -127,8 +134,8 @@ int main() {
 
     return 0;
 }
-*/
 
+/*
 int main() {
 
     // Filenames of Netlib test problems (without .mps extension)
@@ -225,4 +232,4 @@ int main() {
 
     return 0;
 }
-
+*/

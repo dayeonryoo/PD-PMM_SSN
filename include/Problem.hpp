@@ -4,6 +4,7 @@
 #include <limits>
 #include <optional>
 #include "Printing.hpp"
+#include "MpsParser.hpp"
 
 // =============================================================
 //      min  c^T x + (1/2) x^T Q x,
@@ -30,6 +31,7 @@ public:
     PrintWhat SSN_print_what = PrintWhat::SUMMARY;
 
     Problem(){}
+    
     Problem(const SpMat& Q_, const SpMat& A_, const SpMat& B_,
             const Vec& c_, const Vec& b_,
             const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
@@ -40,7 +42,12 @@ public:
       lx(lx_), ux(ux_), lw(lw_), uw(uw_),
       tol(tol_), max_iter(max_iter_),
       PMM_print_when(PMM_print_when_), PMM_print_what(PMM_print_what_),
-      SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_)
-    {}
+      SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_) {}
 
+    Problem(const PDPMMdata<T>& pd, T tol_, int max_iter_,
+            PrintWhen PMM_print_when_, PrintWhat PMM_print_what_,
+            PrintWhen SSN_print_when_, PrintWhat SSN_print_what_)
+    : Problem(pd.Q, pd.A, pd.B, pd.c, pd.b, pd.lx, pd.ux, pd.lw, pd.uw,
+              tol_, max_iter_, PMM_print_when_, PMM_print_what_,
+              SSN_print_when_, SSN_print_what_) {}
 };
