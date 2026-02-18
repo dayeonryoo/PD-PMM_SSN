@@ -1,8 +1,6 @@
 #pragma once
-
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
-
 #include "Problem.hpp"
 #include "Solution.hpp"
 #include "SSN.hpp"

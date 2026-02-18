@@ -2,9 +2,6 @@
 #include <iostream>
 #include <vector>
 #include <chrono>
-
-#include <Eigen/Dense>
-#include <Eigen/Sparse>
 #include <Eigen/SparseCholesky>
 
 template <typename T>

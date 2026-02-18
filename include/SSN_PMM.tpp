@@ -1,14 +1,9 @@
 #pragma once
-
 #include <iostream>
 #include <algorithm>
 #include <functional>
 #include <stdexcept>
 #include <chrono>
-
-#include <Eigen/Dense>
-#include <Eigen/Sparse>
-
 #include "SSN.hpp"
 
 template <typename T>

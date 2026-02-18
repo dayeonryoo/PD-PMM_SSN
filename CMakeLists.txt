@@ -58,6 +58,9 @@ target_link_libraries(ssn_pmm_main ssn_pmm)
 add_executable(ssn_pmm_netlib src/netlib.cpp)
 target_link_libraries(ssn_pmm_netlib ssn_pmm)
 
+add_executable(mps_parser src/readingMps.cpp)
+target_link_libraries(mps_parser ssn_pmm)
+
 # ----------------------
 # COIN-OR (CoinUtils + Osi) for MPS reading
 # ----------------------
