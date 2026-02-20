@@ -56,6 +56,7 @@ public:
     SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux, lw, uw;
+    T obj_const;
 
     int n, m, l;
     int N, M;
@@ -71,19 +72,19 @@ public:
     Vec x_sol, y1_sol, z_sol;
 
     // Constant parameters
-    T tol = 1e-4;
+    T tol = 1e-6;
     int max_iter = 1e2;
     int SSN_max_iter = 1e3;
     int SSN_max_in_iter = 15;
     T reg_limit = 1e6;
-    T eps_limit = 1e-6;
+    T eps_limit = 1e-8;
     T gamma = 0.7;
 
     // Updated parameters
     T mu = 1e1;
     T rho = 1e1;
-    T eps_bcl = 1e-1;
-    T SSN_tol = 1e1;
+    T eps_bcl = 1e-3;
+    T SSN_tol = 1e-3;
     
     // Outputs:
     int opt;
@@ -103,10 +104,14 @@ public:
     SSN_PMM() {}
     SSN_PMM(const Problem<T>& problem)
     : tol(problem.tol), max_iter(problem.max_iter),
+      n(problem.n), m(problem.m), l(problem.l), obj_const(problem.obj_const),
       PMM_print_when(problem.PMM_print_when), PMM_print_what(problem.PMM_print_what),
       SSN_print_when(problem.SSN_print_when), SSN_print_what(problem.SSN_print_what)
     {
         get_Q_info(problem.Q);
+        if (n == 0 && m == 0 && l == 0) {
+            determine_dimensions(problem);
+        }
         check_dimensions(problem);
         ruiz_scaling(problem.Q, problem_Q_diag, problem.A, problem.B, problem.c, problem.b, problem.lx, problem.ux);
         set_default(problem);
@@ -116,6 +121,7 @@ public:
     }
 
     void get_Q_info(const SpMat& Q);
+    void determine_dimensions(const Problem<T>& problem);
     void check_dimensions(const Problem<T>& problem);
     void ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A, const SpMat& B, const Vec& c, const Vec& b, const Vec& lx, const Vec& ux);
     void set_L_from_LLT(const SpMat& Q);

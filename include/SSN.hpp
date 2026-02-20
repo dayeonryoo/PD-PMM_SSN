@@ -30,6 +30,7 @@ public:
     const SpMat& L, A, B;
     const Vec& D1_diag, D2_diag;
     const Vec& c, b, lx, ux, lw, uw;
+    const T obj_const;
     const int n, m, N, M, l;
     Vec x, y1, y2, z;
     Vec y1_sol, z_sol;
@@ -64,14 +65,14 @@ public:
     SSN(const int Q_info_, const Vec& Q_diag_, const SpMat& L_, const SpMat& L_tr_,
         const SpMat& A_, const SpMat& B_, const SpMat& A_tr_, const SpMat& B_tr_,
         const Vec& c_, const Vec& b_, const Vec& D1_diag_, const Vec& D2_diag_,
-        const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_,
+        const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_, const T obj_const_,
         int n_, int m_, int N_, int M_, int l_,
         T SSN_tol_, int SSN_max_in_iter_,
         PrintWhen SSN_print_when_, PrintWhat SSN_print_what_)
     : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
       A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
       c(c_), b(b_), D1_diag(D1_diag_), D2_diag(D2_diag_),
-      lx(lx_), ux(ux_), lw(lw_), uw(uw_),
+      lx(lx_), ux(ux_), lw(lw_), uw(uw_), obj_const(obj_const_),
       n(n_), m(m_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
       SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_)

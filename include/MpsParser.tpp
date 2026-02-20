@@ -66,6 +66,7 @@ PDPMMdata<T> MpsParser<T>::to_pdpmm(const ParsedModel<T>& model, T eq_tol, T inf
     pd.is_min = model.is_min;
     pd.n = model.num_cols;
 
+    pd.obj_const = -model.obj_const; // Negate since it's from RHS
     pd.c = model.c;
     pd.lx = model.col_lower;
     pd.ux = model.col_upper;
@@ -165,6 +166,9 @@ PDPMMdata<T> MpsParser<T>::to_pdpmm(const ParsedModel<T>& model, T eq_tol, T inf
 
 template <typename T>
 bool MpsParser<T>::set_section(const std::vector<std::string>& tokens) {
+    if (tokens.empty()) return false;
+    if (tokens.size() != 1) return false;
+
     const std::string& sec = tokens[0];
     if (sec == "NAME") {section_ = Section::NAME; return true;}
     else if (sec == "OBJSENSE") {section_ = Section::OBJSENSE; return true;}
@@ -175,7 +179,8 @@ bool MpsParser<T>::set_section(const std::vector<std::string>& tokens) {
     else if (sec == "BOUNDS") {section_ = Section::BOUNDS; return true;}
     else if (sec == "QUADOBJ") {section_ = Section::QUADOBJ; model_.is_qp = true; return true;}
     else if (sec == "ENDATA") {section_ = Section::ENDATA; return true;}
-    else return false; // Not a section header
+    
+    return false; // Not a section header
 }
 
 template <typename T>
@@ -310,7 +315,10 @@ void MpsParser<T>::parse_rhs(const std::vector<std::string>& tokens) {
             throw std::runtime_error("Row name in RHS section not defined in ROWS section: " + rname);
         }
         int idx = it->second.idx;
-        if (idx < 0) continue; // Ignore RHS for objective row or invalid row
+        if (idx < 0) {
+            if (it->second.type == 'N') model_.obj_const += value; // Add to objective constant if it's the objective row
+            continue;
+        }
 
         // Store the RHS value by row index
         rhs_values_[idx] = value; 
@@ -356,6 +364,8 @@ void MpsParser<T>::parse_bounds(const std::vector<std::string>& tokens) {
     
     if (tokens.size() < 2) return; // Invalid line, ignore
 
+    // const T inf = std::numeric_limits<T>::infinity();
+    const T inf = 1e20;
     const std::string& btype = tokens[0];
 
     // These bound types do not require a value
@@ -394,7 +404,6 @@ void MpsParser<T>::parse_bounds(const std::vector<std::string>& tokens) {
         throw std::runtime_error("Bound type " + btype + " requires a value in BOUNDS section.");
     }
 
-    const T inf = std::numeric_limits<T>::infinity();
     T value = T(0);
     if (!value_str.empty()) value = static_cast<T>(std::stod(value_str));
 
@@ -436,39 +445,36 @@ template <typename T>
 void MpsParser<T>::parse_quadobj(const std::vector<std::string>& tokens) {
     // Free-format QUADOBJ line: {<col_name1> <col_name2> <value>} ...
     if (tokens.size() < 3) return; // Invalid line, ignore
+    if ((tokens.size() % 3) != 0) {
+        throw std::runtime_error("QUADOBJ line does not have a multiple of 3 tokens.");
+    }
 
-    const std::string& cname1 = tokens[0];
-    const std::string& cname2 = tokens[1];
-    T value = static_cast<T>(std::stod(tokens[2]));
+    for (size_t k = 0; k + 2 < tokens.size(); k += 3) {
+        const std::string& cname1 = tokens[k];
+        const std::string& cname2 = tokens[k + 1];
+        T value = static_cast<T>(std::stod(tokens[k + 2]));
 
-    auto get_col = [&](const std::string& cname) -> int {
-        auto it = col_map_.find(cname);
-        if (it == col_map_.end()) {
-            int idx = model_.num_cols++; // Assign new index for variable
-            col_map_[cname] = idx;
-            // Ensure c is large enough to hold the coefficient for this variable
-            int c_size = model_.c.size();
-            if (c_size < model_.num_cols) {
-                model_.c.conservativeResize(model_.num_cols);
-                model_.c.segment(c_size, model_.num_cols - c_size).setZero(); // Initialize new entries to 0
-            }
-            return idx;
-        } else {
-            return it->second; // Column already exists
+        auto it1 = col_map_.find(cname1);
+        auto it2 = col_map_.find(cname2);
+        if (it1 == col_map_.end() || it2 == col_map_.end()) {
+            throw std::runtime_error(
+                "QUADOBJ references unknown column '" +
+                (it1 == col_map_.end() ? cname1 : cname2) + "'."
+            );
         }
-    };
 
-    int col_idx1 = get_col(cname1);
-    int col_idx2 = get_col(cname2);
-
-    if (col_idx1 < col_idx2) std::swap(col_idx1, col_idx2); // Store in lower triangular part
-    Q_triplets_.emplace_back(col_idx1, col_idx2, value);
+        int i = it1->second;
+        int j = it2->second;
+        if (i < j) std::swap(i, j);
+        Q_triplets_.emplace_back(i, j, value);
+    }
 }
 
 template <typename T>
 void MpsParser<T>::finalize_defaults() {
 
-    T inf = std::numeric_limits<T>::infinity();
+    T inf = 1e20;
+    // T inf = std::numeric_limits<T>::infinity();
 
     // If objective row was not defined, create a default one
     if (obj_name_.empty()) {
@@ -513,7 +519,8 @@ void MpsParser<T>::finalize_defaults() {
 
 template <typename T>
 void MpsParser<T>::finalize_row_bounds() {
-    T inf = std::numeric_limits<T>::infinity();
+    T inf = 1e20;
+    // T inf = std::numeric_limits<T>::infinity();
 
     // Build inverse map: row index -> row type
     std::vector<char> row_types(model_.num_rows, '\0'); // Default to null char for undefined rows

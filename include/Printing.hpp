@@ -11,6 +11,7 @@ inline double time_diff_ms(const std::chrono::steady_clock::time_point& start,
 
 enum class PrintWhen {
     NEVER,
+    EVERY5,
     EVERY10,
     ALWAYS,
     END_ONLY
@@ -35,6 +36,7 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                                          const Vec& y2, const Vec& z, T tol) {
         if (when == PrintWhen::NEVER) return;
         if (when == PrintWhen::END_ONLY && iter < max_iter && opt != 0) return;
+        if (when == PrintWhen::EVERY5 && iter % 5 != 0) return;
         if (when == PrintWhen::EVERY10 && iter % 10 != 0) return;
 
         if (what == PrintWhat::MINIMAL) {

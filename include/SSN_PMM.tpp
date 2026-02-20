@@ -20,9 +20,7 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
     if (Q.rows() != Q.cols()) {
         throw std::invalid_argument("Given Q is not a square matrix (n x n).");
     }
-    if (!Q.isApprox(Q.transpose(), 1e-8)) {
-        throw std::invalid_argument("Given Q is not symmetric.");
-    }
+    // Q is given as a lower triangular matrix.
 
     // Is Q = 0?
     if (Q.rows() == 0) {
@@ -40,19 +38,16 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
 
     if (Q_info == 1) {
         problem_Q_diag = Q.diagonal();
-        n = problem_Q_diag.size();
         // std::cout << "Q_info = diagonal\n";
     }
     if (Q_info == 2) {
-        n = Q.rows();
         // std::cout << "Q_info = general\n";
     }
 }
 
 template <typename T>
-void SSN_PMM<T>::check_dimensions(const Problem<T>& problem) {
-
-    // Determine n (If Q is nonzero, then n is already determined by get_Q_info().)
+void SSN_PMM<T>::determine_dimensions(const Problem<T>& problem) {
+    // Determine n
     if (Q_info == 0) {
         if (problem.c.size() != 0) {
             n = problem.c.size();
@@ -67,6 +62,10 @@ void SSN_PMM<T>::check_dimensions(const Problem<T>& problem) {
         } else {
             throw std::invalid_argument("Problem dimension n cannot be determined from the provided data.");
         }
+    } else if (Q_info == 1) {
+        n = problem_Q_diag.size();
+    } else { // Q_info == 2
+        n = Q.rows();
     }
 
     // Determine m
@@ -88,9 +87,14 @@ void SSN_PMM<T>::check_dimensions(const Problem<T>& problem) {
     } else {
         l = 0;
     }
+}
+
+template <typename T>
+void SSN_PMM<T>::check_dimensions(const Problem<T>& problem) {
 
     // Check dimensions consistency
     if (problem.c.size() != 0 && problem.c.size() != n) {
+        std::cout << "n = " << n << ", but c.size() = " << problem.c.size() << "\n";
         throw std::invalid_argument("Dimension mismatch: c should be a vector of size n.");
     }
     if ((problem.A.rows() != 0 && problem.A.rows() != m) || (problem.A.cols() != 0 && problem.A.cols() != n)) {
@@ -224,11 +228,15 @@ void SSN_PMM<T>::set_L_from_LLT(const SpMat& Q) {
     using SpMat = Eigen::SparseMatrix<T>;
     using Triplet = Eigen::Triplet<T>;
 
-    SpMat Qc = Q;
-    Qc.makeCompressed();
+    SpMat Q_full = Q.template selfadjointView<Eigen::Lower>();
+    for (int i = 0; i < Q_full.rows(); ++i) {
+        Q_full.coeffRef(i, i) += T(1e-10); // regularization for numerical stability
+    }
+    Q_full.makeCompressed();
 
     Eigen::SimplicialLDLT<SpMat> ldlt;
-    ldlt.compute(Qc);
+    ldlt.compute(Q_full);
+    auto P = ldlt.permutationP();
 
     if (ldlt.info() != Eigen::Success) {
         throw std::runtime_error("LDLT factorization on Q failed. Q is possibly singular.");
@@ -259,7 +267,7 @@ void SSN_PMM<T>::set_L_from_LLT(const SpMat& Q) {
     D_sqrt.setFromTriplets(trip.begin(), trip.end());
 
     SpMat L_D = ldlt.matrixL(); // lower triangular from LDL^T
-    L = L_D * D_sqrt; // lower triangular from LL^T
+    L = P.transpose() * L_D * D_sqrt; // lower triangular from LL^T
     L_tr = L.transpose();
     
 }
@@ -269,7 +277,8 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
     using SpMat   = Eigen::SparseMatrix<T>;
     using Triplet = Eigen::Triplet<T>;
 
-    T inf = std::numeric_limits<T>::infinity();
+    // T inf = std::numeric_limits<T>::infinity();
+    T inf = 1e20;
 
     if (Q_info == 2) {
         N = 2 * n;
@@ -453,6 +462,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms() {
 
 template <typename T>
 typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
+
     // Primal residual norm
     T res_p;
     if (m > 0) res_p = inf_norm(A * x - b) / (1 + inf_norm(b));
@@ -484,11 +494,9 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
 
 template <typename T>
 T SSN_PMM<T>::objective_value(const Vec& x) {
-    T obj_val;
-    if (Q_info == 0) {
-        obj_val = c.dot(x);
-    } else {
-        obj_val = c.dot(x) + T(0.5) * Q_diag.cwiseProduct(x).dot(x);
+    T obj_val = obj_const + c.dot(x);
+    if (Q_info != 0) {
+        obj_val += T(0.5) * Q_diag.cwiseProduct(x).dot(x);
     }
     return obj_val;
 }
@@ -547,14 +555,14 @@ void SSN_PMM<T>::update_with_bcl(const T p, const Vec& y2_hat) {
         mu = std::min(reg_limit, 1.05 * mu);
         rho = std::min(reg_limit, 1.05 * rho);
         eps_bcl = std::max(eps_limit, eps_bcl / std::pow(mu, 0.5));
-        SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.1));
+        SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.5));
     } else {
         // Reject y2 from SSN; increase mu and rho; reset eps
         // std::cout << "  SSN result rejected.\n";
         mu = std::min(reg_limit, 1.2 * mu);
         rho = std::min(reg_limit, 1.2 * rho);
-        eps_bcl = std::max(eps_limit, 1 / std::pow(mu, 0.1));
-        SSN_tol = std::max(eps_limit, 1 / std::pow(mu, 0.1));
+        eps_bcl = std::max(eps_limit, 1 / std::pow(mu, 0.5));
+        SSN_tol = std::max(eps_limit, 1 / std::pow(mu, 0.5));
     }
 }
 
@@ -562,6 +570,7 @@ template <typename T>
 void SSN_PMM<T>::print_params(const int iter) {
     if (PMM_print_when == PrintWhen::NEVER) return;
     if (PMM_print_when == PrintWhen::END_ONLY && iter < max_iter - 1) return;
+    if (PMM_print_when == PrintWhen::EVERY5 && iter % 5 != 0) return;
     if (PMM_print_when == PrintWhen::EVERY10 && iter % 10 != 0) return;
 
     std::cout << "  mu = " << mu << ", rho = " << rho
@@ -570,6 +579,7 @@ void SSN_PMM<T>::print_params(const int iter) {
 
 template <typename T>
 Solution<T> SSN_PMM<T>::solve() {
+
     // Initialize variables
     opt = -1;
     PMM_iter = 0;
@@ -579,7 +589,7 @@ Solution<T> SSN_PMM<T>::solve() {
     // Build the Newton system
     SSN<T> NS(Q_info, Q_diag, L, L_tr,
             A, B, A_tr, B_tr, c, b, D1_diag, D2_diag,
-            lx, ux, lw, uw, n, m, N, M, l,
+            lx, ux, lw, uw, obj_const, n, m, N, M, l,
             SSN_tol, SSN_max_in_iter,
             SSN_print_when, SSN_print_what);
 

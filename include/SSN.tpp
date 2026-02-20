@@ -6,7 +6,7 @@
 
 template <typename T>
 T SSN<T>::get_obj_val(const Vec& x) {
-    T obj_val = c.dot(x);
+    T obj_val = obj_const + c.dot(x);
     if (Q_info != 0) {
         obj_val += T(0.5) * Q_diag.cwiseProduct(x).dot(x);
     }

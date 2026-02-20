@@ -38,25 +38,31 @@ struct NetlibTestResult {
     double solving_time_sec;
 };
 
-void write_csv_header(const std::string& path) {
-    namespace fs = std::filesystem;
-    if (!fs::exists(fs::path(path)) || fs::is_empty(fs::path(path))) {
-        std::ofstream csv(path);
-        csv << "name,rel_agree,rel_err,opt_status,obj_val,"
-            << "PMM_iter,SSN_iter,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec\n";
+void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
+    std::cout << "\nChecking feasibility of solution x from PMM_SSN solver:\n";
+    std::cout << "  ||Ax - b||_2 = ";
+    if (pd.A.rows() == 0) std::cout << "0 (m = 0)\n";
+    else std::cout << (pd.A * x - pd.b).norm() << "\n";
+    std::cout << "  ||Ax - b||_inf = ";
+    if (pd.A.rows() == 0) std::cout << "0 (m = 0)\n";
+    else std::cout << (pd.A * x - pd.b).cwiseAbs().maxCoeff() << "\n";
+
+    std::cout << "\n  Elements of x outside bounds:\n";
+    for (int i = 0; i < pd.c.size(); ++i) {
+        if (x[i] < pd.lx[i] - tol || x[i] > pd.ux[i] + tol) {
+            std::cout << "      Variable " << i << " out of bounds: x = " << x[i]
+                      << ", [" << pd.lx[i] << ", " << pd.ux[i] << "]\n";
+        }
+    }
+    std::cout << "\n  Elements of Bx outside bounds:\n";
+    for (int i = 0; i < pd.lw.size(); ++i) {
+        T Bx_i = (pd.B * x)[i];
+        if (Bx_i < pd.lw[i] - tol || Bx_i > pd.uw[i] + tol) {
+            std::cout << "      Variable " << i << " out of bounds: Bx = " << Bx_i
+                      << ", [" << pd.lw[i] << ", " << pd.uw[i] << "]\n";
+        }
     }
 }
-
-void append_csv_result(const std::string& path, const NetlibTestResult& r) {
-    std::ofstream csv(path, std::ios::out | std::ios::app);
-    csv << r.name << "," << (r.rel_agree ? "1" : "0") << "," << r.rel_err << ","
-        << r.opt_status << "," << r.obj_val << ","
-        << r.PMM_iter << "," << r.SSN_iter << ","
-        << r.PMM_tol_achieved << "," << r.SSN_tol_achieved << ","
-        << r.solving_time_sec << "\n";
-    csv.close();
-}
-
 
 int main() {
 
@@ -111,28 +117,29 @@ int main() {
     if (agree) std::cout << "\nCORRECT! Relative error = " << err << "\n";
     else std::cout << "\nIncorrect. Relative error = " << err << "\n";
 
-    // std::cout << "\nChecking feasibility of solution x from PMM_SSN solver:\n";
-    // std::cout << "  ||Ax - b||_inf = ";
-    // if (prob.A.rows() == 0) std::cout << "0 (m = 0)\n";
-    // else std::cout << (prob.A * sol.x - prob.b).cwiseAbs().maxCoeff() << "\n";
-
-    // std::cout << "\n  Elements of x outside bounds:\n";
-    // for (int i = 0; i < prob.c.size(); ++i) {
-    //     if (sol.x[i] < prob.lx[i] - tol || sol.x[i] > prob.ux[i] + tol) {
-    //         std::cout << "      Variable " << i << " out of bounds: x = " << sol.x[i]
-    //                   << ", [" << prob.lx[i] << ", " << prob.ux[i] << "]\n";
-    //     }
-    // }
-    // std::cout << "\n  Elements of Bx outside bounds:\n";
-    // for (int i = 0; i < prob.lw.size(); ++i) {
-    //     T Bx_i = (prob.B * sol.x)[i];
-    //     if (Bx_i < prob.lw[i] - tol || Bx_i > prob.uw[i] + tol) {
-    //         std::cout << "      Variable " << i << " out of bounds: Bx = " << Bx_i
-    //                   << ", [" << prob.lw[i] << ", " << prob.uw[i] << "]\n";
-    //     }
-    // }
+    // Check feasibility
+    // print_feasibility(pd, sol.x, tol);
 
     return 0;
+}
+
+void write_csv_header(const std::string& path) {
+    namespace fs = std::filesystem;
+    if (!fs::exists(fs::path(path)) || fs::is_empty(fs::path(path))) {
+        std::ofstream csv(path);
+        csv << "name,rel_agree,rel_err,opt_status,obj_val,"
+            << "PMM_iter,SSN_iter,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec\n";
+    }
+}
+
+void append_csv_result(const std::string& path, const NetlibTestResult& r) {
+    std::ofstream csv(path, std::ios::out | std::ios::app);
+    csv << r.name << "," << (r.rel_agree ? "1" : "0") << "," << r.rel_err << ","
+        << r.opt_status << "," << r.obj_val << ","
+        << r.PMM_iter << "," << r.SSN_iter << ","
+        << r.PMM_tol_achieved << "," << r.SSN_tol_achieved << ","
+        << r.solving_time_sec << "\n";
+    csv.close();
 }
 
 /*

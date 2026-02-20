@@ -22,6 +22,7 @@ struct ParsedModel {
     int num_cols = 0; // number of variables
 
     Vec c; // objective coefficients
+    T obj_const = T(0); // objective constant term
     SpMat A; // constraint matrix
     SpMat Q; // quadratic coefficients (for QP; store lower triangular part only)
     Vec row_lower, row_upper; // constraint bounds
@@ -40,6 +41,7 @@ struct PDPMMdata {
     SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux, lw, uw;
+    T obj_const = T(0);
 };
 
 template <typename T>

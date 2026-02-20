@@ -28,8 +28,7 @@ int main() {
 */
 
 int main() {
-
-    /*
+/*
     MpsParser<T> parser;
     std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/CYCLE.mps";
     ParsedModel<T> model = parser.parse(filename);
@@ -57,8 +56,8 @@ int main() {
         std::cerr << "Number of nonzeros in A mismatch! Parsed: " << model.A.nonZeros()
                   << "; HiGHS: " << lp.a_matrix_.value_.size() << "\n";
     }
-    */
-
+*/
+/*
     std::cout << "Testing MPS parser on Netlib problems...\n";
     // Filenames of Netlib test problems (without .mps extension)
     std::vector<std::string> netlib_names = {"25FV47","80BAU3B","ADLITTLE","AFIRO","AGG","AGG2","AGG3","BANDM","BEACONFD","BLEND","BNL1","BNL2","BOEING1","BOEING2","BORE3D","BRANDY","CAPRI","CYCLE","CZPROB","D2Q06C","D6CUBE","DEGEN2","DEGEN3","DFL001",
@@ -111,6 +110,26 @@ int main() {
         }
     }
     std::cout << "Testing completed.\n";
-    
+*/
+
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros-meszaros/CVXQP2_M.SIF";
+
+    MpsParser<T> parser;
+    ParsedModel<T> model = parser.parse(filename);
+    std::cout << "Parsed model from " << filename << ":\n";
+    std::cout << "  Number of rows: " << model.num_rows << "\n";
+    std::cout << "  Number of cols: " << model.num_cols << "\n";
+    std::cout << "  Number of nonzeros in A: " << model.A.nonZeros() << "\n";
+    int Q_diag_nonzeros = 0;
+    for (int i = 0; i < model.Q.rows(); ++i) {
+        for (SpMat::InnerIterator it(model.Q, i); it; ++it) {
+            if (it.row() == it.col()) {
+                ++Q_diag_nonzeros;
+            }
+        }
+    }
+    std::cout << "  Number of diagonal nonzeros in Q: " << Q_diag_nonzeros << "\n";
+    std::cout << "  Number of off-diagonal nonzeros in Q: " << model.Q.nonZeros() - Q_diag_nonzeros << "\n";
+
     return 0;
 }
