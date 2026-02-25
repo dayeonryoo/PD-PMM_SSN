@@ -179,15 +179,17 @@ void SSN<T>::build_B_active_inactive(const SpMat& B, const BoolArr& active, SpMa
 }
 
 template <typename T>
-void SSN<T>::scale_columns(SpMat& M, const Vec& d) {
+typename SSN<T>::SpMat SSN<T>::scale_columns(const SpMat& M, const Vec& d) {
     assert(M.cols() == d.size());
 
-    for (int j = 0; j < M.outerSize(); ++j) {
+    SpMat M_scaled = M;
+    for (int j = 0; j < M_scaled.outerSize(); ++j) {
         T scale = d(j);
-        for (typename SpMat::InnerIterator it(M, j); it; ++it) {
+        for (typename SpMat::InnerIterator it(M_scaled, j); it; ++it) {
             it.valueRef() *= scale;
         }
     }
+    return M_scaled;
 }
 
 template <typename T>
@@ -237,26 +239,102 @@ typename SSN<T>::Vec SSN<T>::retrive_row_order(const Vec& u_sel, const Vec& u_un
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::solve_via_chol(const SpMat& M, const Vec& r) {
+typename SSN<T>::Vec SSN<T>::solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
 
-    assert(M.rows() == M.cols());
-    assert(M.rows() == r.size());
-    
+    const int s = G.rows();
+    const int n = G.cols();
+
+    // Compute the Schur complement of J (self-adjoint and PD)
+    // Schur = G H_inv G^T + D, where D = 1/mu I_{m + n_active_W}
+    SpMat GH_inv = scale_columns(G, H_diag_inv);
+    SpMat Schur = GH_inv * G_tr; 
+    for (int i = 0; i < M + n_active_W; ++i) {
+        Schur.coeffRef(i, i) += 1 / mu;
+    }
+    Schur.makeCompressed();
+
+    // Compute the rhs = G * H_inv * r1 + r2.
+    Vec rhs = GH_inv * r1 + r2;
+
+    // Solve: Schur * dy_ = rhs, where dy_ = [dλ; dy2_active].
     Eigen::SimplicialLLT<SpMat> chol;
-    chol.compute(M);
+    chol.compute(Schur);
     if (chol.info() != Eigen::Success) {
         throw std::runtime_error("Cholesky factorization failed");
     }
-
-    Vec sol = chol.solve(r);
+    Vec dy_ = chol.solve(rhs);
     if (chol.info() != Eigen::Success) {
         throw std::runtime_error("Solving linear system via Cholesky failed");
     }
 
-    return sol;
+    // Retrive dx
+    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
+
+    Vec dxdy_(n + s); 
+    dxdy_.head(n) = dx;
+    dxdy_.tail(s) = dy_;
+    return dxdy_;
 }
+
+template <typename T>
+typename SSN<T>::Vec SSN<T>::solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2) {
+    using Vec = typename SSN<T>::Vec;
+    using SpMat = typename SSN<T>::SpMat;
+    using Triplet = typename SSN<T>::Triplet;
+
+    const int s = G.rows();
+    const int n = G.cols();
+    const int N_tot = n + s;
+
+    // Form M = [-H, G^T; G, 1/mu]
+    std::vector<Triplet> trip;
+    trip.reserve(N_tot + 2 * G.nonZeros());
+
+    // Top-left block: -H_inv
+    for (int i = 0; i < n; ++i) {
+        const T val = -H_diag(i);
+        if (val != T(0)) trip.emplace_back(i, i, val);
+    }
+    // Bottom-right block: 1 / mu
+    const T mu_inv = T(1) / mu;
+    for (int i = 0; i < s; ++i) {
+        trip.emplace_back(n + i, n + i, mu_inv);
+    }
+    // Off-diagonal blocks: G and G^T
+    for (int col = 0; col < G.outerSize(); ++col) {
+        for (typename SpMat::InnerIterator it(G, col); it; ++it) {
+            const int i = it.row();
+            const int j = it.col();
+            const T val = it.value();
+
+            trip.emplace_back(n + i, j, val);
+            trip.emplace_back(j, n + i, val);
+        }
+    }
+    SpMat K(N_tot, N_tot);
+    K.setFromTriplets(trip.begin(), trip.end());
+    K.makeCompressed();
+
+    // From RHS vector
+    Vec rhs(N_tot);
+    rhs << r1, r2;
+
+    // Solve using LDLT
+    Eigen::SimplicialLDLT<SpMat> ldlt;
+    ldlt.compute(K);
+    if (ldlt.info() != Eigen::Success) {
+        throw std::runtime_error("LDLT factorization of the augmented Lagrangian system failed.");
+    }
+    Vec dxdy_ = ldlt.solve(rhs);
+    if (ldlt.info() != Eigen::Success) {
+        throw std::runtime_error("Solving the augmented Lagrangian system via LDLT failed.");
+    }
+
+    return dxdy_; // [dx; dy_]
+}
+
 
 template <typename T>
 T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
@@ -282,11 +360,15 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
 
         if (L_new <= L + beta * alpha * grad_desc) break;
 
-        m += 50;
+        m += 10;
         alpha = pow(delta, m);
-        if (alpha < 1e-7) break; // Lower bound on alpha 
+        
+        if (alpha < 1e-7) { // Lower bound on alpha
+            std::cout << "  SSN: Backtracking linesearch failed.\n";
+            alpha = T(0);
+            break;
+        }
     }
-
     return alpha;
 }
 
@@ -419,38 +501,20 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
                  - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W
                  + (result.x - x) / rho;
         }
-        
         Vec r2(M + n_active_W);
         r2.head(M) = y1 / mu - A * result.x + b;
         r2.tail(n_active_W) = -dist_W_v_active_W - (gamma / mu) * y2_active_W;
 
-        // Compute the Schur complement of J (self-adjoint and PD)
-        // Schur = G H_inv G^T + D, where D = 1/mu I_{m + n_active_W}
-        SpMat GH_inv = G; 
-        scale_columns(GH_inv, H_diag_inv);
-        SpMat Schur = GH_inv * G_tr; 
-        for (int i = 0; i < M + n_active_W; ++i) {
-            Schur.coeffRef(i, i) += 1 / mu;
+        // Solve for dx and dy2_active_W
+        Vec dxdy_;
+        if (more_rows_than_cols) {
+            dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
+        } else {
+            dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
         }
-        Schur.makeCompressed();
 
-        // Solve: Schur * dy_ = G * H_inv * r1 + r2, where dy_ = [dy1; dy2_active].
-        Vec H_inv_r1 = H_diag_inv.cwiseProduct(r1);
-        Vec rhs = G * H_inv_r1 + r2;
-        auto t1_chol_prep = std::chrono::steady_clock::now();
-        double timer_chol_prep = time_diff_ms(t0_chol_prep, t1_chol_prep);
-        // std::cout << "  Prep for Cholesky decomposition took " << timer_chol_prep << " ms.\n";
-
-        // ========== Perform Cholesky decomposition ==========
-        auto t0_chol = std::chrono::steady_clock::now(); // TIMER FOR CHOL DECOMP
-        Vec dy_ = solve_via_chol(Schur, rhs);
-        auto t1_chol = std::chrono::steady_clock::now();
-        double timer_chol = time_diff_ms(t0_chol, t1_chol);
-        // std::cout << "  Cholesky decomposition took " << timer_chol << " ms.\n";
-
-        // Retrive dx and dy2
-        Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
-        Vec dy2_active_W = dy_.tail(n_active_W);
+        Vec dx = dxdy_.head(N);
+        Vec dy2_active_W = dxdy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
         // ========== Backtracking linesearch ==========
@@ -458,15 +522,28 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Backtracking linesearch to find a Newton step size alpha
         T alpha;
-        alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
+        if (result.SSN_in_iter == 1) alpha = 0.995;
+        else alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
 
         auto t1_alpha = std::chrono::steady_clock::now();
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Backtracking linesearch took " << timer_alpha << " ms.\n";
 
         // ========== Update x and y2 ==========
-        result.x += alpha * dx;
-        result.y2 += alpha * dy2;
+        if (alpha == 0) { // If linesearch fails,
+            // 1. use gradient descent to update x and y2.
+            // std::cout << "GD applied: ||grad_x|| = " << grad_L.head(N).norm() << "||grad_y2|| = " << grad_L.tail(l).norm() << "\n";
+            // T stepsize = 1e-7;
+            // result.x -= stepsize * grad_L.head(N);
+            // result.y2 -= stepsize * grad_L.tail(l);
+
+            // 2. Terminate and discard; come back with smaller mu and rho.
+            result.SSN_opt = 3; // means linesearch failure
+            break;
+        } else {
+            result.x += alpha * dx;
+            result.y2 += alpha * dy2;
+        }
 
         auto t1_ssn = std::chrono::steady_clock::now();
         double timer_ssn = time_diff_ms(t0_ssn, t1_ssn);
@@ -474,11 +551,14 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
     }
 
-    if (result.SSN_opt != 0) {
+    if (result.SSN_opt == -1) {
         result.SSN_opt = 2; // Maximum number of SSN inner iterations reached without convergence
         // Modify x for printing. (This modification is not saved as SSN result.)
         x_sol = printable_x(result.x);
         result.obj_val = get_obj_val(result.x);
+        printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
+    } else if (result.SSN_opt == 3) {
+        // Backtracking linesearch failed.
         printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
     }
 

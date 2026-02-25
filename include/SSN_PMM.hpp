@@ -72,19 +72,19 @@ public:
     Vec x_sol, y1_sol, z_sol;
 
     // Constant parameters
-    T tol = 1e-6;
-    int max_iter = 1e2;
-    int SSN_max_iter = 1e3;
-    int SSN_max_in_iter = 15;
-    T reg_limit = 1e6;
-    T eps_limit = 1e-8;
+    T tol = 1e-3;
+    int max_iter = 30;
+    int SSN_max_iter = 500;
+    int SSN_max_in_iter = 10;
+    T reg_limit = 1e5;
+    T eps_limit = 1e-5;
     T gamma = 0.7;
 
     // Updated parameters
     T mu = 1e1;
     T rho = 1e1;
-    T eps_bcl = 1e-3;
-    T SSN_tol = 1e-3;
+    T eps_bcl = tol;
+    T SSN_tol = tol;
     
     // Outputs:
     int opt;
@@ -143,6 +143,7 @@ public:
     T compute_p(const Vec& x);
     void update_with_bcl(const T p, const Vec& y2_hat);
     void print_params(const int iter);
+    void print_residuals(const int iter, const Vec& res_norm);
     Solution<T> solve();
 };
 

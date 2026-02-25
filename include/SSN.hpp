@@ -49,6 +49,7 @@ public:
     BoolArr active_W, inactive_W;
     int n_active_W, n_inactive_W;
     SpMat B_active_W, B_inactive_W, G, G_tr;
+    bool more_rows_than_cols = M > N || l > N;
 
     // Outputs
     int SSN_in_iter;
@@ -109,10 +110,11 @@ public:
     bool is_P_unchanged(const Vec& diag_P, const Vec& new_diag_P);
     void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
     void build_B_active_inactive(const SpMat& B, const BoolArr& mask, SpMat& B_active, SpMat& B_inactive);
-    void scale_columns(SpMat& M, const Vec& d);
+    SpMat scale_columns(const SpMat& M, const Vec& d);
     Vec retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
-    Vec solve_via_chol(const SpMat& M, const Vec& r);
+    Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
+    Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     SSN_result<T> solve_SSN(const T eps);
 

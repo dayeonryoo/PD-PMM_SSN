@@ -552,19 +552,20 @@ void SSN_PMM<T>::update_with_bcl(const T p, const Vec& y2_hat) {
         // Accept y2 from SSN; keep mu and rho unchanged; fast decrease eps
         // std::cout << "  SSN result accepted.\n";
         y2 = y2_hat;
-        mu = std::min(reg_limit, 1.05 * mu);
-        rho = std::min(reg_limit, 1.05 * rho);
-        eps_bcl = std::max(eps_limit, eps_bcl / std::pow(mu, 0.5));
-        SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.5));
+        mu = std::min(reg_limit, 1.3 * mu);
+        rho = std::min(reg_limit, 1.3 * rho);
+        eps_bcl = std::max(eps_limit, eps_bcl / std::pow(mu, 0.3));
+        SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.3));
     } else {
         // Reject y2 from SSN; increase mu and rho; reset eps
-        // std::cout << "  SSN result rejected.\n";
-        mu = std::min(reg_limit, 1.2 * mu);
-        rho = std::min(reg_limit, 1.2 * rho);
-        eps_bcl = std::max(eps_limit, 1 / std::pow(mu, 0.5));
-        SSN_tol = std::max(eps_limit, 1 / std::pow(mu, 0.5));
+        std::cout << "  SSN result rejected: p = " << p << "\n";
+        mu = std::min(reg_limit, 1.8 * mu);
+        rho = std::min(reg_limit, 1.8 * rho);
+        eps_bcl = std::max(eps_limit, 1 / std::pow(mu, 0.1));
+        SSN_tol = std::max(eps_limit, 1 / std::pow(mu, 0.1));
     }
 }
+
 
 template <typename T>
 void SSN_PMM<T>::print_params(const int iter) {
@@ -575,6 +576,17 @@ void SSN_PMM<T>::print_params(const int iter) {
 
     std::cout << "  mu = " << mu << ", rho = " << rho
               << ", eps = " << SSN_tol << ", eps_bcl = " << eps_bcl << "\n";
+}
+
+template <typename T>
+void SSN_PMM<T>::print_residuals(const int iter, const Vec& res_norm) {
+    if (PMM_print_when == PrintWhen::NEVER) return;
+    if (PMM_print_when == PrintWhen::END_ONLY && iter < max_iter - 1) return;
+    if (PMM_print_when == PrintWhen::EVERY5 && iter % 5 != 0) return;
+    if (PMM_print_when == PrintWhen::EVERY10 && iter % 10 != 0) return;
+
+    std::cout << "  res_p = " << res_norm(0) << ", res_d = " << res_norm(1)
+              << ", compl_x = " << res_norm(2) << ", compl_w = " << res_norm(3) << "\n";
 }
 
 template <typename T>
@@ -595,6 +607,10 @@ Solution<T> SSN_PMM<T>::solve() {
 
     // Initialize printing functions
     auto printer = make_print_function<T, Vec>(PMM_print_label, PMM_print_when, PMM_print_what, max_iter);
+
+    std::cout << "n = " << N << ", m = " << M << ", l = " << l << "\n";
+    if (M > N || l > N) std::cout << "Solving via LDLT on augmented Lagrangian system.\n";
+    else std::cout << "Solving via forming Schur complement.\n";
 
     // SSN-PMM main loop
     while (PMM_iter < max_iter) {
@@ -625,6 +641,7 @@ Solution<T> SSN_PMM<T>::solve() {
         if (PMM_tol_achieved < tol) {
             opt = 0; // Optimal solution found
             printer(PMM_iter, opt, obj_val, x_sol, y1_sol, y2, z_sol, PMM_tol_achieved);
+            print_residuals(PMM_iter, res_norms);
             print_params(PMM_iter);
             break;
         }
@@ -632,6 +649,7 @@ Solution<T> SSN_PMM<T>::solve() {
         // Print current iteration info
         if (PMM_iter < max_iter) {
             printer(PMM_iter, opt, obj_val, x_sol, y1_sol, y2, z_sol, PMM_tol_achieved);
+            print_residuals(PMM_iter, res_norms);
             print_params(PMM_iter);
         }
 
@@ -640,20 +658,29 @@ Solution<T> SSN_PMM<T>::solve() {
         // Update the Newton system.
         NS.update_SSN_system(x, y1, y2, z, y1_sol, z_sol, mu, rho, gamma);
 
-        // Call semismooth Newton method to update x and y2_hat
+        // Call semismooth Newton method
         SSN_result<T> NS_solution = NS.solve_SSN(SSN_tol);
-        x = NS_solution.x;
-        y2_hat = NS_solution.y2;
 
         SSN_iter += NS_solution.SSN_in_iter;
         SSN_tol_achieved = NS_solution.SSN_tol_achieved;
 
-        // If SSN was not successful, discard the recent SSN and return solution from previous PMM iter.
+        // If SSN was not successful, discard the recent SSN and revert to solution from previous PMM iter.
         if (SSN_iter >= SSN_max_iter) {
             opt = 2;
             printer(PMM_iter, opt, obj_val, x_sol, y1_sol, y2, z_sol, PMM_tol_achieved);
+            print_residuals(PMM_iter, res_norms);
+            print_params(PMM_iter);
             break;
-        }
+        } else if (NS_solution.SSN_opt == 3) {
+            std::cout << "  PMM: Retrying with adjusted mu and rho.\n";
+            opt = 3;
+            mu *= 0.80; rho *= 0.80;
+            continue;
+        } 
+
+        // Update x and store candidate y2.
+        x = NS_solution.x;
+        y2_hat = NS_solution.y2;
 
         // L_inf primal feasibility violation corresponding to lw <= Bx <= uw
         T p = compute_p(x);
