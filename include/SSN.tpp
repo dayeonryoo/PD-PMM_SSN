@@ -505,13 +505,21 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         r2.head(M) = y1 / mu - A * result.x + b;
         r2.tail(n_active_W) = -dist_W_v_active_W - (gamma / mu) * y2_active_W;
 
+        auto t1_chol_prep = std::chrono::steady_clock::now();
+        double timer_chol_prep = time_diff_ms(t0_chol_prep, t1_chol_prep);
+        // std::cout << "  Prep to solve SSN system took " << timer_chol_prep << " ms.\n";
+
         // Solve for dx and dy2_active_W
+        auto t0_solve_lin_sys = std::chrono::steady_clock::now();
         Vec dxdy_;
         if (more_rows_than_cols) {
             dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
         } else {
             dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
         }
+        auto t1_solve_lin_sys = std::chrono::steady_clock::now();
+        double timer_solve_line_sys = time_diff_ms(t0_solve_lin_sys, t1_solve_lin_sys);
+        // std::cout << "  Solving SSN system took " << timer_solve_line_sys << " ms.\n";
 
         Vec dx = dxdy_.head(N);
         Vec dy2_active_W = dxdy_.tail(n_active_W);
@@ -531,15 +539,19 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // ========== Update x and y2 ==========
         if (alpha == 0) { // If linesearch fails,
-            // 1. use gradient descent to update x and y2.
+            // Option 1. Use gradient descent to update x and y2.
             // std::cout << "GD applied: ||grad_x|| = " << grad_L.head(N).norm() << "||grad_y2|| = " << grad_L.tail(l).norm() << "\n";
             // T stepsize = 1e-7;
             // result.x -= stepsize * grad_L.head(N);
             // result.y2 -= stepsize * grad_L.tail(l);
 
-            // 2. Terminate and discard; come back with smaller mu and rho.
+            // Option 2. Terminate and discard; come back with smaller mu and rho.
             result.SSN_opt = 3; // means linesearch failure
             break;
+
+            // Option 3. Just carry on with alpha = 1e-7
+            // result.x += 1e-7 * dx;
+            // result.y2 += 1e-7 * dy2;
         } else {
             result.x += alpha * dx;
             result.y2 += alpha * dy2;

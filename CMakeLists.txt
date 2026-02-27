@@ -64,6 +64,9 @@ target_link_libraries(mps_parser ssn_pmm)
 add_executable(ssn_pmm_maros_meszaros src/maros_meszaros.cpp)
 target_link_libraries(ssn_pmm_maros_meszaros ssn_pmm)
 
+add_executable(ssn_pmm_pde src/PDE.cpp)
+target_link_libraries(ssn_pmm_pde ssn_pmm)
+
 # ----------------------
 # COIN-OR (CoinUtils + Osi) for MPS reading
 # ----------------------

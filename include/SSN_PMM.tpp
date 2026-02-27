@@ -552,20 +552,19 @@ void SSN_PMM<T>::update_with_bcl(const T p, const Vec& y2_hat) {
         // Accept y2 from SSN; keep mu and rho unchanged; fast decrease eps
         // std::cout << "  SSN result accepted.\n";
         y2 = y2_hat;
-        mu = std::min(reg_limit, 1.3 * mu);
-        rho = std::min(reg_limit, 1.3 * rho);
-        eps_bcl = std::max(eps_limit, eps_bcl / std::pow(mu, 0.3));
-        SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.3));
+        mu = std::min(reg_limit, 1.1 * mu);
+        rho = std::min(reg_limit, 1.1 * rho);
+        eps_bcl = std::max(eps_limit, eps_bcl / std::pow(mu, 0.9));
+        SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.1));
     } else {
         // Reject y2 from SSN; increase mu and rho; reset eps
         std::cout << "  SSN result rejected: p = " << p << "\n";
-        mu = std::min(reg_limit, 1.8 * mu);
-        rho = std::min(reg_limit, 1.8 * rho);
-        eps_bcl = std::max(eps_limit, 1 / std::pow(mu, 0.1));
+        mu = std::min(reg_limit, 1.5 * mu);
+        rho = std::min(reg_limit, 1.5 * rho);
+        eps_bcl = std::max(eps_limit, 1 / std::pow(mu, 0.09));
         SSN_tol = std::max(eps_limit, 1 / std::pow(mu, 0.1));
     }
 }
-
 
 template <typename T>
 void SSN_PMM<T>::print_params(const int iter) {
@@ -664,19 +663,20 @@ Solution<T> SSN_PMM<T>::solve() {
         SSN_iter += NS_solution.SSN_in_iter;
         SSN_tol_achieved = NS_solution.SSN_tol_achieved;
 
-        // If SSN was not successful, discard the recent SSN and revert to solution from previous PMM iter.
-        if (SSN_iter >= SSN_max_iter) {
+        // If SSN was not "successful", discard the recent SSN and revert to solution from previous PMM iter.
+        if (SSN_iter >= SSN_max_iter) { // Max total SSN iteration is reached
             opt = 2;
             printer(PMM_iter, opt, obj_val, x_sol, y1_sol, y2, z_sol, PMM_tol_achieved);
             print_residuals(PMM_iter, res_norms);
             print_params(PMM_iter);
             break;
-        } else if (NS_solution.SSN_opt == 3) {
+        } else if (NS_solution.SSN_opt == 3) { // Backtracking linesearch failed
             std::cout << "  PMM: Retrying with adjusted mu and rho.\n";
             opt = 3;
-            mu *= 0.80; rho *= 0.80;
+            mu *= 0.2;
+            rho *= 0.2;
             continue;
-        } 
+        }
 
         // Update x and store candidate y2.
         x = NS_solution.x;
@@ -706,7 +706,7 @@ Solution<T> SSN_PMM<T>::solve() {
     }
 
     // Check if max number of PMM iterations is reached
-    if (opt == -1) {
+    if (opt != 0) {
         opt = 1; // Maximum number of PMM iterations reached
         printer(PMM_iter, opt, obj_val, x_sol, y1_sol, y2, z_sol, PMM_tol_achieved);
         print_params(PMM_iter);

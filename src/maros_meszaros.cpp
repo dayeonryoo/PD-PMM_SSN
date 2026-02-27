@@ -55,8 +55,9 @@ void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
         }
     }
     std::cout << "\n  Elements of Bx outside bounds:\n";
+    Vec Bx = pd.B * x;
     for (int i = 0; i < pd.lw.size(); ++i) {
-        T Bx_i = (pd.B * x)[i];
+        T Bx_i = Bx[i];
         if (Bx_i < pd.lw[i] - tol || Bx_i > pd.uw[i] + tol) {
             std::cout << "      Variable " << i << " out of bounds: Bx = " << Bx_i
                       << ", [" << pd.lw[i] << ", " << pd.uw[i] << "]\n";
@@ -64,21 +65,21 @@ void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
     }
 }
 
-/*
+
 int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     
-    // PMM tol (res_d) doesn't get below ~0.008 and struggles, then it jumps up and diverge.
-    std::string name = "QE226"; 
-    T obj_val = 2.1265343e+02;
+    // std::string name = "QE226"; 
+    // T obj_val = 2.1265343e+02;
 
-    // p (compl_w) is large so y2 never gets updated.
     // std::string name = "QISRAEL";
     // T obj_val = 2.5347838e+07;
 
-    // p (compl_w) is large so y2 never gets updated.
     // std::string name = "QCAPRI";
     // T obj_val = 6.6793293e+07;
+
+    std::string name = "DPKLO1";
+    T obj_val = 3.7009622e-01;
 
     std::string filename = root + name + ".SIF";
 
@@ -88,7 +89,7 @@ int main() {
     ParsedModel<T> model = parser.parse(filename);
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
-    T tol = 1e-3;
+    T tol = 1e-4;
     int max_iter = 30;
     PrintWhen PMM_print_when = PrintWhen::ALWAYS;
     PrintWhat PMM_print_what = PrintWhat::MINIMAL;
@@ -106,7 +107,7 @@ int main() {
     std::cout << "\nPMM solver took " << elapsed.count() << " s.\n";
 
     // Check feasibility
-    // print_feasibility(pd, sol.x, tol);
+    print_feasibility(pd, sol.x, tol);
 
     // Compare with reference objective value
     T abs_error = std::abs(sol.obj_val - obj_val);
@@ -120,7 +121,7 @@ int main() {
 
     return 0;
 }
-*/
+
 
 void write_csv_header(const std::string& path) {
     namespace fs = std::filesystem;
@@ -143,7 +144,7 @@ void append_csv_result(const std::string& path, const MarosMeszarosTestResult& r
     csv.close();
 }
 
-
+/*
 int main() {
     
     // Filenames and objective values of Maros/Meszaros QPs
@@ -291,15 +292,15 @@ int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
 
     // Parameters
-    T tol = 1e-3;
-    int max_iter = 30;
+    T tol = 1e-4;
+    int max_iter = 100;
     PrintWhen PMM_print_when = PrintWhen::EVERY10;
     PrintWhat PMM_print_what = PrintWhat::MINIMAL;
     PrintWhen SSN_print_when = PrintWhen::NEVER;
     PrintWhat SSN_print_what = PrintWhat::MINIMAL;
 
     // Solver result
-    std::string csv_path = root + "results/maros_meszaros_test3.csv";
+    std::string csv_path = root + "results/maros_meszaros_test4.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -361,3 +362,4 @@ int main() {
 
     return 0;
 }
+*/

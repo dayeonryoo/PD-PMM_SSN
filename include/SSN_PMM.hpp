@@ -72,19 +72,19 @@ public:
     Vec x_sol, y1_sol, z_sol;
 
     // Constant parameters
-    T tol = 1e-3;
-    int max_iter = 30;
-    int SSN_max_iter = 500;
-    int SSN_max_in_iter = 10;
-    T reg_limit = 1e5;
-    T eps_limit = 1e-5;
-    T gamma = 0.7;
+    T tol = 1e-4;
+    int max_iter = 100;
+    int SSN_max_iter = 300;
+    int SSN_max_in_iter = 12;
+    T reg_limit = 1e6;
+    T eps_limit = tol;
+    T gamma = 0.95;
 
     // Updated parameters
     T mu = 1e1;
     T rho = 1e1;
-    T eps_bcl = tol;
-    T SSN_tol = tol;
+    T eps_bcl = 1e0;
+    T SSN_tol = 1e0;
     
     // Outputs:
     int opt;

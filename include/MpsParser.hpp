@@ -34,9 +34,6 @@ struct PDPMMdata {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using SpMat = Eigen::SparseMatrix<T>;
 
-    bool is_qp = false;
-    bool is_min = true;
-
     int n, m, l;
     SpMat Q, A, B;
     Vec c, b;
@@ -87,7 +84,9 @@ private:
 
     static bool is_comment_or_blank(const std::string& line);
     static std::vector<std::string> split_ws(const std::string& line);
+    static std::vector<std::string> split_free_by_section(const std::string& line, Section sec);
     static std::vector<std::string> split_fixed_by_section(const std::string& line, Section sec);
+    static std::vector<std::string> tokenize_line(const std::string& line, Section sec);
     static std::string trim(const std::string& s);
     
     bool set_section(const std::vector<std::string>& tokens);

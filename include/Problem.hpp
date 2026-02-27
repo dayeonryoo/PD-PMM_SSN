@@ -27,8 +27,8 @@ public:
 
     int n, m, l;
 
-    T tol = 1e-4;
-    int max_iter = 1e2;
+    T tol = 1e-3;
+    int max_iter = 30;
     PrintWhen PMM_print_when = PrintWhen::END_ONLY;
     PrintWhen SSN_print_when = PrintWhen::END_ONLY;
     PrintWhat PMM_print_what = PrintWhat::SUMMARY;

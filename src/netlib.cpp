@@ -55,8 +55,9 @@ void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
         }
     }
     std::cout << "\n  Elements of Bx outside bounds:\n";
+    Vec Bx = pd.B * x;
     for (int i = 0; i < pd.lw.size(); ++i) {
-        T Bx_i = (pd.B * x)[i];
+        T Bx_i = Bx[i];
         if (Bx_i < pd.lw[i] - tol || Bx_i > pd.uw[i] + tol) {
             std::cout << "      Variable " << i << " out of bounds: Bx = " << Bx_i
                       << ", [" << pd.lw[i] << ", " << pd.uw[i] << "]\n";

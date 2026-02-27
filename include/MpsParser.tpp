@@ -25,7 +25,7 @@ ParsedModel<T> MpsParser<T>::parse(const std::string& filename) {
         if (is_header) continue; // Skip section header lines
 
         // Section content parsing depending on format
-        std::vector<std::string> tokens = split_fixed_by_section(line, section_);
+        std::vector<std::string> tokens = tokenize_line(line, section_);
         switch (section_) {
             case Section::NAME: parse_name(tokens); break;
             case Section::OBJSENSE: parse_objsense(tokens); break;
@@ -62,8 +62,6 @@ PDPMMdata<T> MpsParser<T>::to_pdpmm(const ParsedModel<T>& model, T eq_tol, T inf
     };
 
     PDPMMdata<T> pd;
-    pd.is_qp = model.is_qp;
-    pd.is_min = model.is_min;
     pd.n = model.num_cols;
 
     pd.obj_const = -model.obj_const; // Negate since it's from RHS
@@ -75,14 +73,13 @@ PDPMMdata<T> MpsParser<T>::to_pdpmm(const ParsedModel<T>& model, T eq_tol, T inf
         pd.ux(i) = cap_inf(pd.ux(i));
     }
 
-    if (pd.is_qp) pd.Q = model.Q;
+    if (model.is_qp) pd.Q = model.Q;
     else { pd.Q = SpMat(pd.n, pd.n); pd.Q.setZero(); }
 
     // If MAX, convert to MIN by negating objective
-    if (!pd.is_min) {
+    if (!model.is_min) {
         pd.c = -pd.c;
-        if (pd.is_qp) pd.Q = -pd.Q;
-        pd.is_min = true;
+        if (model.is_qp) pd.Q = -pd.Q;
     }
 
     // Process constraints
@@ -281,12 +278,10 @@ template <typename T>
 void MpsParser<T>::parse_rhs(const std::vector<std::string>& tokens) {
     // Free-format RHS line: <rhs_name> {<row_name> <value>} ...
     if (tokens.size() < 2) return; // Invalid line, ignore
-
-    // If the first token is empty, use "RHS" as the default name for the RHS set
-    const bool has_name = row_map_.find(tokens[0]) == row_map_.end(); // If first token is not a row name, treat it as RHS name
     
     size_t start_idx;
-    if (has_name) {
+    if (tokens.size() == 3 || tokens.size() == 5) {
+        // If line has 3 or 5 tokens, assume <rhs_name> <row_name> <value> ...
         if (rhs_name_.empty()) rhs_name_ = tokens[0];
         start_idx = 1;
         if (rhs_name_ != tokens[0]) {
@@ -658,6 +653,99 @@ std::vector<std::string> MpsParser<T>::split_ws(const std::string& line) {
         tokens.push_back(tok);
     }
     return tokens;
+}
+
+template <typename T>
+std::vector<std::string> MpsParser<T>::split_free_by_section(const std::string& line, Section sec) {
+    auto toks = split_ws(line); // your existing whitespace split
+    std::vector<std::string> out;
+
+    auto push = [&](const std::string& s) { if (!s.empty()) out.push_back(s); };
+
+    switch (sec) {
+        case Section::ROWS:
+            // type row
+            if (toks.size() >= 2) { push(toks[0]); push(toks[1]); }
+            break;
+
+        case Section::COLUMNS:
+            // col row val [row val]
+            if (toks.size() >= 3) {
+                push(toks[0]);
+                push(toks[1]); push(toks[2]);
+                if (toks.size() >= 5) { push(toks[3]); push(toks[4]); }
+            }
+            break;
+
+        case Section::RHS:
+            // rhsName row val [row val]
+            // NOTE: no synthetic "RHS" token needed; always push the rhs name if present
+            if (toks.size() >= 3) {
+                push(toks[0]);          // rhs name
+                push(toks[1]); push(toks[2]);
+                if (toks.size() >= 5) { push(toks[3]); push(toks[4]); }
+            }
+            break;
+
+        case Section::RANGES:
+            // rangeName row val [row val]
+            if (toks.size() >= 3) {
+                push(toks[0]);
+                push(toks[1]); push(toks[2]);
+                if (toks.size() >= 5) { push(toks[3]); push(toks[4]); }
+            }
+            break;
+
+        case Section::BOUNDS:
+            // bndType bndName col [val]
+            if (toks.size() >= 3) {
+                push(toks[0]); push(toks[1]); push(toks[2]);
+                if (toks.size() >= 4) push(toks[3]);
+            }
+            break;
+
+        case Section::QUADOBJ:
+            // col1 col2 val (sometimes name col1 col2 val, handle both)
+            if (toks.size() == 3) {
+                push(toks[0]); push(toks[1]); push(toks[2]);
+            } else if (toks.size() >= 4) {
+                // if a name is present, skip it
+                push(toks[toks.size()-3]);
+                push(toks[toks.size()-2]);
+                push(toks[toks.size()-1]);
+            }
+            break;
+
+        default:
+            // NAME/OBJSENSE etc
+            out = toks;
+            break;
+    }
+    return out;
+}
+
+template <typename T>
+std::vector<std::string> MpsParser<T>::tokenize_line(const std::string& line, Section sec) {
+    // Try fixed first
+    auto fixed = split_fixed_by_section(line, sec);
+
+    auto ok_for_section = [&](const std::vector<std::string>& t) {
+        switch (sec) {
+            case Section::ROWS:    return t.size() == 2;
+            case Section::COLUMNS: return t.size() == 3 || t.size() == 5;
+            case Section::RHS:     return t.size() == 3 || t.size() == 5;
+            case Section::RANGES:  return t.size() == 3 || t.size() == 5;
+            case Section::BOUNDS:  return t.size() == 3 || t.size() == 4;
+            case Section::QUADOBJ: return t.size() == 3;
+            default:               return true;
+        }
+    };
+
+    if (ok_for_section(fixed)) return fixed;
+
+    // Fall back to free
+    auto free = split_free_by_section(line, sec);
+    return free;
 }
 
 template <typename T>
