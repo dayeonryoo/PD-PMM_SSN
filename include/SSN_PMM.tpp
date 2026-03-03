@@ -706,7 +706,7 @@ Solution<T> SSN_PMM<T>::solve() {
     }
 
     // Check if max number of PMM iterations is reached
-    if (opt != 0) {
+    if (opt == -1) {
         opt = 1; // Maximum number of PMM iterations reached
         printer(PMM_iter, opt, obj_val, x_sol, y1_sol, y2, z_sol, PMM_tol_achieved);
         print_params(PMM_iter);

@@ -1,6 +1,7 @@
 #pragma once
 #include <iostream>
 #include <vector>
+#include <algorithm>
 #include <chrono>
 #include <Eigen/SparseCholesky>
 
@@ -373,6 +374,69 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
 }
 
 template <typename T>
+T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
+    using Vec = typename SSN<T>::Vec;
+
+    std::vector<T> breakpoints; // List of breakpoints
+    T t; // Breakpoint
+
+    // Breakpoints for K
+    for (int i = 0; i < N; ++i) {
+        T temp = z(i) / mu + x_curr(i);
+        if (dx(i) != 0) {
+            t = (ux(i) - temp) / dx(i);
+            if (t > 0) breakpoints.push_back(t);
+
+            t = (lx(i) - temp) / dx(i);
+            if (t > 0) breakpoints.push_back(t);
+        }
+    }
+
+    // Breakpoints for W
+    Vec Bx = B * x_curr;
+    Vec Bdx = B * dx;
+    for (int i = 0; i < l; ++i) {
+        T ds_i = Bdx(i) + (1 - gamma) * dy2(i) / mu;
+        if (ds_i != 0) {
+            T s_i = Bx(i) + ((1 - gamma) * y2_curr(i) - y2(i)) / mu;
+
+            t = (uw(i) - s_i) / ds_i;
+            if (t > 0) breakpoints.push_back(t);
+
+            t = (lw(i) - s_i) / ds_i;
+            if (t > 0) breakpoints.push_back(t);
+        }
+    }
+
+    // Sort breakpoints in ascending order
+    std::sort(breakpoints.begin(), breakpoints.end());
+
+    // Find the smallest breakpoint t which yields grad(u + tdu) >= 0.
+    T t_prev = T(0);
+    Vec x_prev = x_curr;
+    Vec y2_prev = y2_curr;
+    Vec grad = compute_grad_Lagrangian(x_curr, y2_curr);
+    T phi_prev = grad.head(N).dot(dx) + grad.tail(l).dot(dy2);
+    if (phi_prev >= 0) return T(0);
+
+    T t_opt; // Optimal breakpoint
+    Vec x_new, y2_new;
+    T phi_new;
+    for (T t : breakpoints) {
+        x_new = x_curr + t * dx;
+        y2_new = y2_curr + t * dy2;
+        grad = compute_grad_Lagrangian(x_new, y2_new);
+        phi_new = grad.head(N).dot(dx) + grad.tail(l).dot(dy2);
+        if (phi_new >= 0) { t_opt = t; break; }
+        else { t_prev = t; x_prev = x_new; y2_prev = y2_new; phi_prev = phi_prev; }
+    }
+
+    // Compute the optimal stepsize in terms of the optimal breakpoint.
+    T tau = t_prev - (phi_prev / (phi_new - phi_prev)) * (t_opt - t_prev);
+    return tau;
+}
+
+template <typename T>
 SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
@@ -525,6 +589,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dy2_active_W = dxdy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
+        /*
         // ========== Backtracking linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
 
@@ -536,6 +601,15 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         auto t1_alpha = std::chrono::steady_clock::now();
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Backtracking linesearch took " << timer_alpha << " ms.\n";
+        */
+
+        // ========== Exact linesearch ==========
+        auto t0_alpha = std::chrono::steady_clock::now();
+        T alpha = exact_line_search(result.x, result.y2, dx, dy2);
+        auto t1_alpha = std::chrono::steady_clock::now();
+        double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
+        // std::cout << "  Exact linesearch took " << timer_alpha << " ms.\n";
+        // std::cout << "  alpha = " << alpha << "\n";
 
         // ========== Update x and y2 ==========
         if (alpha == 0) { // If linesearch fails,

@@ -74,7 +74,7 @@ public:
     // Constant parameters
     T tol = 1e-4;
     int max_iter = 100;
-    int SSN_max_iter = 300;
+    int SSN_max_iter = 500;
     int SSN_max_in_iter = 12;
     T reg_limit = 1e6;
     T eps_limit = tol;
