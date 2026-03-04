@@ -113,6 +113,7 @@ public:
             determine_dimensions(problem);
         }
         check_dimensions(problem);
+        initialize_sols();
         ruiz_scaling(problem.Q, problem_Q_diag, problem.A, problem.B, problem.c, problem.b, problem.lx, problem.ux);
         set_default(problem);
         check_infeasibility();
@@ -123,6 +124,7 @@ public:
     void get_Q_info(const SpMat& Q);
     void determine_dimensions(const Problem<T>& problem);
     void check_dimensions(const Problem<T>& problem);
+    void initialize_sols();
     void ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A, const SpMat& B, const Vec& c, const Vec& b, const Vec& lx, const Vec& ux);
     void set_L_from_LLT(const SpMat& Q);
     void set_default(const Problem<T>& problem);

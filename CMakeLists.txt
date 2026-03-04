@@ -27,12 +27,12 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 # HiGHS
-FetchContent_Declare(
-    highs
-    GIT_REPOSITORY "https://github.com/ERGO-Code/HiGHS.git"
-    GIT_TAG        "latest"
-)
-FetchContent_MakeAvailable(highs)
+# FetchContent_Declare(
+#     highs
+#     GIT_REPOSITORY "https://github.com/ERGO-Code/HiGHS.git"
+#     GIT_TAG        "latest"
+# )
+# FetchContent_MakeAvailable(highs)
 
 # ----------------------
 # Enable CTest
@@ -46,8 +46,8 @@ add_library(ssn_pmm INTERFACE)
 target_include_directories(ssn_pmm INTERFACE include)
 target_link_libraries(ssn_pmm
     INTERFACE
-        Eigen3::Eigen
-        highs::highs)
+        Eigen3::Eigen)
+        # highs::highs)
 
 # ----------------------
 # Main executable

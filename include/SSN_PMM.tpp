@@ -121,6 +121,17 @@ void SSN_PMM<T>::check_dimensions(const Problem<T>& problem) {
 }
 
 template <typename T>
+void SSN_PMM<T>::initialize_sols() {
+    if (Q_info == 2) { N = 2 * n; M = m + n; }
+    else { N = n; M = m; }
+
+    x = Vec::Zero(N);
+    y1 = Vec::Zero(M);
+    y2 = Vec::Zero(l);
+    z = Vec::Zero(N);
+}
+
+template <typename T>
 void SSN_PMM<T>::ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A, const SpMat& B, const Vec& c, const Vec& b, const Vec& lx, const Vec& ux) {
     using SpMat = Eigen::SparseMatrix<T>;
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
@@ -281,9 +292,6 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
     T inf = 1e20;
 
     if (Q_info == 2) {
-        N = 2 * n;
-        M = m + n;
-
         // c', lx', ux'
         if (problem.c.size() == 0) {
             c = Vec::Zero(N);
@@ -360,9 +368,6 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
         }
 
     } else {
-        N = n;
-        M = m;
-
         if (problem.c.size() == 0) {
             c = Vec::Zero(N);
         } else {
@@ -393,12 +398,6 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
         }
         Q_diag = Q_diag_ruiz;
     }
-
-    // Initial solution
-    x = Vec::Zero(N);
-    y1 = Vec::Zero(M);
-    y2 = Vec::Zero(l);
-    z = Vec::Zero(N);
 
     // lw, uw
     if (problem.lw.size() == 0) {

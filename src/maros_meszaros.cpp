@@ -65,7 +65,7 @@ void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
     }
 }
 
-
+/*
 int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     
@@ -78,8 +78,8 @@ int main() {
     // std::string name = "QSIERRA";
     // T obj_val =  2.3750458e+07;
 
-    std::string name = "DPKLO1";
-    T obj_val = 3.7009622e-01;
+    std::string name = "QSIERRA";
+    T obj_val = 2.3750458e+07;
 
     std::string filename = root + name + ".SIF";
 
@@ -121,7 +121,7 @@ int main() {
 
     return 0;
 }
-
+*/
 
 void write_csv_header(const std::string& path) {
     namespace fs = std::filesystem;
@@ -144,7 +144,7 @@ void append_csv_result(const std::string& path, const MarosMeszarosTestResult& r
     csv.close();
 }
 
-/*
+
 int main() {
     
     // Filenames and objective values of Maros/Meszaros QPs
@@ -166,69 +166,69 @@ int main() {
         // {"CONT-201",   1.9248337e-01},
         // {"CONT-300",   1.9151232e-01},
         // {"CVXQP1L",    1.0870480e+08}, // too many QNZ
-        // {"CVXQP1M",    1.0875116e+06},
-        // {"CVXQP1S",    1.1590718e+04},
+        {"CVXQP1M",    1.0875116e+06},
+        {"CVXQP1S",    1.1590718e+04},
         // // {"CVXQP2L",    8.1842458e+07}, // too many QNZ
-        // {"CVXQP2M",    8.2015543e+05},
-        // {"CVXQP2S",    8.1209405e+03},
+        {"CVXQP2M",    8.2015543e+05},
+        {"CVXQP2S",    8.1209405e+03},
         // {"CVXQP3L",    1.1571110e+08}, // too many QNZ
-        // {"CVXQP3M",    1.3628287e+06},
-        // {"CVXQP3S",    1.1943432e+04},
+        {"CVXQP3M",    1.3628287e+06},
+        {"CVXQP3S",    1.1943432e+04},
         {"DPKLO1",     3.7009622e-01},
         {"DTOC3",      2.3526248e+02},
-        // {"DUAL1",      3.5012966e-02},
-        // {"DUAL2",      3.3733676e-02},
-        // {"DUAL3",      1.3575584e-01},
-        // {"DUAL4",      7.4609084e-01},
+        {"DUAL1",      3.5012966e-02},
+        {"DUAL2",      3.3733676e-02},
+        {"DUAL3",      1.3575584e-01},
+        {"DUAL4",      7.4609084e-01},
         {"DUALC1",     6.1552508e+03},
         {"DUALC2",     3.5513077e+03},
         {"DUALC5",     4.2723233e+02},
         {"DUALC8",     1.8309359e+04},
         // {"EXDATA",    -1.4184343e+02}, // too many QNZ
-        // {"GENHS28",    9.2717369e-01},
-        // {"GOULDQP2",   1.8427534e-04},
-        // {"GOULDQP3",   2.0627840e+00},
-        // {"HS118",      6.6482045e+02},
-        // {"HS21",      -9.9960000e+01},
+        {"GENHS28",    9.2717369e-01},
+        {"GOULDQP2",   1.8427534e-04},
+        {"GOULDQP3",   2.0627840e+00},
+        {"HS118",      6.6482045e+02},
+        {"HS21",      -9.9960000e+01},
         {"HS268",      5.7310705e-07},
-        // {"HS35",       1.1111111e-01},
-        // {"HS35MOD",    2.5000000e-01},
-        // {"HS51",       8.8817842e-16},
-        // {"HS52",       5.3266476e+00},
-        // {"HS53",       4.0930233e+00},
-        // {"HS76",      -4.6818182e+00},
-        // {"HUES-MOD",   3.4824690e+07},
+        {"HS35",       1.1111111e-01},
+        {"HS35MOD",    2.5000000e-01},
+        {"HS51",       8.8817842e-16},
+        {"HS52",       5.3266476e+00},
+        {"HS53",       4.0930233e+00},
+        {"HS76",      -4.6818182e+00},
+        {"HUES-MOD",   3.4824690e+07},
         {"HUESTIS",    3.4824690e+11},
-        // {"KSIP",       5.7579794e-01},
-        // {"LASER",      2.4096014e+06},
+        {"KSIP",       5.7579794e-01},
+        {"LASER",      2.4096014e+06},
         {"LISWET1",    3.6122402e+01},
         {"LISWET10",   4.9485785e+01},
         {"LISWET11",   4.9523957e+01},
-        // {"LISWET12",   1.7369274e+03},
-        // {"LISWET2",    2.4998076e+01},
-        // {"LISWET3",    2.5001220e+01},
-        // {"LISWET4",    2.5000112e+01},
-        // {"LISWET5",    2.5034253e+01},
-        // {"LISWET6",    2.4995748e+01},
+        {"LISWET12",   1.7369274e+03},
+        {"LISWET2",    2.4998076e+01},
+        {"LISWET3",    2.5001220e+01},
+        {"LISWET4",    2.5000112e+01},
+        {"LISWET5",    2.5034253e+01},
+        {"LISWET6",    2.4995748e+01},
         {"LISWET7",    4.9884089e+02},
         {"LISWET8",    7.1447006e+03},
         {"LISWET9",    1.9632513e+03},
-        // {"LOTSCHD",    2.3984159e+03},
-        // {"MOSARQP1",  -9.5287544e+02},
-        // {"MOSARQP2",  -1.5974821e+03},
+        {"LOTSCHD",    2.3984159e+03},
+        {"MOSARQP1",  -9.5287544e+02},
+        {"MOSARQP2",  -1.5974821e+03},
         {"POWELL20",   5.2089583e+10},
-        // {"PRIMAL1",   -3.5012965e-02},
-        // {"PRIMAL2",   -3.3733676e-02},
-        // {"PRIMAL3",   -1.3575584e-01},
-        // {"PRIMAL4",   -7.4609083e-01},
+        {"PRIMAL1",   -3.5012965e-02},
+        {"PRIMAL2",   -3.3733676e-02},
+        {"PRIMAL3",   -1.3575584e-01},
+        {"PRIMAL4",   -7.4609083e-01},
         {"PRIMALC1",  -6.1552508e+03},
         {"PRIMALC2",  -3.5513077e+03},
         {"PRIMALC5",  -4.2723233e+02},
         {"PRIMALC8",  -1.8309430e+04},
         // {"Q25FV47",    1.3744448e+07}, // too many QNZ
-        // {"QADLITTL",   4.8031886e+05},
-        // {"QAFIRO",    -1.5907818e+00},
-        // {"QBANDM",     1.6352342e+04},
+        {"QADLITTL",   4.8031886e+05},
+        {"QAFIRO",    -1.5907818e+00},
+        {"QBANDM",     1.6352342e+04},
         {"QBEACONF",   1.6471206e+05},
         {"QBORE3D",    3.1002008e+03},
         {"QBRANDY",    2.8375115e+04},
@@ -237,31 +237,31 @@ int main() {
         {"QETAMACR",   8.6760370e+04},
         {"QFFFFF80",   8.7314747e+05},
         {"QFORPLAN",   7.4566315e+09},
-        // {"QGFRDXPN",   1.0079059e+11},
+        {"QGFRDXPN",   1.0079059e+11},
         {"QGROW15",   -1.0169364e+08},
         {"QGROW22",   -1.4962895e+08},
         {"QGROW7",    -4.2798714e+07},
-        // {"QISRAEL",    2.5347838e+07},
-        // {"QPCBLEND",  -7.8425409e-03},
-        // {"QPCBOEI1",   1.1503914e+07},
+        {"QISRAEL",    2.5347838e+07},
+        {"QPCBLEND",  -7.8425409e-03},
+        {"QPCBOEI1",   1.1503914e+07},
         {"QPCBOEI2",   8.1719623e+06},
         {"QPCSTAIR",   6.2043875e+06},
         {"QPILOTNO",   4.7285869e+06},
-        // {"QPTEST",     4.3718750e+00},
-        // {"QRECIPE",   -2.6661600e+02},
-        // {"QSC205",    -5.8139518e-03},
+        {"QPTEST",     4.3718750e+00},
+        {"QRECIPE",   -2.6661600e+02},
+        {"QSC205",    -5.8139518e-03},
         {"QSCAGR25",   2.0173794e+08},
         {"QSCAGR7",    2.6865949e+07},
         {"QSCFXM1",    1.6882692e+07},
         {"QSCFXM2",    2.7776162e+07},
         {"QSCFXM3",    3.0816355e+07},
-        // {"QSCORPIO",   1.8805096e+03},
+        {"QSCORPIO",   1.8805096e+03},
         {"QSCRS8",     9.0456001e+02},
-        // {"QSCSD1",     8.6666667e+00}, 
-        // {"QSCSD6",     5.0808214e+01},
-        // {"QSCSD8",     9.4076357e+02},
+        {"QSCSD1",     8.6666667e+00}, 
+        {"QSCSD6",     5.0808214e+01},
+        {"QSCSD8",     9.4076357e+02},
         {"QSCTAP1",    1.4158611e+03},
-        // {"QSCTAP2",    1.7350265e+03},
+        {"QSCTAP2",    1.7350265e+03},
         {"QSCTAP3",    1.4387547e+03},
         {"QSEBA",      8.1481801e+07},
         {"QSHARE1B",   7.2007832e+05},
@@ -275,18 +275,18 @@ int main() {
         // {"QSHIP12S",   3.0569623e+06}, // too many QNZ
         {"QSIERRA",    2.3750458e+07},
         {"QSTAIR",     7.9854528e+06},
-        // {"QSTANDAT",   6.4118384e+03},
+        {"QSTANDAT",   6.4118384e+03},
         {"S268",       5.7310705e-07},
         {"STADAT1",   -2.8526864e+07},
         {"STADAT2",   -3.2626665e+01},
         {"STADAT3",   -3.5779453e+01},
         // {"STCQP1",     1.5514356e+05}, // too many QNZ
         // {"STCQP2",     2.2327313e+04}, // too many QNZ
-        // {"TAME",       0.0000000e+00},
+        {"TAME",       0.0000000e+00},
         {"UBH1",       1.1160008e+00},
         {"VALUES",    -1.3966211e+00},
         {"YAO",        1.9770426e+02},
-        // {"ZECEVIC2",  -4.1250000e+00},
+        {"ZECEVIC2",  -4.1250000e+00},
     };
 
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
@@ -300,7 +300,7 @@ int main() {
     PrintWhat SSN_print_what = PrintWhat::MINIMAL;
 
     // Solver result
-    std::string csv_path = root + "results/maros_meszaros_test4_2.csv";
+    std::string csv_path = root + "results/maros_meszaros_test5.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -362,4 +362,3 @@ int main() {
 
     return 0;
 }
-*/
