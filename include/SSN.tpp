@@ -240,6 +240,56 @@ typename SSN<T>::Vec SSN<T>::retrive_row_order(const Vec& u_sel, const Vec& u_un
 }
 
 template <typename T>
+typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2,
+                                            const T mu, const T tol, const int max_iter) {
+    using Vec = typename SSN<T>::Vec;
+
+    const int s = G.rows();
+    const int n = G.cols();
+
+    // Build Schur operator
+    // SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
+
+    // Compute the rhs = G * H_inv * r1 + r2.
+    SpMat G_H_inv = G;
+    scale_columns(G_H_inv, H_diag_inv);
+    Vec rhs = G_H_inv * r1 + r2;
+
+    SpMat S = G_H_inv * G_tr; 
+    for (int i = 0; i < s; ++i) {
+        S.coeffRef(i, i) += 1 / mu;
+    }
+    S.makeCompressed();
+
+    // Solve S dxdy_ = rhs using conjugate gradient
+    Eigen::ConjugateGradient<
+        // SchurOperator<T>,
+        SpMat,
+        Eigen::Lower | Eigen::Upper,
+        Eigen::IncompleteCholesky<T>> cg;
+
+    cg.setTolerance(tol);
+    cg.setMaxIterations(max_iter);
+
+    cg.compute(S);
+    Vec dy_ = cg.solve(rhs);
+
+    std::cout << "  CG took " << cg.iterations() << " iterations.\n";
+
+    if (cg.info() != Eigen::Success) {
+        throw std::runtime_error("CG failed to converge.");
+    }
+
+    // Retrive dx
+    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
+
+    Vec dxdy_(n + s); 
+    dxdy_.head(n) = dx;
+    dxdy_.tail(s) = dy_;
+    return dxdy_;
+}
+
+template <typename T>
 typename SSN<T>::Vec SSN<T>::solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
@@ -575,12 +625,13 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Solve for dx and dy2_active_W
         auto t0_solve_lin_sys = std::chrono::steady_clock::now();
-        Vec dxdy_;
-        if (more_rows_than_cols) {
-            dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
-        } else {
-            dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
-        }
+        Vec dxdy_ = solve_using_cg(G, G_tr, H_diag_inv, r1, r2, mu, Krylov_tol, Krylov_max_in_iter);
+        // Vec dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
+        // if (more_rows_than_cols) {
+        //     dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
+        // } else {
+        //     dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
+        // }
         auto t1_solve_lin_sys = std::chrono::steady_clock::now();
         double timer_solve_line_sys = time_diff_ms(t0_solve_lin_sys, t1_solve_lin_sys);
         // std::cout << "  Solving SSN system took " << timer_solve_line_sys << " ms.\n";

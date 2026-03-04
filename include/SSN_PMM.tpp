@@ -551,8 +551,8 @@ void SSN_PMM<T>::update_with_bcl(const T p, const Vec& y2_hat) {
         // Accept y2 from SSN; keep mu and rho unchanged; fast decrease eps
         // std::cout << "  SSN result accepted.\n";
         y2 = y2_hat;
-        mu = std::min(reg_limit, 1.1 * mu);
-        rho = std::min(reg_limit, 1.1 * rho);
+        mu = std::min(reg_limit, 1.2 * mu);
+        rho = std::min(reg_limit, 1.2 * rho);
         eps_bcl = std::max(eps_limit, eps_bcl / std::pow(mu, 0.9));
         SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.1));
     } else {
@@ -605,10 +605,6 @@ Solution<T> SSN_PMM<T>::solve() {
 
     // Initialize printing functions
     auto printer = make_print_function<T, Vec>(PMM_print_label, PMM_print_when, PMM_print_what, max_iter);
-
-    std::cout << "n = " << N << ", m = " << M << ", l = " << l << "\n";
-    if (M > N || l > N) std::cout << "Solving via LDLT on augmented Lagrangian system.\n";
-    else std::cout << "Solving via forming Schur complement.\n";
 
     // SSN-PMM main loop
     while (PMM_iter < max_iter) {
@@ -669,11 +665,11 @@ Solution<T> SSN_PMM<T>::solve() {
             print_residuals(PMM_iter, res_norms);
             print_params(PMM_iter);
             break;
-        } else if (NS_solution.SSN_opt == 3) { // Backtracking linesearch failed
-            std::cout << "  PMM: Retrying with adjusted mu and rho.\n";
+        } else if (NS_solution.SSN_opt == 3) { // Linesearch failed
+            std::cout << "  PMM: Linesearch failed. Retrying with adjusted mu and rho.\n";
             opt = 3;
-            mu *= 0.2;
-            rho *= 0.2;
+            mu *= 0.7;
+            rho *= 0.7;
             continue;
         }
 
