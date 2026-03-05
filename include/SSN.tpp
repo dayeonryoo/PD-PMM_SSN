@@ -640,25 +640,25 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dy2_active_W = dxdy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
-        /*
+        
         // ========== Backtracking linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
 
         // Backtracking linesearch to find a Newton step size alpha
-        T alpha;
-        if (result.SSN_in_iter == 1) alpha = 0.995;
-        else alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
+        T alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
+        // if (result.SSN_in_iter == 1) alpha = 0.995;
+        // else alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
 
         auto t1_alpha = std::chrono::steady_clock::now();
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Backtracking linesearch took " << timer_alpha << " ms.\n";
-        */
+        
 
         // ========== Exact linesearch ==========
-        auto t0_alpha = std::chrono::steady_clock::now();
-        T alpha = exact_line_search(result.x, result.y2, dx, dy2);
-        auto t1_alpha = std::chrono::steady_clock::now();
-        double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
+        // auto t0_alpha = std::chrono::steady_clock::now();
+        // T alpha = exact_line_search(result.x, result.y2, dx, dy2);
+        // auto t1_alpha = std::chrono::steady_clock::now();
+        // double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Exact linesearch took " << timer_alpha << " ms.\n";
         // std::cout << "  alpha = " << alpha << "\n";
 

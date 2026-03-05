@@ -61,8 +61,8 @@ public:
     T delta = 0.995;
 
     // Conjugate gradient parameters
-    T Krylov_tol = 1e-8;
-    int Krylov_max_in_iter = 1000;
+    T Krylov_tol = 1e-12;
+    int Krylov_max_in_iter = 100;
     
     // SSN() = default;
 
