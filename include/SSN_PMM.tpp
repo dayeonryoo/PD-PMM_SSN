@@ -552,8 +552,8 @@ void SSN_PMM<T>::update_with_bcl(const T p, const Vec& y2_hat) {
         // Accept y2 from SSN; keep mu and rho unchanged; fast decrease eps
         // std::cout << "  SSN result accepted.\n";
         y2 = y2_hat;
-        mu = std::min(reg_limit, 1.1 * mu);
-        rho = std::min(reg_limit, 1.1 * rho);
+        mu = std::min(reg_limit, 1.2 * mu);
+        rho = std::min(reg_limit, 1.2 * rho);
         eps_bcl = std::max(eps_limit, eps_bcl / std::pow(mu, 0.9));
         SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.1));
     } else {
@@ -672,8 +672,8 @@ Solution<T> SSN_PMM<T>::solve() {
         } else if (NS_solution.SSN_opt == 3) { // Linesearch failed
             std::cout << "  PMM: Linesearch faild. Retrying with adjusted mu and rho.\n";
             opt = 3;
-            mu *= 0.2;
-            rho *= 0.2;
+            mu *= 0.7;
+            rho *= 0.7;
             continue;
         }
 

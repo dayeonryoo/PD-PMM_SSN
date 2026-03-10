@@ -2,7 +2,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include "Printing.hpp"
-#include "QInfo.hpp"
+#include "SchurOperator.hpp"
 
 
 template <typename T>
@@ -60,9 +60,13 @@ public:
     int SSN_opt;
     T obj_val;
 
-    // Set the semismooth Newton parameters
+    // Backtracking linesearch parameters
     T beta = 0.4995 / 2;
     T delta = 0.995;
+
+    // Conjugate gradient parameters
+    T Krylov_tol = 1e-12;
+    int Krylov_max_in_iter = 100;
     
     // SSN() = default;
 
@@ -122,6 +126,7 @@ public:
     SpMat scale_columns(const SpMat& M, const Vec& d);
     Vec retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
+    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2, const T mu, const T tol, const int max_iter);
     bool form_schur(const SpMat& G);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);

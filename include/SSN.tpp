@@ -240,6 +240,53 @@ typename SSN<T>::Vec SSN<T>::retrive_row_order(const Vec& u_sel, const Vec& u_un
 }
 
 template <typename T>
+typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2,
+                                            const T mu, const T tol, const int max_iter) {
+    using Vec = typename SSN<T>::Vec;
+
+    const int s = G.rows();
+    const int n = G.cols();
+
+    // Build Schur operator
+    // SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
+
+    // Compute the rhs = G * H_inv * r1 + r2.
+    SpMat G_H_inv = G;
+    scale_columns(G_H_inv, H_diag_inv);
+    Vec rhs = G_H_inv * r1 + r2;
+
+    SpMat S = G_H_inv * G_tr; 
+    for (int i = 0; i < s; ++i) {
+        S.coeffRef(i, i) += 1 / mu;
+    }
+    S.makeCompressed();
+
+    // Solve S dxdy_ = rhs using conjugate gradient
+    Eigen::ConjugateGradient<
+        // SchurOperator<T>,
+        SpMat,
+        Eigen::Lower | Eigen::Upper,
+        Eigen::IncompleteCholesky<T>> cg;
+
+    cg.setTolerance(tol);
+    cg.setMaxIterations(max_iter);
+
+    cg.compute(S);
+    Vec dy_ = cg.solve(rhs);
+
+    std::cout << "  CG took " << cg.iterations() << " iterations.\n";
+
+    if (cg.info() != Eigen::Success) {
+        throw std::runtime_error("CG failed to converge.");
+    }
+
+    // Retrive dx
+    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
+
+    Vec dxdy_(n + s); 
+    dxdy_.head(n) = dx;
+    dxdy_.tail(s) = dy_;
+    return dxdy_;
 bool SSN<T>::form_schur(const SpMat& G) {
     // |KKT| = N + s + 2|G|
     // |Schur| ~ |G H_inv G^T| approximated by using denstest column in G
@@ -656,25 +703,25 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dy2_active_W = dxdy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
-        /*
+        
         // ========== Backtracking linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
 
         // Backtracking linesearch to find a Newton step size alpha
-        T alpha;
-        if (result.SSN_in_iter == 1) alpha = 0.995;
-        else alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
+        T alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
+        // if (result.SSN_in_iter == 1) alpha = 0.995;
+        // else alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
 
         auto t1_alpha = std::chrono::steady_clock::now();
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Backtracking linesearch took " << timer_alpha << " ms.\n";
-        */
+        
 
         // ========== Exact linesearch ==========
-        auto t0_alpha = std::chrono::steady_clock::now();
-        T alpha = exact_line_search(result.x, result.y2, dx, dy2);
-        auto t1_alpha = std::chrono::steady_clock::now();
-        double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
+        // auto t0_alpha = std::chrono::steady_clock::now();
+        // T alpha = exact_line_search(result.x, result.y2, dx, dy2);
+        // auto t1_alpha = std::chrono::steady_clock::now();
+        // double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Exact linesearch took " << timer_alpha << " ms.\n";
         // std::cout << "  alpha = " << alpha << "\n";
 

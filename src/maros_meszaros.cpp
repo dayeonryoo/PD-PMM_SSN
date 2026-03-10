@@ -64,21 +64,19 @@ void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
     }
 }
 
-/*
+
 int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     
     // std::string name = "QSHELL";
     // T obj_val = 1.5726368e+12;
 
-    // std::string name = "AUG2DQP";
-    // T obj_val = 6.2370121e+06;
+    std::string name = "AUG2DQP";
+    T obj_val = 6.2370121e+06;
 
     // std::string name = "Q25FV47";
     // T obj_val = 1.3744448e+07;
 
-    std::string name = "LISWET1";
-    T obj_val = 3.6122402e+01;
 
     std::string filename = root + name + ".SIF";
 
@@ -97,6 +95,8 @@ int main() {
 
     Problem<T> prob(pd, tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
     SSN_PMM<T> solver(prob);
+
+    std::cout << "n = " << prob.n << ", m = " << prob.m << ", l = " << prob.l << "\n";
 
     auto start = std::chrono::high_resolution_clock::now();
     Solution<T> sol = solver.solve();
@@ -129,7 +129,7 @@ int main() {
 
     return 0;
 }
-*/
+
 
 void write_csv_header(const std::string& path) {
     namespace fs = std::filesystem;
@@ -150,7 +150,7 @@ void append_csv_result(const std::string& path, const MarosMeszarosTestResult& r
     csv.close();
 }
 
-
+/*
 int main() {
     
     // Filenames and objective values of Maros/Meszaros QPs
