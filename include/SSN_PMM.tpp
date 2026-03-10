@@ -213,7 +213,7 @@ void SSN_PMM<T>::ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A,
                 }
             }
         } else if (Q_info == 1) {
-            Q_diag_ruiz.array() *= dc_inv.array().square();
+            Q_diag_ruiz.array() *= dc_inv.array().square(); // Q_ii *= d_i * d_i
         }
 
         // Scale c_ruiz: c <- D2 c
@@ -255,7 +255,8 @@ void SSN_PMM<T>::set_L_from_LLT(const SpMat& Q) {
 
     const Vec D = ldlt.vectorD();
     for (int i = 0; i < D.size(); ++i) {
-        if (D(i) < -1e-8) {
+        if (D(i) < -1e-2) {
+            std::cout << "D(" << i << "): " << D(i) << "\n";
             throw std::invalid_argument("Q is not PSD.");
         }
     }
@@ -557,7 +558,7 @@ void SSN_PMM<T>::update_with_bcl(const T p, const Vec& y2_hat) {
         SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.1));
     } else {
         // Reject y2 from SSN; increase mu and rho; reset eps
-        std::cout << "  SSN result rejected: p = " << p << "\n";
+        // std::cout << "  SSN result rejected: p = " << p << "\n";
         mu = std::min(reg_limit, 1.5 * mu);
         rho = std::min(reg_limit, 1.5 * rho);
         eps_bcl = std::max(eps_limit, 1 / std::pow(mu, 0.09));
@@ -601,14 +602,10 @@ Solution<T> SSN_PMM<T>::solve() {
             A, B, A_tr, B_tr, c, b, D1_diag, D2_diag,
             lx, ux, lw, uw, obj_const, n, m, N, M, l,
             SSN_tol, SSN_max_in_iter,
-            SSN_print_when, SSN_print_what);
+            SSN_print_when, SSN_print_what, is_system_chosen);
 
     // Initialize printing functions
     auto printer = make_print_function<T, Vec>(PMM_print_label, PMM_print_when, PMM_print_what, max_iter);
-
-    std::cout << "n = " << N << ", m = " << M << ", l = " << l << "\n";
-    if (M > N || l > N) std::cout << "Solving via LDLT on augmented Lagrangian system.\n";
-    else std::cout << "Solving via forming Schur complement.\n";
 
     // SSN-PMM main loop
     while (PMM_iter < max_iter) {
@@ -653,8 +650,11 @@ Solution<T> SSN_PMM<T>::solve() {
 
         PMM_iter++;
 
+        // System is chosen at the very first SSN iteration.
+        if (NS.is_system_chosen) is_system_chosen = true;
+
         // Update the Newton system.
-        NS.update_SSN_system(x, y1, y2, z, y1_sol, z_sol, mu, rho, gamma);
+        NS.update_SSN_system(x, y1, y2, z, y1_sol, z_sol, mu, rho, gamma, is_system_chosen, SSN_iter);
 
         // Call semismooth Newton method
         SSN_result<T> NS_solution = NS.solve_SSN(SSN_tol);
@@ -669,8 +669,8 @@ Solution<T> SSN_PMM<T>::solve() {
             print_residuals(PMM_iter, res_norms);
             print_params(PMM_iter);
             break;
-        } else if (NS_solution.SSN_opt == 3) { // Backtracking linesearch failed
-            std::cout << "  PMM: Retrying with adjusted mu and rho.\n";
+        } else if (NS_solution.SSN_opt == 3) { // Linesearch failed
+            std::cout << "  PMM: Linesearch faild. Retrying with adjusted mu and rho.\n";
             opt = 3;
             mu *= 0.2;
             rho *= 0.2;

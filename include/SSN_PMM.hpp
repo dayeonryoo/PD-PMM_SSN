@@ -68,6 +68,7 @@ public:
     SpMat Q_ruiz, A_ruiz, B_ruiz;
     Vec problem_Q_diag, Q_diag_ruiz, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz;
     Vec D1_diag, D2_diag;
+    T a = T(1); // Additional scalar for the objective function (c and Q)
     Vec x_descaled, y1_descaled, z_descaled;
     Vec x_sol, y1_sol, z_sol;
 
@@ -75,10 +76,11 @@ public:
     T tol = 1e-4;
     int max_iter = 100;
     int SSN_max_iter = 500;
-    int SSN_max_in_iter = 12;
+    int SSN_max_in_iter = 30;
     T reg_limit = 1e6;
     T eps_limit = tol;
     T gamma = 0.95;
+    bool is_system_chosen = false; // Did SSN solver decide which system to solve?
 
     // Updated parameters
     T mu = 1e1;

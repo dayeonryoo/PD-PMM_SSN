@@ -240,6 +240,62 @@ typename SSN<T>::Vec SSN<T>::retrive_row_order(const Vec& u_sel, const Vec& u_un
 }
 
 template <typename T>
+bool SSN<T>::form_schur(const SpMat& G) {
+    // |KKT| = N + s + 2|G|
+    // |Schur| ~ |G H_inv G^T| approximated by using denstest column in G
+    //         ~ s + (r_hat^2 - r_hat) + sum_{i != i_hat}(r_i^2 - r_i - t_i^2 + t_i)
+    // If (s / (N + s)) |KKT|^2 / |Schur|^2 >= 2, choose KKT system;
+    // otherwise, form the Schur complement.
+    using Index = typename SpMat::Index;
+    using StorageIndex = typename SpMat::StorageIndex;
+
+    const Index s = G.rows();
+    const Index N = G.cols();
+
+    if (s == 0) return true;
+
+    const long long nnzG = static_cast<long long>(G.nonZeros());
+    const long long KKT = static_cast<long long>(N) + static_cast<long long>(s) + 2LL * nnzG;
+
+    // r[i] = nnz counter of column i
+    std::vector<long long> r(N);
+    const StorageIndex* outer = G.outerIndexPtr();
+    for (Index i = 0; i < N; ++i) {
+        r[i] = static_cast<long long>(outer[i+1] - outer[i]);
+    }
+
+    // r_hat = nnz of densest column i_hat
+    Index i_hat = 0;
+    long long r_hat = 0;
+    for (Index i = 0; i < N; ++i) {
+        if (r[i] > r_hat) { r_hat = r[i]; i_hat = i; }
+    }
+
+    // Square function
+    auto sq = [](long long x) { return x * x; };
+
+    // Accumulate the first three terms of |Schur|
+    // |Schur| ~ s + (r_hat^2 - r_hat) + sum_{i != i_hat}(r_i^2 - r_i - t_i^2 + t_i)
+    // with t_i = [r_hat + r_i - s]_+
+    long long Schur = static_cast<long long>(s);
+    Schur += sq(r_hat) - r_hat;
+
+    // Loop over all columns in G
+    for (Index i = 0; i < N; ++i) {
+        if (i == i_hat) continue;
+
+        const long long r_i = static_cast<long long>(r[i]);
+        const long long t_i = std::max<long long>(0, r_hat + r_i - s);
+
+        // Accumulate r_i^2 - r_i - t_i^2 + t_i
+        Schur += sq(r_i) - r_i - sq(t_i) + t_i;
+    }
+
+    double ratio = (double(s) / (double(N + s))) * (double(sq(KKT)) / double(sq(Schur)));
+    return ratio > 0.05;
+}
+
+template <typename T>
 typename SSN<T>::Vec SSN<T>::solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
@@ -451,7 +507,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     result.SSN_opt = -1;
 
     // Initialize printing
-    auto printer = make_print_function<T, Vec>(SSN_print_label, SSN_print_when, SSN_print_what, SSN_max_in_iter);
+    auto printer = make_print_function<T, Vec>(SSN_print_label, SSN_print_when, SSN_print_what, SSN_iter + SSN_max_in_iter);
 
     // SSN main loop
     while (result.SSN_in_iter < SSN_max_in_iter) {
@@ -484,12 +540,12 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // Check termination criterion
         if (result.SSN_tol_achieved < eps) {
             result.SSN_opt = 0; // Optimality achieved
-            printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
+            printer(SSN_iter + result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
             break;
         }
 
         // Print current iteration info
-        printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
+        printer(SSN_iter + result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
 
         result.SSN_in_iter++;
 
@@ -575,12 +631,23 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Solve for dx and dy2_active_W
         auto t0_solve_lin_sys = std::chrono::steady_clock::now();
-        Vec dxdy_;
-        if (more_rows_than_cols) {
-            dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
-        } else {
-            dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
+        if (!is_system_chosen) { // Choose a system at the very first SSN iteration
+            is_schur_sparse = form_schur(G);
+            is_system_chosen = true;
+            if (is_schur_sparse) std::cout << " <System chosen: Schur>\n";
+            else std::cout << " <System chosen: KKT>\n";
         }
+        Vec dxdy_;
+        if (is_schur_sparse) {
+            dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
+        } else {
+            dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
+        }
+        // if (more_rows_than_cols) {
+        //     dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
+        // } else {
+        //     dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
+        // }
         auto t1_solve_lin_sys = std::chrono::steady_clock::now();
         double timer_solve_line_sys = time_diff_ms(t0_solve_lin_sys, t1_solve_lin_sys);
         // std::cout << "  Solving SSN system took " << timer_solve_line_sys << " ms.\n";
@@ -642,10 +709,10 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // Modify x for printing. (This modification is not saved as SSN result.)
         x_sol = printable_x(result.x);
         result.obj_val = get_obj_val(result.x);
-        printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
+        printer(SSN_iter + result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
     } else if (result.SSN_opt == 3) {
         // Backtracking linesearch failed.
-        printer(result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
+        printer(SSN_iter + result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
     }
 
     return result;
