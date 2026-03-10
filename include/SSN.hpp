@@ -49,9 +49,13 @@ public:
     BoolArr active_W, inactive_W;
     int n_active_W, n_inactive_W;
     SpMat B_active_W, B_inactive_W, G, G_tr;
+    bool more_rows_than_cols = M > N || l > N;
+    bool is_schur_sparse = true;
+    bool is_system_chosen = false;
 
     // Outputs
     int SSN_in_iter;
+    int SSN_iter;
     T SSN_tol_achieved;
     int SSN_opt;
     T obj_val;
@@ -72,22 +76,26 @@ public:
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_, const T obj_const_,
         int n_, int m_, int N_, int M_, int l_,
         T SSN_tol_, int SSN_max_in_iter_,
-        PrintWhen SSN_print_when_, PrintWhat SSN_print_what_)
+        PrintWhen SSN_print_when_, PrintWhat SSN_print_what_,
+        bool is_system_chosen_)
     : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
       A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
       c(c_), b(b_), D1_diag(D1_diag_), D2_diag(D2_diag_),
       lx(lx_), ux(ux_), lw(lw_), uw(uw_), obj_const(obj_const_),
       n(n_), m(m_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
-      SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_)
+      SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_),
+      is_system_chosen(is_system_chosen_)
     {
         ones_N = Vec::Ones(N);
         ones_M = Vec::Ones(M);
         ones_l = Vec::Ones(l);
+        SSN_iter = 0;
     }
 
     void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-                           const Vec& y1_sol_, const Vec& z_sol_, T mu_, T rho_, T gamma_) {
+                           const Vec& y1_sol_, const Vec& z_sol_, T mu_, T rho_, T gamma_,
+                           const bool is_system_chosen_, const int SSN_iter_) {
         x = x_;
         y1 = y1_;
         y2 = y2_;
@@ -97,6 +105,8 @@ public:
         mu = mu_;
         rho = rho_;
         gamma = gamma_; // although it's constant
+        is_system_chosen = is_system_chosen_;
+        SSN_iter = SSN_iter_;
     }
 
     static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
@@ -117,6 +127,7 @@ public:
     Vec retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
     Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2, const T mu, const T tol, const int max_iter);
+    bool form_schur(const SpMat& G);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);

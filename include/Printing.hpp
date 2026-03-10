@@ -59,10 +59,8 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                     }
                     break;
                 case PrintLabel::SSN:
-                    if (opt == 0) {
-                        std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
-                    } else if (opt == 2) {
-                        std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
+                    if (opt == 2) {
+                        std::cout << "Hit the max # SSN inner iters.\n";
                     }
                     break;
             }
@@ -89,10 +87,8 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                     }
                     break;
                 case PrintLabel::SSN:
-                    if (opt == 0) {
-                        std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
-                    } else if (opt == 2) {
-                        std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
+                    if (opt == 2) {
+                        std::cout << "Hit the max # SSN inner iters.\n";
                     }
                     break;
             }
@@ -123,10 +119,8 @@ make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_it
                     }
                     break;
                 case PrintLabel::SSN:
-                    if (opt == 0) {
-                        std::cout << "Optimal solution found at SSN iteration " << iter << ".\n";
-                    } else if (opt == 2) {
-                        std::cout << "Optimal solution not found within the maximum number of SSN iterations.\n";
+                    if (opt == 2) {
+                        std::cout << "Hit the max # SSN inner iters.\n";
                     }
                     break;
             }

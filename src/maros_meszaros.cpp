@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <map>
 #include <chrono>
+#include <ctime>
 
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
@@ -20,16 +21,14 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 struct MarosMeszarosTestResult {
-    // Comparison result for a Netlib test problem
     bool agree;
-    std::string name;
-    bool abs_agree;
-    T abs_err;
-    bool rel_agree;
-    T rel_err;
-
-    // Result summary from PD-PMM_SSN solver
     int opt_status;
+    bool diverged;
+
+    std::string name;
+    T abs_err;
+    T rel_err;
+    
     T obj_val;
     int PMM_iter;
     int SSN_iter;
@@ -69,14 +68,14 @@ void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
 int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     
-    // std::string name = "DUALC1";
-    // T obj_val = 6.1552508e+03;
+    // std::string name = "QSHELL";
+    // T obj_val = 1.5726368e+12;
 
     std::string name = "AUG2DQP";
     T obj_val = 6.2370121e+06;
 
-    // std::string name = "QSIERRA";
-    // T obj_val =  2.3750458e+07;
+    // std::string name = "Q25FV47";
+    // T obj_val = 1.3744448e+07;
 
 
     std::string filename = root + name + ".SIF";
@@ -89,9 +88,9 @@ int main() {
 
     T tol = 1e-4;
     int max_iter = 100;
-    PrintWhen PMM_print_when = PrintWhen::ALWAYS;
+    PrintWhen PMM_print_when = PrintWhen::NEVER;
     PrintWhat PMM_print_what = PrintWhat::MINIMAL;
-    PrintWhen SSN_print_when = PrintWhen::END_ONLY;
+    PrintWhen SSN_print_when = PrintWhen::NEVER;
     PrintWhat SSN_print_what = PrintWhat::MINIMAL;
 
     Problem<T> prob(pd, tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
@@ -108,6 +107,15 @@ int main() {
 
     // Check feasibility
     // print_feasibility(pd, sol.x, tol);
+
+    // Check convergence
+    if (sol.opt == 0) {
+        std::cout << "Solver converged!\n";
+    } else if (sol.PMM_tol_achieved > 1e4 || sol.SSN_tol_achieved > 1e4) {
+        std::cout << "Solver diverged.\n"; 
+    } else {
+        std::cout << "Solver hit the max iteration before converging.\n";
+    }
 
     // Compare with reference objective value
     T abs_error = std::abs(sol.obj_val - obj_val);
@@ -127,18 +135,16 @@ void write_csv_header(const std::string& path) {
     namespace fs = std::filesystem;
     if (!fs::exists(fs::path(path)) || fs::is_empty(fs::path(path))) {
         std::ofstream csv(path);
-        csv << "agree,name,abs_agree,abs_err,rel_agree,rel_err,opt_status,obj_val,"
+        csv << "agree,opt_status,diverged,name,abs_err,rel_err,obj_val,"
             << "PMM_iter,SSN_iter,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec\n";
     }
 }
 
 void append_csv_result(const std::string& path, const MarosMeszarosTestResult& r) {
     std::ofstream csv(path, std::ios::out | std::ios::app);
-    csv << r.agree << "," << r.name << ","
-        << (r.abs_agree ? "1" : "0") << "," << r.abs_err << ","
-        << (r.rel_agree ? "1" : "0") << "," << r.rel_err << ","
-        << r.opt_status << "," << r.obj_val << ","
-        << r.PMM_iter << "," << r.SSN_iter << ","
+    csv << r.agree << "," << r.opt_status << "," << r.diverged << ","
+        << r.name << "," << r.abs_err << "," << r.rel_err << ","
+        << r.obj_val << "," << r.PMM_iter << "," << r.SSN_iter << ","
         << r.PMM_tol_achieved << "," << r.SSN_tol_achieved << ","
         << r.solving_time_sec << "\n";
     csv.close();
@@ -168,7 +174,7 @@ int main() {
         // {"CVXQP1L",    1.0870480e+08}, // too many QNZ
         {"CVXQP1M",    1.0875116e+06},
         {"CVXQP1S",    1.1590718e+04},
-        // // {"CVXQP2L",    8.1842458e+07}, // too many QNZ
+        // {"CVXQP2L",    8.1842458e+07}, // too many QNZ
         {"CVXQP2M",    8.2015543e+05},
         {"CVXQP2S",    8.1209405e+03},
         // {"CVXQP3L",    1.1571110e+08}, // too many QNZ
@@ -225,7 +231,7 @@ int main() {
         {"PRIMALC2",  -3.5513077e+03},
         {"PRIMALC5",  -4.2723233e+02},
         {"PRIMALC8",  -1.8309430e+04},
-        // {"Q25FV47",    1.3744448e+07}, // too many QNZ
+        {"Q25FV47",    1.3744448e+07},
         {"QADLITTL",   4.8031886e+05},
         {"QAFIRO",    -1.5907818e+00},
         {"QBANDM",     1.6352342e+04},
@@ -266,13 +272,13 @@ int main() {
         {"QSEBA",      8.1481801e+07},
         {"QSHARE1B",   7.2007832e+05},
         {"QSHARE2B",   1.1703692e+04},
-        // {"QSHELL",     1.5726368e+12}, // too many QNZ
+        {"QSHELL",     1.5726368e+12},
         {"QSHIP04L",   2.4200155e+06},
         {"QSHIP04S",   2.4249937e+06},
-        // {"QSHIP08L",   2.3760406e+06}, // too many QNZ
-        // {"QSHIP08S",   2.3857289e+06}, // too many QNZ
-        // {"QSHIP12L",   3.0188766e+06}, // too many QNZ
-        // {"QSHIP12S",   3.0569623e+06}, // too many QNZ
+        {"QSHIP08L",   2.3760406e+06},
+        {"QSHIP08S",   2.3857289e+06},
+        {"QSHIP12L",   3.0188766e+06},
+        {"QSHIP12S",   3.0569623e+06},
         {"QSIERRA",    2.3750458e+07},
         {"QSTAIR",     7.9854528e+06},
         {"QSTANDAT",   6.4118384e+03},
@@ -280,8 +286,8 @@ int main() {
         {"STADAT1",   -2.8526864e+07},
         {"STADAT2",   -3.2626665e+01},
         {"STADAT3",   -3.5779453e+01},
-        // {"STCQP1",     1.5514356e+05}, // too many QNZ
-        // {"STCQP2",     2.2327313e+04}, // too many QNZ
+        {"STCQP1",     1.5514356e+05},
+        {"STCQP2",     2.2327313e+04},
         {"TAME",       0.0000000e+00},
         {"UBH1",       1.1160008e+00},
         {"VALUES",    -1.3966211e+00},
@@ -294,13 +300,13 @@ int main() {
     // Parameters
     T tol = 1e-4;
     int max_iter = 100;
-    PrintWhen PMM_print_when = PrintWhen::EVERY10;
+    PrintWhen PMM_print_when = PrintWhen::NEVER;
     PrintWhat PMM_print_what = PrintWhat::MINIMAL;
     PrintWhen SSN_print_when = PrintWhen::NEVER;
     PrintWhat SSN_print_what = PrintWhat::MINIMAL;
 
     // Solver result
-    std::string csv_path = root + "results/maros_meszaros_test5.csv";
+    std::string csv_path = root + "results/maros_meszaros_overview_choosing_system_threshold_005.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -323,6 +329,9 @@ int main() {
             Problem<T> prob(pd, tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
             SSN_PMM<T> solver(prob);
 
+            std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            std::cout << "Compuation started at " << std::ctime(&curr_time);
+
             // Solve the QP
             auto t0 = std::chrono::steady_clock::now();
             Solution<T> sol = solver.solve();
@@ -331,9 +340,20 @@ int main() {
             double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
             std::cout << "\nPMM solver took " << solving_time_sec << " s.\n";
 
+            // Check convergence
+            bool diverged = false;
+            if (sol.opt == 0) {
+                std::cout << "Solver converged!\n";
+            } else if (sol.PMM_tol_achieved > 1e4 || sol.SSN_tol_achieved > 1e4) {
+                diverged = true;
+                std::cout << "Solver diverged.\n"; 
+            } else {
+                std::cout << "Solver hit the max iteration before converging.\n";
+            }
+
             // Compare
             T abs_err = std::abs(sol.obj_val - ref_obj_val);
-            T rel_err = abs_err / std::abs(sol.obj_val);
+            T rel_err = abs_err / std::abs(ref_obj_val);
             T err_tol = 1e-2;
             bool abs_agree = abs_err < err_tol;
             bool rel_agree = rel_err < err_tol;
@@ -343,8 +363,9 @@ int main() {
 
             // Record result
             MarosMeszarosTestResult result = {
-                agree, name, abs_agree, abs_err, rel_agree, rel_err,
-                sol.opt, sol.obj_val, sol.PMM_iter, sol.SSN_iter,
+                agree, sol.opt, diverged, name,
+                abs_err, rel_err,
+                sol.obj_val, sol.PMM_iter, sol.SSN_iter,
                 sol.PMM_tol_achieved, sol.SSN_tol_achieved, solving_time_sec
             };
             append_csv_result(csv_path, result);
@@ -352,12 +373,128 @@ int main() {
         } catch (const std::exception& e) {
             std::cerr << "ERROR solving " << name << ": " << e.what() << "\n";
             MarosMeszarosTestResult result = {
-                false, name, false, -1.0, false, -1.0,
-                -1, -1.0, -1, -1,
+                false, -1, false, name,
+                -1.0, -1.0,
+                -1.0, -1, -1,
                 -1.0, -1.0, -1.0
             };
             append_csv_result(csv_path, result);
         }
+    }
+
+    return 0;
+}
+
+
+std::vector<std::string> split_csv_line(const std::string& line) {
+    std::vector<std::string> fields;
+    std::stringstream ss(line);
+    std::string field;
+
+    while (std::getline(ss, field, ',')) {
+        fields.push_back(field);
+    }
+    return fields;
+}
+
+struct RowData {
+    std::string name;
+    double solving_time_sec = 0.0;
+};
+
+std::map<std::string, RowData> read_csv_by_name(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open file: " + filename);
+    }
+
+    std::string line;
+    if (!std::getline(file, line)) {
+        throw std::runtime_error("Empty file: " + filename);
+    }
+
+    // Read header
+    std::vector<std::string> header = split_csv_line(line);
+
+    int name_idx = -1;
+    int time_idx = -1;
+
+    for (int i = 0; i < header.size(); ++i) {
+        if (header[i] == "name") {
+            name_idx = i;
+        } else if (header[i] == "solving_time_sec") {
+            time_idx = i;
+        }
+    }
+    
+    if (name_idx == -1 || time_idx == -1) {
+        throw std::runtime_error("Required columns not found in file: " + filename);
+    }
+
+    std::map<std::string, RowData> data;
+
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+
+        std::vector<std::string> fields = split_csv_line(line);
+        if (fields.size() <= std::max(name_idx, time_idx)) {
+            std::cerr << "Skipping malformed line in " << filename << ":\n" << line << "\n";
+            continue;
+        }
+
+        RowData row;
+        row.name = fields[name_idx];
+
+        try {
+            row.solving_time_sec = std::stod(fields[time_idx]);
+        } catch (...) {
+            std::cerr << "Skipping line with invalid solving_time_sec in " << filename << ":\n" << line << "\n";
+            continue;
+        }
+
+        data[row.name] = row;
+    }
+    return data;
+}
+
+/*
+int main() {
+    namespace fs = std::filesystem;
+
+    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/results/";
+    const std::string schur_file = root + "maros_meszaros_overview.csv";
+    const std::string kkt_file = root + "maros_meszaros_overview_KKT.csv";
+    const std::string out_file = root + "maros_meszaros_solving_time_KKT_vs_Schur.csv";
+
+    auto schur_data = read_csv_by_name(schur_file);
+    auto kkt_data = read_csv_by_name(kkt_file);
+
+    std::ofstream csv(out_file);
+    csv << "preferred_sys,name,ratio,solving_time_sec_KKT,solving_time_sec_Schur\n";
+    csv << std::setprecision(5);
+
+    for (const auto& [name, kkt_row] : kkt_data) {
+        auto it = schur_data.find(name);
+        if (it == schur_data.end()) {
+            std::cerr << "Warning: problem " << name << " found in KKT file but not in Schur file.\n";
+            continue;
+        }
+
+        const auto& schur_row = it->second;
+        double kkt_time = kkt_row.solving_time_sec;
+        double schur_time = schur_row.solving_time_sec;
+
+        double ratio = kkt_time / schur_time;
+        std::string preferred_sys;
+
+        if (kkt_time < schur_time) {
+            preferred_sys = "KKT";
+        } else {
+            preferred_sys = "Schur";
+        }
+        if (ratio < 0.9 || ratio > 1.1) preferred_sys += "!";
+
+        csv << preferred_sys << "," << name << "," << ratio << "," << kkt_time << "," << schur_time << "\n";
     }
 
     return 0;
