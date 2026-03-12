@@ -240,53 +240,6 @@ typename SSN<T>::Vec SSN<T>::retrive_row_order(const Vec& u_sel, const Vec& u_un
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2,
-                                            const T mu, const T tol, const int max_iter) {
-    using Vec = typename SSN<T>::Vec;
-
-    const int s = G.rows();
-    const int n = G.cols();
-
-    // Build Schur operator
-    // SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
-
-    // Compute the rhs = G * H_inv * r1 + r2.
-    SpMat G_H_inv = G;
-    scale_columns(G_H_inv, H_diag_inv);
-    Vec rhs = G_H_inv * r1 + r2;
-
-    SpMat S = G_H_inv * G_tr; 
-    for (int i = 0; i < s; ++i) {
-        S.coeffRef(i, i) += 1 / mu;
-    }
-    S.makeCompressed();
-
-    // Solve S dxdy_ = rhs using conjugate gradient
-    Eigen::ConjugateGradient<
-        // SchurOperator<T>,
-        SpMat,
-        Eigen::Lower | Eigen::Upper,
-        Eigen::IncompleteCholesky<T>> cg;
-
-    cg.setTolerance(tol);
-    cg.setMaxIterations(max_iter);
-
-    cg.compute(S);
-    Vec dy_ = cg.solve(rhs);
-
-    std::cout << "  CG took " << cg.iterations() << " iterations.\n";
-
-    if (cg.info() != Eigen::Success) {
-        throw std::runtime_error("CG failed to converge.");
-    }
-
-    // Retrive dx
-    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
-
-    Vec dxdy_(n + s); 
-    dxdy_.head(n) = dx;
-    dxdy_.tail(s) = dy_;
-    return dxdy_;
 bool SSN<T>::form_schur(const SpMat& G) {
     // |KKT| = N + s + 2|G|
     // |Schur| ~ |G H_inv G^T| approximated by using denstest column in G
@@ -340,6 +293,56 @@ bool SSN<T>::form_schur(const SpMat& G) {
 
     double ratio = (double(s) / (double(N + s))) * (double(sq(KKT)) / double(sq(Schur)));
     return ratio > 0.05;
+}
+
+template <typename T>
+typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv,
+                                            const BoolArr& active_K, const Vec& r1, const Vec& r2,
+                                            T mu, T tol, int max_iter, bool update_prec) {
+    using Vec = typename SSN<T>::Vec;
+
+    const int s = G.rows();
+    const int n = G.cols();
+
+    // Matrix-free Schur operator S = G H_inv G^T + (1/mu) I
+    SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
+
+    // rhs = G * H_inv * r1 + r2.
+    Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
+
+    cg.setTolerance(tol);
+    cg.setMaxIterations(max_iter);
+    
+    cg.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec);
+    cg.compute(S);
+
+    if (cg.preconditioner().info() != Eigen::Success) {
+        throw std::runtime_error("Preconditioner setup failed.");
+    }
+
+    Vec dy_;
+    if (prev_dy_.size() == s) {
+        dy_ = cg.solveWithGuess(rhs, prev_dy_);
+    } else {
+        dy_ = cg.solve(rhs);
+    }
+
+    // std::cout << "CG took " << cg.iterations() << " iterations.\n";
+
+    if (cg.info() != Eigen::Success) {
+        // ...
+    }
+
+    prev_dy_ = dy_;
+
+    // Recover dx = H_inv (G^T dy_ - r1)
+    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
+
+    Vec dxdy_(n + s); 
+    dxdy_.head(n) = dx;
+    dxdy_.tail(s) = dy_;
+    return dxdy_;
+
 }
 
 template <typename T>
@@ -468,7 +471,7 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
         alpha = pow(delta, m);
         
         if (alpha < 1e-7) { // Lower bound on alpha
-            std::cout << "  SSN: Backtracking linesearch failed.\n";
+            // std::cout << "  SSN: Backtracking linesearch failed.\n";
             alpha = T(0);
             break;
         }
@@ -611,11 +614,17 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dist_K_u = compute_dist_box(u, lx, ux);
         Vec dist_W_v = compute_dist_box(v, lw, uw);
 
+        // If P_K and P_W are unchanged, reuse the preconditioner.
+        bool update_prec = false;
+
         // Compare the new P_K to the previous P_K
         if (!is_P_unchanged(diag_P_K, new_diag_P_K)) {
-            // If P_K is unchanged, reconstruct H_diag, H_diag_inv.
+            // If P_K is unchanged, reconstruct H_diag, H_diag_inv and the preconditioner for CG.
             // Otherwise, reuse them from the previous iteration.
+            update_prec = true;
+
             diag_P_K = new_diag_P_K;
+            active_K = (diag_P_K.array() == 1);
 
             // H = Q + mu(I_N - P_K) + I_N / rho
             if (Q_info == 0) {
@@ -631,9 +640,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             // If P_W is changed, reconstruct:
             // active_W, inactive_W, H_diag, H_diag_inv, B_active_W, B_inactive_W, G, G_tr.
             // Otherwise, reuse them from the previous iteration.
-            diag_P_W = new_diag_P_W;
+            update_prec = true;
 
-            // Active and inactive sets for (P_W)(v)
+            diag_P_W = new_diag_P_W;
             active_W = (diag_P_W.array() == 0);
             inactive_W = (diag_P_W.array() == 1);
             n_active_W = active_W.count();
@@ -678,23 +687,12 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Solve for dx and dy2_active_W
         auto t0_solve_lin_sys = std::chrono::steady_clock::now();
-        if (!is_system_chosen) { // Choose a system at the very first SSN iteration
-            is_schur_sparse = form_schur(G);
-            is_system_chosen = true;
-            if (is_schur_sparse) std::cout << " <System chosen: Schur>\n";
-            else std::cout << " <System chosen: KKT>\n";
-        }
         Vec dxdy_;
-        if (is_schur_sparse) {
-            dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
-        } else {
+        if (more_rows_than_cols) {
             dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
+        } else {
+            dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec);
         }
-        // if (more_rows_than_cols) {
-        //     dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
-        // } else {
-        //     dxdy_ = solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
-        // }
         auto t1_solve_lin_sys = std::chrono::steady_clock::now();
         double timer_solve_line_sys = time_diff_ms(t0_solve_lin_sys, t1_solve_lin_sys);
         // std::cout << "  Solving SSN system took " << timer_solve_line_sys << " ms.\n";
@@ -702,27 +700,18 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dx = dxdy_.head(N);
         Vec dy2_active_W = dxdy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
-
         
-        // ========== Backtracking linesearch ==========
+        // ========== Backtracking/exact linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
-
-        // Backtracking linesearch to find a Newton step size alpha
-        T alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
-        // if (result.SSN_in_iter == 1) alpha = 0.995;
-        // else alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
-
+        T alpha;
+        if (do_exact) {
+            alpha = exact_line_search(result.x, result.y2, dx, dy2);
+        } else {
+            alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
+        }
         auto t1_alpha = std::chrono::steady_clock::now();
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
-        // std::cout << "  Backtracking linesearch took " << timer_alpha << " ms.\n";
-        
-
-        // ========== Exact linesearch ==========
-        // auto t0_alpha = std::chrono::steady_clock::now();
-        // T alpha = exact_line_search(result.x, result.y2, dx, dy2);
-        // auto t1_alpha = std::chrono::steady_clock::now();
-        // double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
-        // std::cout << "  Exact linesearch took " << timer_alpha << " ms.\n";
+        // std::cout << "  Linesearch took " << timer_alpha << " ms.\n";
         // std::cout << "  alpha = " << alpha << "\n";
 
         // ========== Update x and y2 ==========
@@ -733,8 +722,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             // result.x -= stepsize * grad_L.head(N);
             // result.y2 -= stepsize * grad_L.tail(l);
 
-            // Option 2. Terminate and discard; come back with smaller mu and rho.
+            // Option 2. Terminate and discard; change from backtracking to exact and come back with smaller mu and rho.
             result.SSN_opt = 3; // means linesearch failure
+            do_exact = true;
             break;
 
             // Option 3. Just carry on with alpha = 1e-7

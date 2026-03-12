@@ -3,6 +3,7 @@
 #include <Eigen/Sparse>
 #include "Printing.hpp"
 #include "SchurOperator.hpp"
+#include "SchurPreconditioner.hpp"
 
 
 template <typename T>
@@ -46,12 +47,12 @@ public:
     const SpMat& A_tr, B_tr, L_tr;
     Vec H_diag, H_diag_inv;
     Vec diag_P_K, diag_P_W;
-    BoolArr active_W, inactive_W;
+    BoolArr active_W, inactive_W, active_K;
     int n_active_W, n_inactive_W;
     SpMat B_active_W, B_inactive_W, G, G_tr;
-    bool more_rows_than_cols = M > N || l > N;
-    bool is_schur_sparse = true;
-    bool is_system_chosen = false;
+
+    bool more_rows_than_cols;
+    bool do_exact = false;
 
     // Outputs
     int SSN_in_iter;
@@ -66,7 +67,15 @@ public:
 
     // Conjugate gradient parameters
     T Krylov_tol = 1e-12;
-    int Krylov_max_in_iter = 100;
+    int Krylov_max_in_iter = 50;
+
+    using CGSolver = Eigen::ConjugateGradient<
+        SchurOperator<T>,
+        Eigen::Lower | Eigen::Upper,
+        SchurPreconditioner<T>
+    >;
+    CGSolver cg;
+    Vec prev_dy_;
     
     // SSN() = default;
 
@@ -77,7 +86,7 @@ public:
         int n_, int m_, int N_, int M_, int l_,
         T SSN_tol_, int SSN_max_in_iter_,
         PrintWhen SSN_print_when_, PrintWhat SSN_print_what_,
-        bool is_system_chosen_)
+        bool more_rows_than_cols_)
     : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
       A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
       c(c_), b(b_), D1_diag(D1_diag_), D2_diag(D2_diag_),
@@ -85,7 +94,7 @@ public:
       n(n_), m(m_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
       SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_),
-      is_system_chosen(is_system_chosen_)
+      more_rows_than_cols(more_rows_than_cols_)
     {
         ones_N = Vec::Ones(N);
         ones_M = Vec::Ones(M);
@@ -95,7 +104,7 @@ public:
 
     void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
                            const Vec& y1_sol_, const Vec& z_sol_, T mu_, T rho_, T gamma_,
-                           const bool is_system_chosen_, const int SSN_iter_) {
+                           const int SSN_iter_) {
         x = x_;
         y1 = y1_;
         y2 = y2_;
@@ -105,7 +114,6 @@ public:
         mu = mu_;
         rho = rho_;
         gamma = gamma_; // although it's constant
-        is_system_chosen = is_system_chosen_;
         SSN_iter = SSN_iter_;
     }
 
@@ -126,8 +134,8 @@ public:
     SpMat scale_columns(const SpMat& M, const Vec& d);
     Vec retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
-    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2, const T mu, const T tol, const int max_iter);
     bool form_schur(const SpMat& G);
+    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);

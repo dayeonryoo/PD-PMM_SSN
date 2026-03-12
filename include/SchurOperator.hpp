@@ -11,7 +11,7 @@ namespace internal {
     template <typename T>
     struct traits<SchurOperator<T>> : traits<SparseMatrix<T>> {
         using Scalar = T;
-        using RealScalar = typename NumTraits<Scalar>::Real;
+        using RealScalar = typename NumTraits<T>::Real;
         using StorageIndex = Eigen::Index;
 
         enum {

@@ -254,7 +254,7 @@ int main() {
     PrintWhat SSN_print_what = PrintWhat::NONE;
 
     // Solver result
-    std::string csv_path = root + "results/netlib_overview_choosing_system_threshold_005.csv";
+    std::string csv_path = root + "results/netlib_pcg.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : LPs) {

@@ -68,23 +68,23 @@ public:
     SpMat Q_ruiz, A_ruiz, B_ruiz;
     Vec problem_Q_diag, Q_diag_ruiz, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz;
     Vec D1_diag, D2_diag;
-    T a = T(1); // Additional scalar for the objective function (c and Q)
     Vec x_descaled, y1_descaled, z_descaled;
     Vec x_sol, y1_sol, z_sol;
 
     // Constant parameters
     T tol = 1e-4;
-    int max_iter = 100;
-    int SSN_max_iter = 500;
+    int max_iter = 120;
+    int SSN_max_iter = 2000;
     int SSN_max_in_iter = 30;
-    T reg_limit = 1e6;
-    T eps_limit = tol;
-    T gamma = 0.95;
-    bool is_system_chosen = false; // Did SSN solver decide which system to solve?
-
+    T reg_limit = 1e+2/tol;
+    T eps_limit = 1e-2*tol;
+    T gamma = 0.8;
+    bool more_rows_than_cols = N < M + l;
+    
     // Updated parameters
+    T mu0 = 2.0;
     T mu = 1e1;
-    T rho = 1e1;
+    T rho = 5e1;
     T eps_bcl = 1e0;
     T SSN_tol = 1e0;
     
@@ -145,7 +145,7 @@ public:
     void printable_sol(const Vec& x, const Vec& y1, const Vec& z);
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
     T compute_p(const Vec& x);
-    void update_with_bcl(const T p, const Vec& y2_hat);
+    void update_with_bcl(const T p, const Vec& y2_hat, const T res);
     void print_params(const int iter);
     void print_residuals(const int iter, const Vec& res_norm);
     Solution<T> solve();
