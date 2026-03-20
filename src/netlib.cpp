@@ -139,10 +139,11 @@ void append_csv_result(const std::string& path, const NetlibTestResult& r) {
     csv.close();
 }
 
-
+/*
 int main() {
+    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
 
-    // Filenames and objective values of Netlib LPs
+    // Netlib LPs
     std::map<std::string,double> LPs = {
         {"25FV47", 5.5018458883E+03},
         {"80BAU3B", 9.8723216072E+05},
@@ -243,18 +244,14 @@ int main() {
         {"WOODW", 1.3044763331E+00}
     };
     
-    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
-
     // Parameters in common
-    T tol = 1e-4;
-    int max_iter = 1e2;
-    PrintWhen PMM_print_when = PrintWhen::EVERY10;
-    PrintWhat PMM_print_what = PrintWhat::MINIMAL;
-    PrintWhen SSN_print_when = PrintWhen::NEVER;
-    PrintWhat SSN_print_what = PrintWhat::NONE;
+    T tol = 1e-3;
+    int max_iter = 200;
+    PrintWhen when = PrintWhen::ALWAYS;
+    PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/netlib_pcg.csv";
+    std::string csv_path = root + "results/netlib_lp.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : LPs) {
@@ -274,7 +271,7 @@ int main() {
             ParsedModel<T> model = parser.parse(filename);
             PDPMMdata<T> pd = parser.to_pdpmm(model);
 
-            Problem<T> prob(pd, tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
+            Problem<T> prob(pd, tol, max_iter, when, what);
             SSN_PMM<T> solver(prob);
 
             std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -332,3 +329,153 @@ int main() {
 
     return 0;
 }
+*/
+
+// ==================== Netlib infeasible problems ====================
+
+
+int main() {
+    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
+
+    std::vector<std::string> LPs = {
+        "BGDBG1",
+        "BGETAM",
+        "BGINDY",
+        "BGPRTR",
+        "BOX1",
+        "CERIA3D",
+        "CHEMCOM",
+        "CPLEX1",
+        "CPLEX2",
+        "EX72A",
+        "EX73A",
+        "FOREST6",
+        "GALENET",
+        "GOSH",
+        "GRAN",
+        "GREENBEA",
+        "ITEST2",
+        "ITEST6",
+        "KLEIN1",
+        "KLEIN2",
+        "KLEIN3",
+        "MONDOU2",
+        "PANG",
+        "PILOT4I",
+        "QUAL",
+        "REACTOR",
+        "REFINERY",
+        "VOL1",
+        "WOODINFE"
+    };
+    
+    // Parameters in common
+    T tol = 1e-3;
+    int max_iter = 200;
+    PrintWhen when = PrintWhen::ALWAYS;
+    PrintWhat what = PrintWhat::TUNING;
+
+    // Solver result
+    std::string csv_path = root + "results/netlib_infeas.csv";
+
+    // Write header
+    if (!std::filesystem::exists(std::filesystem::path(csv_path))
+        || std::filesystem::is_empty(std::filesystem::path(csv_path))) {
+        std::ofstream csv(csv_path);
+        csv << "System,infeas_detected,opt_status,name,PMM_iter,SSN_iter,PMM_res,SSN_res,solving_time_sec\n";
+    }
+
+    // Loop over all LPs
+    for (const std::string name : LPs) {
+        // Build full path and check if file exists
+        std::string filename = root + "data/netlib_infeas/" + name + ".mps";
+        if (!std::filesystem::exists(filename)) {
+            std::cerr << "SKIP: File not found: " << name << "\n";
+            continue;
+        }
+
+        std::cout << "\n==========Solving " << name << "==========\n";
+        
+        try {
+            // Read problem data from the file
+            MpsParser<T> parser;
+            ParsedModel<T> model = parser.parse(filename);
+            PDPMMdata<T> pd = parser.to_pdpmm(model);
+
+            Problem<T> prob(pd, tol, max_iter, when, what);
+            SSN_PMM<T> solver(prob);
+
+            std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            std::cout << "Compuation started at " << std::ctime(&curr_time);
+
+            // Chosen system:
+            std::string system = solver.more_rows_than_cols ? "K" : "S";
+
+            // Solve the LP
+            auto t0 = std::chrono::steady_clock::now();
+            Solution<T> sol = solver.solve();
+            auto t1 = std::chrono::steady_clock::now();
+            double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
+            std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
+
+            // Store the result
+            bool infeas_detected = (sol.opt == -2 || sol.opt == -3);
+            std::ofstream csv(csv_path, std::ios::out | std::ios::app);
+            csv << system << "," << infeas_detected << "," << sol.opt << ","
+                << name << "," << sol.PMM_iter << "," << sol.SSN_iter << ","
+                << sol.PMM_tol_achieved << "," << sol.SSN_tol_achieved << ","
+                << solving_time_sec << "\n";
+            csv.close();
+
+        } catch (const std::exception& e) {
+            std::cerr << "ERROR solving " << name << ": " << e.what() << "\n"; 
+            std::ofstream csv(csv_path, std::ios::out | std::ios::app);
+            csv << system << "," << 0 << "," << -1 << ","
+                << name << "," << -1 << "," << -1 << ","
+                << -1.0 << "," << -1.0 << "," << -1.0 << "\n";
+            csv.close();
+        }
+    }
+}
+
+
+/*
+int main() {
+
+    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib_infeas/BGDBG1.mps";
+
+    // Parameters for PD-PMM_SSN solver
+    T tol = 1e-3;
+    int max_iter = 200;
+    PrintWhen when = PrintWhen::EVERY10;
+    PrintWhat what = PrintWhat::FULL;
+
+    // Extract problem data from the mps file using our MpsParser and construct solver
+    MpsParser<T> parser;
+    ParsedModel<T> model = parser.parse(filename);
+    PDPMMdata<T> pd = parser.to_pdpmm(model);
+
+    Problem<T> prob(pd, tol, max_iter, when, what);
+    SSN_PMM<T> solver(prob);
+
+    // Chosen system
+    std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";
+    std::cout << "N = " << solver.N << ", M = " << solver.M << "\n";
+    if (solver.more_rows_than_cols) std::cout << "Solving KKT.\n";
+    else std::cout << "Solving Schur.\n";
+
+    // Solve the LP
+    auto t0 = std::chrono::steady_clock::now();
+    Solution<T> sol = solver.solve();
+    auto t1 = std::chrono::steady_clock::now();
+    double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
+    sol.print_summary();
+    std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
+    T obj_val = sol.obj_val;
+   
+    // Check feasibility
+    // print_feasibility(pd, sol.x, tol);
+
+    return 0;
+}
+*/

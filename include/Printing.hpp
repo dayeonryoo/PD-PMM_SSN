@@ -1,5 +1,6 @@
 #pragma once
 #include <iostream>
+#include <iomanip>
 #include <functional>
 #include <chrono>
 
@@ -11,17 +12,15 @@ inline double time_diff_ms(const std::chrono::steady_clock::time_point& start,
 
 enum class PrintWhen {
     NEVER,
-    EVERY5,
     EVERY10,
-    ALWAYS,
-    END_ONLY
+    ALWAYS
 };
 
 enum class PrintWhat {
     NONE,
     MINIMAL, // iter, tol
-    SUMMARY, // iter, x, y2, tol, 
-    FULL, // iter, obj_val, x, y1, y2, z, tol
+    TUNING, // iter, tol, params
+    FULL, // iter, obj_val, tol, params
 };
 
 enum class PrintLabel {
@@ -29,102 +28,55 @@ enum class PrintLabel {
     PMM
 };
 
-template <typename T, typename Vec>
-std::function<void(int, int, T, const Vec&, const Vec&, const Vec&, const Vec&, T)>
-make_print_function(PrintLabel label, PrintWhen when, PrintWhat what, int max_iter) {
-    return [label, when, what, max_iter](int iter, int opt, T obj_val, const Vec& x, const Vec& y1,
-                                         const Vec& y2, const Vec& z, T tol) {
-        if (when == PrintWhen::NEVER) return;
-        if (when == PrintWhen::END_ONLY && iter < max_iter && opt != 0) return;
-        if (when == PrintWhen::EVERY5 && iter % 5 != 0) return;
-        if (when == PrintWhen::EVERY10 && iter % 10 != 0) return;
+void print_header(PrintWhen when, PrintWhat what) {
+    if (when == PrintWhen::NEVER || what == PrintWhat::NONE) return;
 
-        if (what == PrintWhat::MINIMAL) {
-            switch (label) {
-                case PrintLabel::SSN:
-                    std::cout << "SSN ";
-                    break;
-                case PrintLabel::PMM:
-                    std::cout << "PMM ";
-                    break;
-            }
-            std::cout << "iter " << iter << ":\n";
-            std::cout << "  tol = " << tol << "\n";
-            switch (label) {
-                case PrintLabel::PMM:
-                    if (opt == 0) {
-                        std::cout << "Optimal solution found at PMM iteration " << iter << ".\n";
-                    } else if (opt == 1) {
-                        std::cout << "Optimal solution not found within the maximum number of PMM iterations.\n";
-                    }
-                    break;
-                case PrintLabel::SSN:
-                    if (opt == 2) {
-                        std::cout << "Hit the max # SSN inner iters.\n";
-                    }
-                    break;
-            }
-        }
-        if (what == PrintWhat::SUMMARY) {
-            switch (label) {
-                case PrintLabel::SSN:
-                    std::cout << "SSN ";
-                    break;
-                case PrintLabel::PMM:
-                    std::cout << "PMM ";
-                    break;
-            }
-            std::cout << "iter " << iter << ":\n";
-            std::cout << "  x = (" << x.transpose() << "),\n";
-            std::cout << "  y2 = (" << y2.transpose() << "),\n";
-            std::cout << "  tol = " << tol << "\n";
-            switch (label) {
-                case PrintLabel::PMM:
-                    if (opt == 0) {
-                        std::cout << "Optimal solution found at PMM iteration " << iter << ".\n";
-                    } else if (opt == 1) {
-                        std::cout << "Optimal solution not found within the maximum number of PMM iterations.\n";
-                    }
-                    break;
-                case PrintLabel::SSN:
-                    if (opt == 2) {
-                        std::cout << "Hit the max # SSN inner iters.\n";
-                    }
-                    break;
-            }
-        } else if (what == PrintWhat::FULL) {
-            switch (label) {
-                case PrintLabel::SSN:
-                    std::cout << "SSN ";
-                    break;
-                case PrintLabel::PMM:
-                    std::cout << "PMM ";
-                    break;
-            }
-            std::cout << "iter " << iter << ":\n";
-            if (label == PrintLabel::PMM) {
-                std::cout << "  obj_val = " << obj_val << ",\n";
-            }
-            std::cout << "  x = (" << x.transpose() << "),\n";
-            std::cout << "  y1 = (" << y1.transpose() << "),\n";
-            std::cout << "  y2 = (" << y2.transpose() << "),\n";
-            std::cout << "  z = (" << z.transpose() << "),\n";
-            std::cout << "  tol = " << tol << "\n";
-            switch (label) {
-                case PrintLabel::PMM:
-                    if (opt == 0) {
-                        std::cout << "Optimal solution found at PMM iteration " << iter << ".\n";
-                    } else if (opt == 1) {
-                        std::cout << "Optimal solution not found within the maximum number of PMM iterations.\n";
-                    }
-                    break;
-                case PrintLabel::SSN:
-                    if (opt == 2) {
-                        std::cout << "Hit the max # SSN inner iters.\n";
-                    }
-                    break;
-            }
-        }
-    };
+    const int w_iter = 8;
+    const int w_val  = 14;
+
+    std::cout << std::setw(w_iter) << "PMM" << std::setw(w_iter) << "SSN";
+    if (what == PrintWhat::FULL) {
+        std::cout << std::setw(w_val)  << "Objective";
+    }
+    std::cout << std::setw(w_val)  << "PrimalRes"
+                << std::setw(w_val)  << "DualRes"
+                << std::setw(w_val)  << "Comp_x"
+                << std::setw(w_val)  << "Comp_Bx"
+                << std::setw(w_val)  << "SSN_res";
+    if (what == PrintWhat::TUNING || what == PrintWhat::FULL) {
+        std::cout << std::setw(w_val)  << "mu" << std::setw(w_val)  << "rho";
+    }
+    std::cout << "\n";
+
+    std::cout << std::string(w_iter*2 + w_val*5, '-');
+    if (what == PrintWhat::TUNING) {
+        std::cout << std::string(w_val*2, '-');
+    } else if (what == PrintWhat::FULL) {
+        std::cout << std::string(w_val*3, '-');
+    }
+    std::cout << "\n";
 }
 
+template <typename T, typename Vec>
+void print(PrintWhen when, PrintWhat what, int PMM_iter, int SSN_iter, T obj_val, const Vec& res_norms, T SSN_res, T mu, T rho) {
+    if (when == PrintWhen::NEVER || what == PrintWhat::NONE) return;
+    if (when == PrintWhen::EVERY10 && PMM_iter % 10 != 0) return;
+
+    const int w_iter = 8;
+    const int w_val  = 14;
+
+    std::cout << std::setw(w_iter) << PMM_iter << std::setw(w_iter) << SSN_iter;
+    if (what == PrintWhat::FULL) {
+        std::cout << std::setw(w_val)  << std::scientific << obj_val;
+    }
+    T max_res = res_norms.maxCoeff();
+    for (T res : res_norms) {
+        if (res == max_res) std::cout << "\033[1m" << std::setw(w_val)  << res << "\033[0m";
+        else std::cout << std::setw(w_val)  << res;
+    }
+    std::cout << std::setw(w_val)  << SSN_res;
+    if (what == PrintWhat::TUNING || what == PrintWhat::FULL) {
+        std::cout << std::setw(w_val)  << mu << std::setw(w_val)  << rho;
+    }
+    std::cout << "\n";
+}

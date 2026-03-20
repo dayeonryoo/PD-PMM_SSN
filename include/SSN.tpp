@@ -6,27 +6,6 @@
 #include <Eigen/SparseCholesky>
 
 template <typename T>
-T SSN<T>::get_obj_val(const Vec& x) {
-    T obj_val = obj_const + c.dot(x);
-    if (Q_info != 0) {
-        obj_val += T(0.5) * Q_diag.cwiseProduct(x).dot(x);
-    }
-    return obj_val;
-}
-
-template <typename T>
-typename SSN<T>::Vec SSN<T>::printable_x(const Vec& x) {
-    using Vec = typename SSN<T>::Vec;
-    Vec x_sol;
-    if (Q_info == 2) {
-        x_sol = x.head(n).array() * D2_diag.array();
-    } else {
-        x_sol = x.cwiseProduct(D2_diag);
-    }
-    return x_sol;
-}
-
-template <typename T>
 T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
     using Vec = typename SSN<T>::Vec;
 
@@ -395,11 +374,11 @@ typename SSN<T>::Vec SSN<T>::solve_using_LDLT(const SpMat& G, const Vec& H_diag,
     const int n = G.cols();
     const int N_tot = n + s;
 
-    // Form M = [-H, G^T; G, 1/mu]
+    // Form K = [-H, G^T; G, 1/mu]
     std::vector<Triplet> trip;
     trip.reserve(N_tot + 2 * G.nonZeros());
 
-    // Top-left block: -H_inv
+    // Top-left block: -H
     for (int i = 0; i < n; ++i) {
         const T val = -H_diag(i);
         if (val != T(0)) trip.emplace_back(i, i, val);
@@ -442,7 +421,6 @@ typename SSN<T>::Vec SSN<T>::solve_using_LDLT(const SpMat& G, const Vec& H_diag,
     return dxdy_; // [dx; dy_]
 }
 
-
 template <typename T>
 T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
     using Vec = typename SSN<T>::Vec;
@@ -470,7 +448,7 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
         m += 10;
         alpha = pow(delta, m);
         
-        if (alpha < 1e-7) { // Lower bound on alpha
+        if (alpha < 1e-2) { // Lower bound on alpha
             // std::cout << "  SSN: Backtracking linesearch failed.\n";
             alpha = T(0);
             break;
@@ -543,24 +521,106 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
 }
 
 template <typename T>
+bool SSN<T>::primal_infeas_y2(const Vec& delta_y2, T eps_pinf) {
+    /*
+    If all 2 conditions are true for nonzero delta_y2, a QP may be primal infeasible.
+    1. ||B^T delta_y2||_inf <= eps_pinf * ||delta_y2||_inf;
+    2. sum_i [uw_i * max(y2_i, 0)] + sum_i [lw_i * min(y2_i, 0)] <= eps_pinf * ||delta_y2||_inf
+       for finite uw_i and lw_i.
+    Together with conditions on y1 and z, we may conclude primal infeasibility.
+    */
+    if (l == 0) return true;
+
+    const T delta_y2_inf = inf_norm(delta_y2);
+    if (delta_y2_inf == T(0)) return false;
+    const T rhs = eps_pinf * delta_y2_inf;
+    
+    bool cond1 = inf_norm(B_tr * delta_y2) <= rhs;
+    if (!cond1) return false;
+
+    T lhs = T(0);
+    for (int i = 0; i < l; ++i) {
+        if (lw(i) > -1e20 && delta_y2(i) < T(0)) {
+            lhs += lw(i) * delta_y2(i);
+        }
+        if (uw(i) < 1e20 && delta_y2(i) > T(0)) {
+            lhs += uw(i) * delta_y2(i);
+        }
+    }
+    bool cond2 = lhs <= -rhs;
+    return cond2;
+}
+
+template <typename T>
+bool SSN<T>::dual_infeas(const Vec& delta_x, T eps_dinf) {
+    /*
+    If all 5 conditions are true for nonzero delta_x, conclude dual infeasibility.
+    1. ||Q delta_x||_inf <= eps_dinf * ||delta_x||_inf;
+    2. c^T delta_x <= -eps_dinf * ||delta_x||_inf;
+    3. ||A delta_x||_inf <= eps_dinf * ||delta_x||_inf;
+    4. |delta_x_i| <= eps_dinf  * ||delta_x||_inf  for finite bounds on x_i,
+         delta_x_i >= -eps_dinf * ||delta_x||_inf  for finite lower bounds on x_i,
+         delta_x_i <= eps_dinf  * ||delta_x||_inf  for finite upper bounds on x_i;
+    5. |(B delta_x)_i| <= eps_dinf  * ||delta_x||_inf for finite bounds on (Bx)_i,
+         (B delta_x)_i >= -eps_dinf * ||delta_x||_inf for finite lower bounds on (Bx)_i,
+         (B delta_x)_i <= eps_dinf  * ||delta_x||_inf for finite upper bounds on (Bx)_i.
+    */
+    using Vec = typename SSN<T>::Vec;
+    using SpMat = typename SSN<T>::SpMat;
+
+    const T delta_x_inf = inf_norm(delta_x);
+    if (delta_x_inf == T(0)) return false;
+    const T rhs = eps_dinf * delta_x_inf;
+    
+    bool cond1 = true;
+    if (Q_info != 0) { // Nontrivial Q
+        cond1 = inf_norm(Q_diag.cwiseProduct(delta_x)) <= rhs;
+    }
+    if (!cond1) return false;
+
+    bool cond2 = c.dot(delta_x) <= -rhs;
+    if (!cond2) return false;
+
+    bool cond3 = true;
+    if (M != 0) {
+        cond3 = inf_norm(A * delta_x) <= rhs;
+    }
+    if (!cond3) return false;
+
+    for (int i = 0; i < N; ++i) {
+        if (lx(i) > -1e20 && delta_x(i) < -rhs) return false;
+        if (ux(i) < 1e20 && delta_x(i) > rhs) return false;
+    }
+
+    for (int i = 0; i < l; ++i) {
+        T B_delta_x_i = T(0);
+        for (typename SpMat::InnerIterator it(B_tr, i); it; ++it) {
+            B_delta_x_i += it.value() * delta_x[it.row()];
+        }
+        if (lw(i) > -1e20 && B_delta_x_i < -rhs) return false;
+        if (uw(i) < 1e20 && B_delta_x_i > rhs) return false;
+    }
+
+    return true;
+}
+
+template <typename T>
 SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
     using BoolArr = typename SSN<T>::BoolArr;
-    using Triplet =typename SSN<T>::Triplet;
+    using Triplet = typename SSN<T>::Triplet;
 
     // Intialize iteration counter and set starting points
     SSN_result<T> result;
-    result.SSN_in_iter = 0;
     result.x = x;
     result.y2 = y2;
-    result.SSN_opt = -1;
-
-    // Initialize printing
-    auto printer = make_print_function<T, Vec>(SSN_print_label, SSN_print_when, SSN_print_what, SSN_iter + SSN_max_in_iter);
+    result.iter = 0;
+    result.opt = -1;
+    result.tol_achieved = T(0);
 
     // SSN main loop
-    while (result.SSN_in_iter < SSN_max_in_iter) {
+    while (result.iter < SSN_max_in_iter) {
         // ----------------------------------------------
         // Structure:
         // Let M(u), with u = (x,y_2), be the proximal augmented Lagrangian
@@ -576,28 +636,6 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // TIMER FOR SSN ITERATION
         auto t0_ssn = std::chrono::steady_clock::now();
-
-        // Compute gradient of Lagrangian at current (x, y2)
-        Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
-        result.SSN_tol_achieved = grad_L.norm();
-
-        // Ruiz-descale x and shrink x to the original dimension (n, m, l) for printing
-        x_sol = printable_x(result.x);
-
-        // Compute objective value for printing
-        result.obj_val = get_obj_val(result.x);
-
-        // Check termination criterion
-        if (result.SSN_tol_achieved < eps) {
-            result.SSN_opt = 0; // Optimality achieved
-            printer(SSN_iter + result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
-            break;
-        }
-
-        // Print current iteration info
-        printer(SSN_iter + result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
-
-        result.SSN_in_iter++;
 
         // ========== Preporation for Cholesky decomposition ==========
         auto t0_chol_prep = std::chrono::steady_clock::now();
@@ -700,7 +738,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec dx = dxdy_.head(N);
         Vec dy2_active_W = dxdy_.tail(n_active_W);
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
-        
+
         // ========== Backtracking/exact linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
         T alpha;
@@ -723,7 +761,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             // result.y2 -= stepsize * grad_L.tail(l);
 
             // Option 2. Terminate and discard; change from backtracking to exact and come back with smaller mu and rho.
-            result.SSN_opt = 3; // means linesearch failure
+            result.opt = 3; // linesearch failed
             do_exact = true;
             break;
 
@@ -731,26 +769,40 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             // result.x += 1e-7 * dx;
             // result.y2 += 1e-7 * dy2;
         } else {
-            result.x += alpha * dx;
-            result.y2 += alpha * dy2;
+            // Newton's steps
+            delta_x = alpha * dx;
+            delta_y2 = alpha * dy2;
+
+            // Update x and y2
+            result.x += delta_x;
+            result.y2 += delta_y2;
+
+            // Check infeasibility
+            bool dinf = dual_infeas(delta_x, eps_dinf);
+            if (dinf) { result.opt = -3; std::cout << "Dual infeasible.\n"; break; } // Dual infeasible
+            bool pinf_y2 = primal_infeas_y2(delta_y2, eps_pinf);
+            if (pinf_y1z || pinf_y2) { result.opt = -2; std::cout << "Primal infeasible.\n"; break; } // Primal infeasible
+            
         }
 
+        // Compute gradient of Lagrangian at current (x, y2)
+        Vec grad_L = compute_grad_Lagrangian(result.x, result.y2);
+        result.tol_achieved = inf_norm(grad_L);
+
+        result.iter++;
         auto t1_ssn = std::chrono::steady_clock::now();
         double timer_ssn = time_diff_ms(t0_ssn, t1_ssn);
         // std::cout << "  SSN iteration took " << timer_ssn << " ms.\n";
-
+        
+        // Check termination criterion
+        if (result.tol_achieved < eps) {
+            SSN_opt = 0; // Optimality achieved
+            break;
+        }
     }
 
-    if (result.SSN_opt == -1) {
-        result.SSN_opt = 2; // Maximum number of SSN inner iterations reached without convergence
-        // Modify x for printing. (This modification is not saved as SSN result.)
-        x_sol = printable_x(result.x);
-        result.obj_val = get_obj_val(result.x);
-        printer(SSN_iter + result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
-    } else if (result.SSN_opt == 3) {
-        // Backtracking linesearch failed.
-        printer(SSN_iter + result.SSN_in_iter, result.SSN_opt, result.obj_val, x_sol, y1_sol, result.y2, z_sol, result.SSN_tol_achieved);
+    if (result.opt == -1) {
+        result.opt = 2; // Maximum number of SSN inner iterations reached without convergence
     }
-
     return result;
 }

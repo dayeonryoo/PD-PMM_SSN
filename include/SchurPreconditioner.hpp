@@ -42,6 +42,9 @@ public:
 
     template <typename Rhs>
     Vec solve(const Eigen::MatrixBase<Rhs>& b) const {
+        if (info_ != Eigen::Success) {
+            throw std::runtime_error("SchurPreconditioner solve called after failed factorization.");
+        }
         return llt_.solve(b);
     }
 

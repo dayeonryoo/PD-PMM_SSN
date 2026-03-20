@@ -64,5 +64,5 @@ private:
     const SpMat& G_tr;
     const Vec& H_diag_inv;
     T mu_inv;
-    int m_;
+    Eigen::Index m_;
 };

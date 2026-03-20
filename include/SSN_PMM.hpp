@@ -73,18 +73,20 @@ public:
 
     // Constant parameters
     T tol = 1e-4;
-    int max_iter = 120;
+    int max_iter = 200;
     int SSN_max_iter = 2000;
     int SSN_max_in_iter = 30;
     T reg_limit = 1e+2/tol;
     T eps_limit = 1e-2*tol;
+    T eps_pinf = 1e-5;
+    T eps_dinf = 1e-5;
     T gamma = 0.8;
     bool more_rows_than_cols = N < M + l;
     
     // Updated parameters
-    T mu0 = 2.0;
+    T mu0 = 1e0;
     T mu = 1e1;
-    T rho = 5e1;
+    T rho = 1e1;
     T eps_bcl = 1e0;
     T SSN_tol = 1e0;
     
@@ -96,29 +98,25 @@ public:
     T PMM_tol_achieved, SSN_tol_achieved;
 
     // Printing
-    PrintWhen PMM_print_when = PrintWhen::NEVER;
-    PrintWhen SSN_print_when = PrintWhen::NEVER;
-    PrintWhat PMM_print_what = PrintWhat::NONE;
-    PrintWhat SSN_print_what = PrintWhat::NONE;
-    PrintLabel PMM_print_label = PrintLabel::PMM;
+    PrintWhen when = PrintWhen::NEVER;
+    PrintWhat what = PrintWhat::NONE;
 
     // Constructors
     SSN_PMM() {}
     SSN_PMM(const Problem<T>& problem)
     : tol(problem.tol), max_iter(problem.max_iter),
       n(problem.n), m(problem.m), l(problem.l), obj_const(problem.obj_const),
-      PMM_print_when(problem.PMM_print_when), PMM_print_what(problem.PMM_print_what),
-      SSN_print_when(problem.SSN_print_when), SSN_print_what(problem.SSN_print_what)
+      when(problem.when), what(problem.what)
     {
         get_Q_info(problem.Q);
         if (n == 0 && m == 0 && l == 0) {
             determine_dimensions(problem);
         }
         check_dimensions(problem);
-        initialize_sols();
         ruiz_scaling(problem.Q, problem_Q_diag, problem.A, problem.B, problem.c, problem.b, problem.lx, problem.ux);
         set_default(problem);
-        check_infeasibility();
+        initialize_sols();
+        check_bounds();
         A_tr = A.transpose();
         B_tr = B.transpose();
     }
@@ -126,11 +124,11 @@ public:
     void get_Q_info(const SpMat& Q);
     void determine_dimensions(const Problem<T>& problem);
     void check_dimensions(const Problem<T>& problem);
-    void initialize_sols();
     void ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A, const SpMat& B, const Vec& c, const Vec& b, const Vec& lx, const Vec& ux);
     void set_L_from_LLT(const SpMat& Q);
     void set_default(const Problem<T>& problem);
-    void check_infeasibility();
+    void initialize_sols();
+    void check_bounds();
 
     static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
         return u.cwiseMax(lower).cwiseMin(upper);
@@ -138,7 +136,6 @@ public:
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
     }
-
     Vec compute_residual_norms();
     Vec compute_residual_norms_inf();
     T objective_value(const Vec& x);
@@ -146,8 +143,8 @@ public:
     void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
     T compute_p(const Vec& x);
     void update_with_bcl(const T p, const Vec& y2_hat, const T res);
-    void print_params(const int iter);
-    void print_residuals(const int iter, const Vec& res_norm);
+    bool primal_infeas_y1(const Vec& delta_y1, T eps_pinf);
+    bool primal_infeas_z(const Vec& delta_z, T eps_pinf);
     Solution<T> solve();
 };
 

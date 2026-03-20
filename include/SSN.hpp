@@ -11,10 +11,9 @@ struct SSN_result {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     Vec x;
     Vec y2;
-    int SSN_in_iter;
-    T SSN_tol_achieved;
-    int SSN_opt;
-    T obj_val;
+    int opt;
+    int iter;
+    T tol_achieved;
 };
 
 template <typename T>
@@ -34,12 +33,11 @@ public:
     const T obj_const;
     const int n, m, N, M, l;
     Vec x, y1, y2, z;
-    Vec y1_sol, z_sol;
+    Vec delta_x, delta_y2;
     int SSN_max_in_iter;
     T mu, rho, gamma, SSN_tol;
-    PrintWhen SSN_print_when;
-    PrintWhat SSN_print_what;
-    PrintLabel SSN_print_label = PrintLabel::SSN;
+    T eps_pinf, eps_dinf;
+    bool pinf_y1z;
 
     // Useful vectors and matrices
     Vec x_descaled, x_sol;
@@ -84,47 +82,47 @@ public:
         const Vec& c_, const Vec& b_, const Vec& D1_diag_, const Vec& D2_diag_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_, const T obj_const_,
         int n_, int m_, int N_, int M_, int l_,
-        T SSN_tol_, int SSN_max_in_iter_,
-        PrintWhen SSN_print_when_, PrintWhat SSN_print_what_,
-        bool more_rows_than_cols_)
+        T SSN_tol_, int SSN_max_in_iter_, bool more_rows_than_cols_,
+        T eps_pinf_, T eps_dinf_)
     : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
       A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
       c(c_), b(b_), D1_diag(D1_diag_), D2_diag(D2_diag_),
       lx(lx_), ux(ux_), lw(lw_), uw(uw_), obj_const(obj_const_),
       n(n_), m(m_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
-      SSN_print_when(SSN_print_when_), SSN_print_what(SSN_print_what_),
-      more_rows_than_cols(more_rows_than_cols_)
+      more_rows_than_cols(more_rows_than_cols_),
+      eps_pinf(eps_pinf_), eps_dinf(eps_dinf_)
     {
         ones_N = Vec::Ones(N);
         ones_M = Vec::Ones(M);
         ones_l = Vec::Ones(l);
         SSN_iter = 0;
+        delta_x = Vec::Zero(N);
+        delta_y2 = Vec::Zero(l);
     }
 
     void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-                           const Vec& y1_sol_, const Vec& z_sol_, T mu_, T rho_, T gamma_,
-                           const int SSN_iter_) {
+                           T mu_, T rho_, T gamma_, int SSN_iter_, bool pinf_y1z_) {
         x = x_;
         y1 = y1_;
         y2 = y2_;
         z = z_;
-        y1_sol = y1_sol_;
-        z_sol = z_sol_;
         mu = mu_;
         rho = rho_;
-        gamma = gamma_; // although it's constant
+        gamma = gamma_;
         SSN_iter = SSN_iter_;
+        pinf_y1z = pinf_y1z_; // primal infeasibility determined by y1 and z
     }
 
+    static inline T inf_norm(const Vec& v) {
+        return v.cwiseAbs().maxCoeff();
+    }
     static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
         return u.cwiseMax(lower).cwiseMin(upper);
     }
     static inline Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
         return (v - proj(v, lower, upper));
     }
-    T get_obj_val(const Vec& x);
-    Vec printable_x(const Vec& x);
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
@@ -140,6 +138,8 @@ public:
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
+    bool primal_infeas_y2(const Vec& delta_y2, T eps_pinf);
+    bool dual_infeas(const Vec& delta_x, T eps_dinf);
     SSN_result<T> solve_SSN(const T eps);
 
 };

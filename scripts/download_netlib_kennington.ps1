@@ -5,7 +5,7 @@ $base   = "https://www.netlib.org/lp/data/kennington/"
 $index  = $base + "index.html"
 $target = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/kennington"
 
-# Path to emps.exe from your netlib folder
+# Path to emps.exe from netlib folder
 $empsExe = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/emps.exe"
 if (-not (Test-Path $empsExe)) {
   throw "emps.exe not found at: $empsExe. Run your netlib downloader first (or fix the path)."
