@@ -50,7 +50,7 @@ public:
     SpMat B_active_W, B_inactive_W, G, G_tr;
 
     bool more_rows_than_cols;
-    bool do_exact = false;
+    bool do_exact = true;
 
     // Outputs
     int SSN_in_iter;
@@ -137,6 +137,7 @@ public:
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
+    T exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     bool primal_infeas_y2(const Vec& delta_y2, T eps_pinf);
     bool dual_infeas(const Vec& delta_x, T eps_dinf);

@@ -75,12 +75,12 @@ public:
     T tol = 1e-4;
     int max_iter = 200;
     int SSN_max_iter = 2000;
-    int SSN_max_in_iter = 30;
-    T reg_limit = 1e+2/tol;
+    int SSN_max_in_iter = 50;
+    T reg_limit = 1e+0/tol;
     T eps_limit = 1e-2*tol;
-    T eps_pinf = 1e-5;
-    T eps_dinf = 1e-5;
-    T gamma = 0.8;
+    T eps_pinf = 1e-8;
+    T eps_dinf = 1e-8;
+    T gamma = 0.9;
     bool more_rows_than_cols = N < M + l;
     
     // Updated parameters

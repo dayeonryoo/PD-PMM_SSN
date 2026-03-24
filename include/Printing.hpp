@@ -44,21 +44,22 @@ void print_header(PrintWhen when, PrintWhat what) {
                 << std::setw(w_val)  << "Comp_Bx"
                 << std::setw(w_val)  << "SSN_res";
     if (what == PrintWhat::TUNING || what == PrintWhat::FULL) {
-        std::cout << std::setw(w_val)  << "mu" << std::setw(w_val)  << "rho";
+        std::cout << std::setw(w_val) << "mu" << std::setw(w_val)  << "rho" 
+                  << std::setw(w_val) << "eps_bcl" << std::setw(w_val) << "eps";
     }
     std::cout << "\n";
 
     std::cout << std::string(w_iter*2 + w_val*5, '-');
     if (what == PrintWhat::TUNING) {
-        std::cout << std::string(w_val*2, '-');
+        std::cout << std::string(w_val*4, '-');
     } else if (what == PrintWhat::FULL) {
-        std::cout << std::string(w_val*3, '-');
+        std::cout << std::string(w_val*5, '-');
     }
     std::cout << "\n";
 }
 
 template <typename T, typename Vec>
-void print(PrintWhen when, PrintWhat what, int PMM_iter, int SSN_iter, T obj_val, const Vec& res_norms, T SSN_res, T mu, T rho) {
+void print(PrintWhen when, PrintWhat what, int PMM_iter, int SSN_iter, T obj_val, const Vec& res_norms, T SSN_res, T mu, T rho, T eps_bcl, T eps) {
     if (when == PrintWhen::NEVER || what == PrintWhat::NONE) return;
     if (when == PrintWhen::EVERY10 && PMM_iter % 10 != 0) return;
 
@@ -76,7 +77,8 @@ void print(PrintWhen when, PrintWhat what, int PMM_iter, int SSN_iter, T obj_val
     }
     std::cout << std::setw(w_val)  << SSN_res;
     if (what == PrintWhat::TUNING || what == PrintWhat::FULL) {
-        std::cout << std::setw(w_val)  << mu << std::setw(w_val)  << rho;
+        std::cout << std::setw(w_val)  << mu << std::setw(w_val)  << rho
+                  << std::setw(w_val) << eps_bcl << std::setw(w_val) << eps;
     }
     std::cout << "\n";
 }

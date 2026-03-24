@@ -607,25 +607,25 @@ template <typename T>
 void SSN_PMM<T>::update_with_bcl(const T p, const Vec& y2_hat, const T res) {
     if (p <= eps_bcl) {
         // Accept y2 from SSN; keep mu and rho unchanged; fast decrease eps
-        // std::cout << "  SSN result accepted.\n";
+        // std::cout << "  SSN result ACCEPTED.\n";
         y2 = y2_hat;
-        mu = std::min(reg_limit, 1.1 * mu);
-        rho = std::min(reg_limit, 1.1 * rho);
+        mu = std::min(reg_limit, 1.05 * mu);
+        rho = std::min(reg_limit, 1.05 * rho);
         eps_bcl = std::max(eps_limit, eps_bcl / std::pow(mu, 0.9));
-        SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, 0.1));
+        SSN_tol = std::max(eps_limit, SSN_tol / mu);
     } else {
         // Reject y2 from SSN; increase mu and rho; reset eps
-        // std::cout << "  SSN result rejected: p = " << p << "\n";
-        mu = std::min(reg_limit, 1.5 * mu);
-        rho = std::min(reg_limit, 1.5 * rho);
-        eps_bcl = std::max(eps_limit, 1 / std::pow(mu, 0.1));
-        SSN_tol = std::max(eps_limit, 1 / std::pow(mu, 0.1));
+        // std::cout << "  SSN result rejected.\n";
+        mu = std::min(reg_limit, 1.1 * mu);
+        rho = std::min(reg_limit, 1.2 * rho);
+        eps_bcl = std::max(eps_limit, mu0 / std::pow(mu, 0.09));
+        SSN_tol = std::max(eps_limit, mu0 / mu);
     }
 }
 
 template <typename T>
 bool SSN_PMM<T>::primal_infeas_y1(const Vec& delta_y1, T eps_pinf) {
-    if (M == 0) return true;
+    if (M == 0) return false;
 
     T delta_y1_inf = inf_norm(delta_y1);
     if (delta_y1_inf == T(0)) return false;
@@ -759,14 +759,14 @@ Solution<T> SSN_PMM<T>::solve() {
         // Check termination criterion
         if (PMM_tol_achieved < tol) {
             opt = 0; // Optimal solution found
-            if (when != PrintWhen::NEVER) {
-                print(PrintWhen::ALWAYS, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho);
+            if (when != PrintWhen::NEVER || when != PrintWhen::ALWAYS) {
+                print(PrintWhen::ALWAYS, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol);
             }
             break;
         }
 
         // Print current iteration info
-        print(when, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho);
+        print(when, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol);
         PMM_iter++;
 
         // TIMER FOR PMM ITERATION
@@ -792,6 +792,6 @@ Solution<T> SSN_PMM<T>::solve() {
         z_sol = Vec::Zero(n);
     }
 
-    print(when, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho);
+    print(when, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol);
     return Solution<T>(opt, x_sol, y1_sol, y2, z_sol, obj_val, PMM_iter, SSN_iter, PMM_tol_achieved, SSN_tol_achieved);
 }

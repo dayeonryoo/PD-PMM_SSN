@@ -306,7 +306,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         dy_ = cg.solve(rhs);
     }
 
-    // std::cout << "CG took " << cg.iterations() << " iterations.\n";
+    // std::cout << "PCG took " << cg.iterations() << " iterations.\n";
 
     if (cg.info() != Eigen::Success) {
         // ...
@@ -458,7 +458,7 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
 }
 
 template <typename T>
-T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
+T SSN<T>::exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
     using Vec = typename SSN<T>::Vec;
 
     std::vector<T> breakpoints; // List of breakpoints
@@ -503,7 +503,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     T phi_prev = grad.head(N).dot(dx) + grad.tail(l).dot(dy2);
     if (phi_prev >= 0) return T(0);
 
-    T t_opt; // Optimal breakpoint
+    T t_opt = T(0); // Optimal breakpoint
     Vec x_new, y2_new;
     T phi_new;
     for (T t : breakpoints) {
@@ -512,12 +512,159 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
         grad = compute_grad_Lagrangian(x_new, y2_new);
         phi_new = grad.head(N).dot(dx) + grad.tail(l).dot(dy2);
         if (phi_new >= 0) { t_opt = t; break; }
-        else { t_prev = t; x_prev = x_new; y2_prev = y2_new; phi_prev = phi_prev; }
+        else { t_prev = t; x_prev = x_new; y2_prev = y2_new; phi_prev = phi_new; }
     }
 
     // Compute the optimal stepsize in terms of the optimal breakpoint.
-    T tau = t_prev - (phi_prev / (phi_new - phi_prev)) * (t_opt - t_prev);
-    return tau;
+    if (t_opt = ! T(0)) {    
+        T tau = t_prev - (phi_prev / (phi_new - phi_prev)) * (t_opt - t_prev);
+        return tau;
+    } else {
+        return T(0); // No crossing
+    }
+}
+
+template <typename T>
+T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
+    /* 
+    psi(t) = <∇ M(u + t du), du>,
+            = eta t + beta + mu <proj_K (s + t dx), dx> + <dc, proj_W (v + t dv)>,
+    where eta  = <(Q + mu A^T A + I_n/rho) dx, dx> + (1-gamma)/mu ||dy2||^2,
+          beta = <c + Q x_curr - A^T y1 + mu A^T (A x_curr - b) + (x_curr - x)/rho, dx> + (1 - gamma)/mu <y2, dy2>,
+          s = z / mu + x_curr,
+          v = B x_curr + ((1-gamma) y2_curr - y2) / mu,
+          dv = B dx + (1-gamma)/mu dy2,
+          dc = mu/gamma B dx + (1-gamma)/gamma dy2. 
+    Compute all breakpoints t and corresponding slope changes of psi, and sort them in increasing order.
+    Write psi(t) = p + m(t - t_prev).
+    For each breakpoint t, if psi(t) >= 0, return t = t_prev - p / m;
+    otherwise, set p = psi(t), t_prev = t and continue.
+    */
+    using Vec = typename SSN<T>::Vec;
+
+    // Useful vectors
+    Vec Ax = A * x_curr;
+    Vec Adx = A * dx;
+    Vec Bx = B * x_curr;
+    Vec Bdx = B * dx;
+
+    Vec s = z / mu + x_curr;
+    Vec v = Bx + ((1 - gamma) * y2_curr - y2) / mu;
+    Vec dv = Bdx + (1 - gamma) / mu * dy2;
+    Vec dc = mu / gamma * Bdx + (1 - gamma) / gamma * dy2;
+
+    // eta: smooth linear term in psi(t)
+    T eta = T(0);
+    if (Q_info != 0) {
+        eta += dx.dot(Q_diag.cwiseProduct(dx));
+    }
+    eta += mu * (Adx).squaredNorm();
+    eta += (1 / rho) * dx.squaredNorm();
+    eta += (1 - gamma) / mu * dy2.squaredNorm();
+
+    // beta: constant term in psi(t)
+    T beta = T(0);
+    if (Q_info != 0) {
+        beta += dx.dot(Q_diag.cwiseProduct(x_curr)); 
+    }
+    beta += dx.dot(c - A_tr * y1 + mu * A_tr * (Ax - b) + (x_curr - x) / rho);
+    beta += (1 - gamma) / mu * dy2.dot(y2_curr);
+
+    // Breakpoint and slope change of psi when crossing it
+    struct Breakpoint {
+        T t;
+        T slope_change;
+    };
+    std::vector<Breakpoint> breakpoints;
+
+    // Breakpoints and corresponding slope changes for K
+    for (int i = 0; i < N; ++i) {
+        T s_i = s(i);
+        T dx_i = dx(i);
+        if (dx_i == 0) continue;
+
+        T change = mu * dx_i * dx_i;
+        T t_l = (lx(i) - s_i) / dx_i;
+        T t_u = (ux(i) - s_i) / dx_i;
+
+        if (dx_i > 0) {
+            if (t_l > 0) breakpoints.push_back({t_l, -change}); // into K
+            if (t_u > 0) breakpoints.push_back({t_u, +change}); // out of K
+        } else { // dx_i < 0
+            if (t_l > 0) breakpoints.push_back({t_l, +change}); // out of K
+            if (t_u > 0) breakpoints.push_back({t_u, -change}); // into K
+        }
+    }
+
+    // Breakpoints and corresponding slope changes for W
+    for (int i = 0; i < l; ++i) {
+        T v_i = v(i);
+        T dv_i = dv(i);
+        if (dv_i == 0) continue;
+            
+        T change = dc(i) * dv_i;
+        T t_l = (lw(i) - v_i) / dv_i;
+        T t_u = (uw(i) - v_i) / dv_i;
+
+        if (dv_i > 0) {
+            if (t_l > 0) breakpoints.push_back({t_l, -change}); // into W
+            if (t_u > 0) breakpoints.push_back({t_u, +change}); // out of W
+        } else { // dv_i < 0
+            if (t_l > 0) breakpoints.push_back({t_l, +change}); // out of W
+            if (t_u > 0) breakpoints.push_back({t_u, -change}); // into W
+        }
+    }
+
+    // Sort by t
+    std::sort(breakpoints.begin(), breakpoints.end(), [](Breakpoint& a, Breakpoint& b){ return a.t < b.t; });
+
+    // Check if psi(0) >= 0
+    Vec dist_K_s = compute_dist_box(s, lx, ux);
+    Vec dist_W_v = compute_dist_box(v, lw, uw);
+    T p = beta;
+    p += mu * dist_K_s.dot(dx);
+    p += mu / gamma * dist_W_v.dot(Bdx);
+    p += (1 - gamma) / gamma * dist_W_v.dot(dy2);
+    if (p >= T(0)) return T(0);
+
+    // If psi(0) < 0, check at every breakpoint t.
+    T t_prev = T(0);
+    T m = eta; // initial slope at t=0
+    for (int i = 0; i < N; ++i) {
+        if (s(i) < lx(i) || s(i) > ux(i)) {
+            m += mu * dx(i) * dx(i);
+        }
+    }
+    for (int i = 0; i < l; ++i) {
+        if (v(i) < lw(i) || v(i) > uw(i)) {
+            m += dc(i) * dc(i);
+        }
+    }
+
+    // Check at each breakpoint t
+    size_t k = 0;
+    while (k < breakpoints.size()) {
+        T t = breakpoints[k].t;
+        T p_t = p + m * (t - t_prev);
+        if (p_t >= 0) return t_prev - p / m;
+
+        // Taking care of idential breakpoints at the same time
+        T change_sum = T(0);
+        while (k < breakpoints.size() && std::abs(breakpoints[k].t - t) < 1e-6) {
+            change_sum += breakpoints[k].slope_change;
+            ++k;
+        }
+
+        // Cross the breakpoint(s)
+        t_prev = t;
+        p = p_t;
+        m += change_sum;
+    }
+
+    // Checking the last breakpoint.
+    if (m > T(0)) return t_prev - p / m;
+    return T(0); // safeguard
+
 }
 
 template <typename T>
@@ -529,7 +676,7 @@ bool SSN<T>::primal_infeas_y2(const Vec& delta_y2, T eps_pinf) {
        for finite uw_i and lw_i.
     Together with conditions on y1 and z, we may conclude primal infeasibility.
     */
-    if (l == 0) return true;
+    if (l == 0) return false;
 
     const T delta_y2_inf = inf_norm(delta_y2);
     if (delta_y2_inf == T(0)) return false;
@@ -742,11 +889,14 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // ========== Backtracking/exact linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
         T alpha;
+        alpha = exact_line_search(result.x, result.y2, dx, dy2);
+        /*
         if (do_exact) {
             alpha = exact_line_search(result.x, result.y2, dx, dy2);
         } else {
             alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
         }
+        */
         auto t1_alpha = std::chrono::steady_clock::now();
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Linesearch took " << timer_alpha << " ms.\n";
@@ -778,11 +928,13 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             result.y2 += delta_y2;
 
             // Check infeasibility
+            /*
             bool dinf = dual_infeas(delta_x, eps_dinf);
-            if (dinf) { result.opt = -3; std::cout << "Dual infeasible.\n"; break; } // Dual infeasible
             bool pinf_y2 = primal_infeas_y2(delta_y2, eps_pinf);
+            std::cout << "dinf = " << dinf << ", pinf_y2 = " << pinf_y2 << "\n";
+            if (dinf) { result.opt = -3; std::cout << "Dual infeasible.\n"; break; } // Dual infeasible
             if (pinf_y1z || pinf_y2) { result.opt = -2; std::cout << "Primal infeasible.\n"; break; } // Primal infeasible
-            
+            */
         }
 
         // Compute gradient of Lagrangian at current (x, y2)
