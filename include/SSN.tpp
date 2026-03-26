@@ -948,7 +948,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         
         // Check termination criterion
         if (result.tol_achieved < eps) {
-            SSN_opt = 0; // Optimality achieved
+            result.opt = 0; // Optimality achieved
             break;
         }
     }

@@ -65,15 +65,15 @@ void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
     }
 }
 
-
+/*
 int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     
-    std::string name = "QPCBOEI2";
-    T obj_val = 8.1719623e+06;
+    std::string name = "LISWET5";
+    T obj_val = 2.5034253e+01;
 
     // std::string name = "AUG2DQP";
-    // // T obj_val = 6.2370121e+06;
+    // T obj_val = 6.2370121e+06;
 
     // std::string name = "DUALC1";
     // T obj_val = 6.1552508e+03;
@@ -93,7 +93,7 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-4;
-    int max_iter = 200;
+    int max_iter = 300;
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
@@ -143,7 +143,7 @@ int main() {
 
     return 0;
 }
-
+*/
 
 void write_csv_header(const std::string& path) {
     namespace fs = std::filesystem;
@@ -151,6 +151,9 @@ void write_csv_header(const std::string& path) {
         std::ofstream csv(path);
         csv << "System,agree,opt_status,diverged,name,abs_err,rel_err,obj_val,"
             << "PMM_iter,SSN_iter,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec\n";
+    } else if (!fs::is_empty(fs::path(path))) {
+        std::ofstream csv(path, std::ios::out | std::ios::app);
+        csv << "\n";
     }
 }
 
@@ -476,7 +479,7 @@ void run_Netlib_infeas() {
 
 }
 
-/*
+
 int main() {
 
     // run_Netlib_infeas();
@@ -484,18 +487,14 @@ int main() {
 
     // Filenames and objective values of Maros/Meszaros QPs
     static const std::map<std::string, double> QPs = {
-        {"AUG3DQP",    6.7523767e+02},
-        {"CVXQP1S",    1.1590718e+04},
-        {"DUALC1",     6.1552508e+03}, // 020 (1)
-        {"HS118",      6.6482045e+02},
-        {"LISWET5",    2.5034253e+01},
-        {"PRIMAL4",   -7.4609083e-01},
-        {"QISRAEL",    2.5347838e+07}, // 110 (3)
-        {"QPCBOEI2",   8.1719623e+06}, // 010 (1)
-        {"QSCAGR7",    2.6865949e+07}, // 110 (2)
-        {"QSCORPIO",   1.8805096e+03}, // 130 (3)
-        {"QSCRS8",     9.0456001e+02},
-        {"QSHARE2B",   1.1703692e+04} // 010 (2)
+        // {"CVXQP1S",    1.1590718e+04}, // 120
+        // {"DUALC1",     6.1552508e+03}, // 030 (1)
+        {"PRIMALC1",  -6.1552508e+03}, // 100
+        // {"QADLITTL",   4.8031886e+05}, // 030
+        // {"QPCBOEI2",   8.1719623e+06}, // 030 
+        // {"QSCAGR7",    2.6865949e+07}, // 130
+        // {"S268",       5.7310705e-07},
+        // {"YAO",        1.9770426e+02}
     };
 
     // static const std::map<std::string, double> QPs = {
@@ -519,7 +518,7 @@ int main() {
     //     {"CVXQP1M",    1.0875116e+06}, // 030
     //     {"CVXQP1S",    1.1590718e+04},
     //     // {"CVXQP2L",    8.1842458e+07}, // too many QNZ
-    //     {"CVXQP2M",    8.2015543e+05}, // 020
+    //     // {"CVXQP2M",    8.2015543e+05}, // 020
     //     {"CVXQP2S",    8.1209405e+03},
     //     // {"CVXQP3L",    1.1571110e+08}, // too many QNZ
     //     {"CVXQP3M",    1.3628287e+06}, // 020
@@ -643,12 +642,12 @@ int main() {
 
     // Parameters
     T tol = 1e-4;
-    int max_iter = 200;
-    PrintWhen when = PrintWhen::EVERY10;
+    int max_iter = 500;
+    PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/mm1.csv";
+    std::string csv_path = root + "results/mm3.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -731,7 +730,7 @@ int main() {
 
     return 0;
 }
-*/
+
 
 std::vector<std::string> split_csv_line(const std::string& line) {
     std::vector<std::string> fields;

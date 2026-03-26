@@ -73,14 +73,15 @@ public:
 
     // Constant parameters
     T tol = 1e-4;
-    int max_iter = 200;
-    int SSN_max_iter = 2000;
+    int max_iter = 500;
+    int SSN_max_iter = 6000;
     int SSN_max_in_iter = 50;
-    T reg_limit = 1e+0/tol;
-    T eps_limit = 1e-2*tol;
+    T mu_limit = 1e4;
+    T rho_limit = 1e4;
+    T eps_limit = 1e-4*tol;
     T eps_pinf = 1e-8;
     T eps_dinf = 1e-8;
-    T gamma = 0.9;
+    T gamma = 0.95;
     bool more_rows_than_cols = N < M + l;
     
     // Updated parameters
@@ -140,9 +141,9 @@ public:
     Vec compute_residual_norms_inf();
     T objective_value(const Vec& x);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& z);
-    void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
+    void update_PMM_parameters(const Vec& res_norms, const Vec& new_res_norms, int SSN_opt);
     T compute_p(const Vec& x);
-    void update_with_bcl(const T p, const Vec& y2_hat, const T res);
+    void update_with_bcl(const Vec& y2_hat, T compl_W, T new_compl_W, int PMM_iter);
     bool primal_infeas_y1(const Vec& delta_y1, T eps_pinf);
     bool primal_infeas_z(const Vec& delta_z, T eps_pinf);
     Solution<T> solve();

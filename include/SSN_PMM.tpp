@@ -573,26 +573,35 @@ void SSN_PMM<T>::printable_sol(const Vec& x, const Vec& y1, const Vec& z) {
 }
 
 template <typename T>
-void SSN_PMM<T>::update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d) {
-    // If the overall primal and dual residual error is decreased,
-    // we increase the penalty parameters aggressively.
-    // If not, we continue increasing the parameters slowly
-    // up to the regularization threshold.
+void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_norms, int SSN_opt) {
+    using Vec = typename SSN_PMM<T>::Vec;
+    // Compare the current residuals with the previous ones.
+    // If the residuals are not decreasing enough, increase penalties.
+    // If the residuals are decreasing enough, avoid over-penalizing.
 
-    bool cond_p = 0.95 * res_p > new_res_p;
-    bool cond_d = 0.95 * res_d > new_res_d;
-
-    if (cond_p || cond_d){
-        mu = std::min(reg_limit, 1.2*mu);
-        rho = std::min(1e2*reg_limit, 1.4*rho);
-        // std::cout << "Aggressive update of PMM parameters.\n";
+    // Looking at the residual's reduction
+    T norm_ratio = new_res_norms.norm() / res_norms.norm();
+    T worst_res = inf_norm(new_res_norms);
+    bool ssn_good = SSN_opt == 0;
+    // std::cout << "Norm ratio = " << norm_ratio << "\n";
+    if (ssn_good) {
+        if (norm_ratio > 0.95) {
+            mu = std::min(mu_limit, 1.15 * mu);
+            rho = std::min(rho_limit, 1.15 * rho);
+        }
+        else if (norm_ratio > 0.90) {
+            mu = std::min(mu_limit, 1.02 * mu);
+            rho = std::min(rho_limit, 1.05 * rho);
+        }
+        SSN_tol = std::max(eps_limit, std::min(SSN_tol, 5e-4 * worst_res));
     } else {
-        mu = std::min(reg_limit, 1.05*mu);
-        rho = std::min(1e2*reg_limit, 1.05*rho);
-        // std::cout << "Mild update of PMM parameters.\n";
+        if (norm_ratio > 0.99) {
+            // mu = std::min(mu_limit, 1.01 * mu);
+            // rho = std::min(rho_limit, 1.01 * rho);
+        }
     }
-
 }
+
 
 template <typename T>
 T SSN_PMM<T>::compute_p(const Vec& x) {
@@ -604,23 +613,12 @@ T SSN_PMM<T>::compute_p(const Vec& x) {
 }
 
 template <typename T>
-void SSN_PMM<T>::update_with_bcl(const T p, const Vec& y2_hat, const T res) {
-    if (p <= eps_bcl) {
-        // Accept y2 from SSN; keep mu and rho unchanged; fast decrease eps
-        // std::cout << "  SSN result ACCEPTED.\n";
+void SSN_PMM<T>::update_with_bcl(const Vec& y2_hat, T compl_W, T new_compl_W, int PMM_iter) {
+    if (new_compl_W / compl_W < 1.0) {
+        // std::cout << "SSN y2 accepted.\n";
         y2 = y2_hat;
-        mu = std::min(reg_limit, 1.05 * mu);
-        rho = std::min(reg_limit, 1.05 * rho);
-        eps_bcl = std::max(eps_limit, eps_bcl / std::pow(mu, 0.9));
-        SSN_tol = std::max(eps_limit, SSN_tol / mu);
-    } else {
-        // Reject y2 from SSN; increase mu and rho; reset eps
-        // std::cout << "  SSN result rejected.\n";
-        mu = std::min(reg_limit, 1.1 * mu);
-        rho = std::min(reg_limit, 1.2 * rho);
-        eps_bcl = std::max(eps_limit, mu0 / std::pow(mu, 0.09));
-        SSN_tol = std::max(eps_limit, mu0 / mu);
     }
+    y2 = y2_hat;
 }
 
 template <typename T>
@@ -670,7 +668,7 @@ Solution<T> SSN_PMM<T>::solve() {
     PMM_iter = 0;
     SSN_iter = 0;
     Vec y2_hat = y2;
-    Vec res_norms;
+    Vec res_norms = compute_residual_norms_inf();
     SSN_tol_achieved = T(0);
     bool pinf_y1z = false;
 
@@ -733,7 +731,8 @@ Solution<T> SSN_PMM<T>::solve() {
 
         // Update y2 and penalty parameters based on BCL
         T p = compute_p(x); // L_inf primal feasibility violation of lw <= Bx <= uw
-        update_with_bcl(p, y2_hat, PMM_tol_achieved);
+        update_with_bcl(y2_hat, res_norms(3), p, PMM_iter);
+        // y2 = y2_hat;
 
         // Update y1 and z
         Vec delta_y1 = mu * (A * x - b);
@@ -743,8 +742,11 @@ Solution<T> SSN_PMM<T>::solve() {
         z += delta_z;
 
         // Compute residuals
-        res_norms = compute_residual_norms_inf();
-        PMM_tol_achieved = res_norms.maxCoeff();
+        Vec new_res_norms = compute_residual_norms_inf();
+        PMM_tol_achieved = new_res_norms.maxCoeff();
+        // update_PMM_parameters(res_norms(0), res_norms(1), new_res_norms(0), new_res_norms(1));
+        update_PMM_parameters(res_norms, new_res_norms, NS_solution.opt);
+        res_norms = new_res_norms; // for next iteration
 
         // Check infeasibility with y1 and z.
         // Inside SSN iteration together with x and y2, infeasibility will be detected.
