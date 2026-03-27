@@ -487,14 +487,32 @@ int main() {
 
     // Filenames and objective values of Maros/Meszaros QPs
     static const std::map<std::string, double> QPs = {
-        // {"CVXQP1S",    1.1590718e+04}, // 120
-        // {"DUALC1",     6.1552508e+03}, // 030 (1)
-        {"PRIMALC1",  -6.1552508e+03}, // 100
-        // {"QADLITTL",   4.8031886e+05}, // 030
-        // {"QPCBOEI2",   8.1719623e+06}, // 030 
-        // {"QSCAGR7",    2.6865949e+07}, // 130
-        // {"S268",       5.7310705e-07},
-        // {"YAO",        1.9770426e+02}
+        {"CVXQP1S",    1.1590718e+04},
+        {"CVXQP2S",    8.1209405e+03},
+        {"CVXQP3S",    1.1943432e+04},
+        {"DUALC2",     3.5513077e+03},
+        {"DUALC5",     4.2723233e+02}, 
+        {"DUALC8",     1.8309359e+04},
+        {"HS118",      6.6482045e+02},
+        {"LASER",      2.4096014e+06},
+        {"LISWET1",    3.6122402e+01},
+        {"LISWET5",    2.5034253e+01},
+        {"LISWET9",    1.9632513e+03},
+        {"MOSARQP1",  -9.5287544e+02},
+        {"PRIMALC1",  -6.1552508e+03},
+        {"QADLITTL",   4.8031886e+05}, 
+        {"QBEACONF",   1.6471206e+05},
+        {"QE226",      2.1265343e+02},
+        {"QISRAEL",    2.5347838e+07}, 
+        {"QPCBLEND",  -7.8425409e-03},
+        {"QPCBOEI1",   1.1503914e+07},
+        {"QSC205",    -5.8139518e-03},
+        {"QSCAGR25",   2.0173794e+08},
+        {"QSCTAP1",    1.4158611e+03}, 
+        {"QSHARE1B",   7.2007832e+05}, 
+        {"QSIERRA",    2.3750458e+07},
+        {"S268",       5.7310705e-07},
+        {"UBH1",       1.1160008e+00}
     };
 
     // static const std::map<std::string, double> QPs = {
@@ -518,7 +536,7 @@ int main() {
     //     {"CVXQP1M",    1.0875116e+06}, // 030
     //     {"CVXQP1S",    1.1590718e+04},
     //     // {"CVXQP2L",    8.1842458e+07}, // too many QNZ
-    //     // {"CVXQP2M",    8.2015543e+05}, // 020
+    //     {"CVXQP2M",    8.2015543e+05}, // 020
     //     {"CVXQP2S",    8.1209405e+03},
     //     // {"CVXQP3L",    1.1571110e+08}, // too many QNZ
     //     {"CVXQP3M",    1.3628287e+06}, // 020
@@ -643,11 +661,11 @@ int main() {
     // Parameters
     T tol = 1e-4;
     int max_iter = 500;
-    PrintWhen when = PrintWhen::ALWAYS;
+    PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/mm3.csv";
+    std::string csv_path = root + "results/mm4.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {

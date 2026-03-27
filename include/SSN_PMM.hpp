@@ -75,10 +75,10 @@ public:
     T tol = 1e-4;
     int max_iter = 500;
     int SSN_max_iter = 6000;
-    int SSN_max_in_iter = 50;
+    int SSN_max_in_iter = 40;
     T mu_limit = 1e4;
-    T rho_limit = 1e4;
-    T eps_limit = 1e-4*tol;
+    T rho_limit = 2e4;
+    T eps_limit = 1e-3*tol;
     T eps_pinf = 1e-8;
     T eps_dinf = 1e-8;
     T gamma = 0.95;

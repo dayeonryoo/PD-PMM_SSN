@@ -587,13 +587,13 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
     if (ssn_good) {
         if (norm_ratio > 0.95) {
             mu = std::min(mu_limit, 1.15 * mu);
-            rho = std::min(rho_limit, 1.15 * rho);
+            rho = std::min(rho_limit, 1.20 * rho);
         }
         else if (norm_ratio > 0.90) {
             mu = std::min(mu_limit, 1.02 * mu);
             rho = std::min(rho_limit, 1.05 * rho);
         }
-        SSN_tol = std::max(eps_limit, std::min(SSN_tol, 5e-4 * worst_res));
+        SSN_tol = std::max(eps_limit, std::min(SSN_tol, std::pow(worst_res, 1.2)));
     } else {
         if (norm_ratio > 0.99) {
             // mu = std::min(mu_limit, 1.01 * mu);
