@@ -492,7 +492,7 @@ void MpsParser<T>::finalize_defaults() {
         int old_size = model_.col_lower.size();
         model_.col_lower.conservativeResize(model_.num_cols);
         model_.col_upper.conservativeResize(model_.num_cols);
-        model_.col_lower.segment(old_size, model_.num_cols - old_size).setZero(); // Default lower bound is 0
+        model_.col_lower.segment(old_size, model_.num_cols - old_size).setConstant(-inf); // Default lower bound is -inf
         model_.col_upper.segment(old_size, model_.num_cols - old_size).setConstant(inf);  // Default upper bound is inf
     }
 

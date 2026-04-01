@@ -75,7 +75,17 @@ private:
         E.setFromTriplets(trips.begin(), trips.end());
         E.makeCompressed();
 
-        // Build P = G E G^T + (1/mu) I
+        // Build (1/mu) I as a sparse diagonal matrix
+        // std::vector<Triplet> Itrips;
+        // Itrips.reserve(s);
+        // for (Eigen::Index i = 0; i < s; ++i) {
+        //     Itrips.emplace_back(i, i, T(1) / mu_);
+        // }
+        // SpMat Ishift(s, s);
+        // Ishift.setFromTriplets(Itrips.begin(), Itrips.end());
+
+        // // Build P = G E G^T + (1/mu) I
+        // P_ = G * E * G_tr + Ishift;
         P_ = G * E * G_tr;
         for (Eigen::Index i = 0; i < s; ++i) {
             P_.coeffRef(i, i) += T(1) / mu_;

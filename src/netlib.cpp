@@ -14,53 +14,13 @@
 #include "Problem.hpp"
 #include "Printing.hpp"
 #include "MpsParser.hpp"
+#include "RecordResult.hpp"
 
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
-struct NetlibTestResult {
-    bool agree;
-    int opt;
-    bool diverged;
-
-    std::string name;
-    T abs_err;
-    T rel_err;
-    int PMM_iter;
-    int SSN_iter;
-    T PMM_tol_achieved;
-    T SSN_tol_achieved;
-    double solving_time_sec;
-};
-
-void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
-    std::cout << "\nChecking feasibility of solution x from PMM_SSN solver:\n";
-    std::cout << "  ||Ax - b||_2 = ";
-    if (pd.A.rows() == 0) std::cout << "0 (m = 0)\n";
-    else std::cout << (pd.A * x - pd.b).norm() << "\n";
-    std::cout << "  ||Ax - b||_inf = ";
-    if (pd.A.rows() == 0) std::cout << "0 (m = 0)\n";
-    else std::cout << (pd.A * x - pd.b).cwiseAbs().maxCoeff() << "\n";
-
-    std::cout << "\n  Elements of x outside bounds:\n";
-    for (int i = 0; i < pd.c.size(); ++i) {
-        if (x[i] < pd.lx[i] - tol || x[i] > pd.ux[i] + tol) {
-            std::cout << "      Variable " << i << " out of bounds: x = " << x[i]
-                      << ", [" << pd.lx[i] << ", " << pd.ux[i] << "]\n";
-        }
-    }
-    std::cout << "\n  Elements of Bx outside bounds:\n";
-    Vec Bx = pd.B * x;
-    for (int i = 0; i < pd.lw.size(); ++i) {
-        T Bx_i = Bx[i];
-        if (Bx_i < pd.lw[i] - tol || Bx_i > pd.uw[i] + tol) {
-            std::cout << "      Variable " << i << " out of bounds: Bx = " << Bx_i
-                      << ", [" << pd.lw[i] << ", " << pd.uw[i] << "]\n";
-        }
-    }
-}
 
 /*
 int main() {
@@ -72,18 +32,16 @@ int main() {
 
     // Parameters for PD-PMM_SSN solver
     T tol = 1e-4;
-    int max_iter = 100;
-    PrintWhen PMM_print_when = PrintWhen::ALWAYS;
-    PrintWhat PMM_print_what = PrintWhat::MINIMAL;
-    PrintWhen SSN_print_when = PrintWhen::END_ONLY;
-    PrintWhat SSN_print_what = PrintWhat::MINIMAL;
+    int max_iter = 500;
+    PrintWhen when = PrintWhen::ALWAYS;
+    PrintWhat what = PrintWhat::MINIMAL;
 
     // Extract problem data from the mps file using our MpsParser and construct solver
     MpsParser<T> parser;
     ParsedModel<T> model = parser.parse(filename);
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
-    Problem<T> prob(pd, tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
+    Problem<T> prob(pd, tol, max_iter, when, what);
     SSN_PMM<T> solver(prob);
     
     // Solve the LP using PD-PMM_SSN solver
@@ -101,10 +59,15 @@ int main() {
     // Check convergence
     if (sol.opt == 0) {
         std::cout << "Solver converged!\n";
-    } else if (sol.PMM_tol_achieved > 1e4 || sol.SSN_tol_achieved > 1e4) {
-        std::cout << "Solver diverged.\n";
+    } else if (sol.opt == 3) {
+        std::cout << "Lineserach failed. Solver terminated.\n";
+    } else if (sol.opt < 0) {
+        std::cout << "Solver detected infeasibility.\n";
     } else {
-        std::cout << "Solver hit the max iter before converging.\n";
+        std::cout << "Solver hit the max iteration before converging.\n";
+    }
+    if (sol.opt <= 0 && sol.PMM_tol_achieved > 1e0) {
+        std::cout << "Solver possibly diverged.\n"; 
     }
 
     // Compare with reference objective value
@@ -115,56 +78,35 @@ int main() {
     if (agree) std::cout << "\nCORRECT! Relative error = " << err << "\n";
     else std::cout << "\nIncorrect. Relative error = " << err << "\n";
 
-
     return 0;
 }
 */
 
-void write_csv_header(const std::string& path) {
-    namespace fs = std::filesystem;
-    if (!fs::exists(fs::path(path)) || fs::is_empty(fs::path(path))) {
-        std::ofstream csv(path);
-        csv << "agree,opt_status,diverged,name,abs_err,rel_err,"
-            << "PMM_iter,SSN_iter,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec\n";
-    }
-}
-
-void append_csv_result(const std::string& path, const NetlibTestResult& r) {
-    std::ofstream csv(path, std::ios::out | std::ios::app);
-    csv << r.agree << "," << r.opt << "," << r.diverged << "," 
-        << r.name << "," << r.abs_err << "," << r.rel_err << ","
-        << r.PMM_iter << "," << r.SSN_iter << ","
-        << r.PMM_tol_achieved << "," << r.SSN_tol_achieved << ","
-        << r.solving_time_sec << "\n";
-    csv.close();
-}
-
-/*
 int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
 
     // Netlib LPs
     std::map<std::string,double> LPs = {
-        {"25FV47", 5.5018458883E+03},
-        {"80BAU3B", 9.8723216072E+05},
-        {"ADLITTLE", 2.2549496316E+05},
-        {"AFIRO", -4.6475314286E+02},
-        {"AGG", -3.5991767287E+07},
-        {"AGG2", -2.0239252356E+07},
-        {"AGG3", 1.0312115935E+07},
-        {"BANDM", -1.5862801845E+02},
-        {"BEACONFD", 3.3592485807E+04},
-        {"BLEND", -3.0812149846E+01},
-        {"BNL1", 1.9776292856E+03},
-        {"BNL2", 1.8112365404E+03},
-        {"BOEING1", -3.3521356751E+02},
-        {"BOEING2", -3.1501872802E+02},
-        {"BORE3D", 1.3730803942E+03},
-        {"BRANDY", 1.5185098965E+03},
-        {"CAPRI", 2.6900129138E+03},
-        {"CYCLE", -5.2263930249E+00},
-        {"CZPROB", 2.1851966989E+06},
-        {"D2Q06C", 1.2278423615E+05},
+        // {"25FV47", 5.5018458883E+03},
+        // {"80BAU3B", 9.8723216072E+05},
+        // {"ADLITTLE", 2.2549496316E+05},
+        // {"AFIRO", -4.6475314286E+02},
+        // {"AGG", -3.5991767287E+07},
+        // {"AGG2", -2.0239252356E+07},
+        // {"AGG3", 1.0312115935E+07},
+        // {"BANDM", -1.5862801845E+02},
+        // {"BEACONFD", 3.3592485807E+04},
+        // {"BLEND", -3.0812149846E+01},
+        // {"BNL1", 1.9776292856E+03},
+        // {"BNL2", 1.8112365404E+03},
+        // {"BOEING1", -3.3521356751E+02},
+        // {"BOEING2", -3.1501872802E+02},
+        // {"BORE3D", 1.3730803942E+03},
+        // {"BRANDY", 1.5185098965E+03},
+        // {"CAPRI", 2.6900129138E+03},
+        // {"CYCLE", -5.2263930249E+00},
+        // {"CZPROB", 2.1851966989E+06},
+        // {"D2Q06C", 1.2278423615E+05},
         {"D6CUBE", 3.1549166667E+02},
         {"DEGEN2", -1.4351780000E+03},
         {"DEGEN3", -9.8729400000E+02},
@@ -245,13 +187,13 @@ int main() {
     };
     
     // Parameters in common
-    T tol = 1e-3;
-    int max_iter = 200;
-    PrintWhen when = PrintWhen::ALWAYS;
+    T tol = 1e-4;
+    int max_iter = 500;
+    PrintWhen when = PrintWhen::EVERY10;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/netlib_lp.csv";
+    std::string csv_path = root + "results/netlib_lp4.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : LPs) {
@@ -288,11 +230,14 @@ int main() {
             bool diverged = false;
             if (sol.opt == 0) {
                 std::cout << "Solver converged!\n";
-            } else if (sol.PMM_tol_achieved > 1e4 || sol.SSN_tol_achieved > 1e4) {
-                diverged = true;
-                std::cout << "Solver diverged.\n"; 
+            } else if (sol.opt == 3) {
+                std::cout << "Lineserach failed. Solver terminated.\n";
             } else {
                 std::cout << "Solver hit the max iteration before converging.\n";
+            }
+            if (sol.PMM_tol_achieved > 1e0) {
+                diverged = true;
+                std::cout << "Solver possibly diverged.\n"; 
             }
 
             // Compare
@@ -306,10 +251,11 @@ int main() {
             else std::cout << "\nIncorrect Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n";
 
             // Store result
-            NetlibTestResult result = {
-                agree, sol.opt, diverged, name,
-                abs_err, rel_err,
-                sol.PMM_iter, sol.SSN_iter,
+            std::string system = { solver.more_rows_than_cols? "K" : "S" };
+            TestResult<T> result = {
+                system, agree, sol.opt, diverged,
+                name, abs_err, rel_err,
+                sol.obj_val, sol.PMM_iter, sol.SSN_iter,
                 sol.PMM_tol_achieved, sol.SSN_tol_achieved,
                 solving_time_sec
             };
@@ -317,10 +263,10 @@ int main() {
 
         } catch (const std::exception& e) {
             std::cerr << "ERROR solving " << name << ": " << e.what() << "\n"; 
-            NetlibTestResult result = {
-                false, -1, false, name,
-                -1.0, -1.0,
-                -1, -1,
+            TestResult<T> result = {
+                e.what(), false, -5, false,
+                name, -1.0, -1.0,
+                -1.0, -1, -1,
                 -1.0, -1.0, -1.0
             };
             append_csv_result(csv_path, result);
@@ -329,11 +275,11 @@ int main() {
 
     return 0;
 }
-*/
+
 
 // ==================== Netlib infeasible problems ====================
 
-
+/*
 int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
 
@@ -370,9 +316,9 @@ int main() {
     };
     
     // Parameters in common
-    T tol = 1e-3;
-    int max_iter = 200;
-    PrintWhen when = PrintWhen::ALWAYS;
+    T tol = 1e-4;
+    int max_iter = 500;
+    PrintWhen when = PrintWhen::EVERY10;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
@@ -437,7 +383,7 @@ int main() {
         }
     }
 }
-
+*/
 
 /*
 int main() {

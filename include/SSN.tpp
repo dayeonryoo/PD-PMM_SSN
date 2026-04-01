@@ -668,49 +668,62 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
 }
 
 template <typename T>
-bool SSN<T>::primal_infeas_y2(const Vec& delta_y2, T eps_pinf) {
+bool SSN<T>::primal_infeas(const Vec& delta_y1, const Vec& delta_y2, const Vec& delta_z, T eps_pinf) {
     /*
-    If all 2 conditions are true for nonzero delta_y2, a QP may be primal infeasible.
-    1. ||B^T delta_y2||_inf <= eps_pinf * ||delta_y2||_inf;
-    2. sum_i [uw_i * max(y2_i, 0)] + sum_i [lw_i * min(y2_i, 0)] <= eps_pinf * ||delta_y2||_inf
-       for finite uw_i and lw_i.
-    Together with conditions on y1 and z, we may conclude primal infeasibility.
+    The QP is determined to be primal infeasible if all 2 conditions hold for nonzero [delta_y1, delta_y2, delta_z]:
+    1. ||A^T delta_y1 + B^T delta_y2 + delta_z||_inf <= eps_pinf * max{||delta_y1||_inf, ||delta_y2||_inf, ||delta_z||_inf};
+    2. b^T delta_y1 + sum_i [uw_i * max(y2_i, 0)] + sum_i [lw_i * min(y2_i, 0)]
+                    + sum_i [ux_i * max(z_i, 0)] + sum_i [lx_i * min(z_i, 0)]
+       <= eps_pinf * max{||delta_y1||_inf, ||delta_y2||_inf, ||delta_z||_inf}
+       for finite lx_i, ux_i, lw_i, uw_i.
     */
-    if (l == 0) return false;
+    using Vec = typename SSN<T>::Vec;
 
-    const T delta_y2_inf = inf_norm(delta_y2);
-    if (delta_y2_inf == T(0)) return false;
-    const T rhs = eps_pinf * delta_y2_inf;
-    
-    bool cond1 = inf_norm(B_tr * delta_y2) <= rhs;
+    T delta_y1_inf = T(0);
+    if (M != 0) delta_y1_inf = inf_norm(delta_y1);
+    T delta_y2_inf = T(0);
+    if (l != 0) delta_y2_inf = inf_norm(delta_y2);
+    T delta_z_inf = inf_norm(delta_z);
+    T delta_inf = std::max({delta_y1_inf, delta_y2_inf, delta_z_inf});
+    if (delta_inf == T(0)) return false;
+
+    Vec lhs1 = delta_z;
+    if (M != 0) lhs1 += A_tr * delta_y1;
+    if (l != 0) lhs1 += B_tr * delta_y2;
+    bool cond1 = inf_norm(lhs1) <= eps_pinf * delta_inf;
+
     if (!cond1) return false;
 
-    T lhs = T(0);
+    T lhs2 = T(0);
+    if (M != 0) lhs2 += b.dot(delta_y1);
     for (int i = 0; i < l; ++i) {
-        if (lw(i) > -1e20 && delta_y2(i) < T(0)) {
-            lhs += lw(i) * delta_y2(i);
-        }
-        if (uw(i) < 1e20 && delta_y2(i) > T(0)) {
-            lhs += uw(i) * delta_y2(i);
-        }
+        if (uw(i) < inf) lhs2 += uw(i) * std::max(delta_y2(i), T(0));
+        if (lw(i) > -inf) lhs2 += lw(i) * std::min(delta_y2(i), T(0));
     }
-    bool cond2 = lhs <= -rhs;
-    return cond2;
+    for (int i = 0; i < N; ++i) {
+        if (ux(i) < inf) lhs2 += ux(i) * std::max(delta_z(i), T(0));
+        if (lx(i) > -inf) lhs2 += lx(i) * std::min(delta_z(i), T(0));
+    }
+    bool cond2 = lhs2 <= eps_pinf * delta_inf;
+
+    if (!cond2) return false;
+
+    return true;
 }
 
 template <typename T>
 bool SSN<T>::dual_infeas(const Vec& delta_x, T eps_dinf) {
     /*
-    If all 5 conditions are true for nonzero delta_x, conclude dual infeasibility.
+    The QP is determined to be dual infeasible if all 5 conditions hold for nonzero delta_x:
     1. ||Q delta_x||_inf <= eps_dinf * ||delta_x||_inf;
     2. c^T delta_x <= -eps_dinf * ||delta_x||_inf;
-    3. ||A delta_x||_inf <= eps_dinf * ||delta_x||_inf;
-    4. |delta_x_i| <= eps_dinf  * ||delta_x||_inf  for finite bounds on x_i,
-         delta_x_i >= -eps_dinf * ||delta_x||_inf  for finite lower bounds on x_i,
-         delta_x_i <= eps_dinf  * ||delta_x||_inf  for finite upper bounds on x_i;
-    5. |(B delta_x)_i| <= eps_dinf  * ||delta_x||_inf for finite bounds on (Bx)_i,
-         (B delta_x)_i >= -eps_dinf * ||delta_x||_inf for finite lower bounds on (Bx)_i,
-         (B delta_x)_i <= eps_dinf  * ||delta_x||_inf for finite upper bounds on (Bx)_i.
+    3. A delta_x ∈ [-eps_dinf, eps_dinf] * ||delta_x||_inf;
+    4. delta_x_i ∈ [-eps_dinf, eps_dinf] * ||delta_x||_inf  for finite bounds on x_i,
+       delta_x_i >= -eps_dinf * ||delta_x||_inf  for finite lower bounds on x_i,
+       delta_x_i <= eps_dinf  * ||delta_x||_inf  for finite upper bounds on x_i;
+    5. (B delta_x)_i ∈ [-eps_dinf, eps_dinf]  * ||delta_x||_inf for finite bounds on (Bx)_i,
+       (B delta_x)_i >= -eps_dinf * ||delta_x||_inf for finite lower bounds on (Bx)_i,
+       (B delta_x)_i <= eps_dinf  * ||delta_x||_inf for finite upper bounds on (Bx)_i.
     */
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
@@ -735,8 +748,9 @@ bool SSN<T>::dual_infeas(const Vec& delta_x, T eps_dinf) {
     if (!cond3) return false;
 
     for (int i = 0; i < N; ++i) {
-        if (lx(i) > -1e20 && delta_x(i) < -rhs) return false;
-        if (ux(i) < 1e20 && delta_x(i) > rhs) return false;
+        if (std::abs(delta_x(i)) > rhs) return false;
+        if (lx(i) > -inf && delta_x(i) < -rhs) return false;
+        if (ux(i) < inf && delta_x(i) > rhs) return false;
     }
 
     for (int i = 0; i < l; ++i) {
@@ -744,8 +758,9 @@ bool SSN<T>::dual_infeas(const Vec& delta_x, T eps_dinf) {
         for (typename SpMat::InnerIterator it(B_tr, i); it; ++it) {
             B_delta_x_i += it.value() * delta_x[it.row()];
         }
-        if (lw(i) > -1e20 && B_delta_x_i < -rhs) return false;
-        if (uw(i) < 1e20 && B_delta_x_i > rhs) return false;
+        if (std::abs(B_delta_x_i) > rhs) return false;
+        if (lw(i) > -inf && B_delta_x_i < -rhs) return false;
+        if (uw(i) < inf && B_delta_x_i > rhs) return false;
     }
 
     return true;
@@ -892,8 +907,10 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         alpha = exact_line_search(result.x, result.y2, dx, dy2);
         /*
         if (do_exact) {
+            // std::cout << "  Exact linesearch applied.\n";
             alpha = exact_line_search(result.x, result.y2, dx, dy2);
         } else {
+            // std::cout << "  Backtracking linesearch applied.\n";
             alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
         }
         */
@@ -927,14 +944,14 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             result.x += delta_x;
             result.y2 += delta_y2;
 
+            // Go back to backtracking
+            // do_exact = false;
+
             // Check infeasibility
-            /*
             bool dinf = dual_infeas(delta_x, eps_dinf);
-            bool pinf_y2 = primal_infeas_y2(delta_y2, eps_pinf);
-            std::cout << "dinf = " << dinf << ", pinf_y2 = " << pinf_y2 << "\n";
+            bool pinf = primal_infeas(delta_y1, delta_y2, delta_z, eps_pinf);
             if (dinf) { result.opt = -3; std::cout << "Dual infeasible.\n"; break; } // Dual infeasible
-            if (pinf_y1z || pinf_y2) { result.opt = -2; std::cout << "Primal infeasible.\n"; break; } // Primal infeasible
-            */
+            if (pinf) { result.opt = -2; std::cout << "Primal infeasible.\n"; break; } // Primal infeasible
         }
 
         // Compute gradient of Lagrangian at current (x, y2)

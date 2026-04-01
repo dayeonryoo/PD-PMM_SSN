@@ -28,19 +28,18 @@ public:
     const int Q_info;
     const Vec& Q_diag;
     const SpMat& L, A, B;
-    const Vec& D1_diag, D2_diag;
+    const Vec& D1A_diag, D1B_diag, D2_diag;
     const Vec& c, b, lx, ux, lw, uw;
     const T obj_const;
     const int n, m, N, M, l;
     Vec x, y1, y2, z;
-    Vec delta_x, delta_y2;
+    Vec delta_x, delta_y1, delta_y2, delta_z;
     int SSN_max_in_iter;
     T mu, rho, gamma, SSN_tol;
     T eps_pinf, eps_dinf;
-    bool pinf_y1z;
 
     // Useful vectors and matrices
-    Vec x_descaled, x_sol;
+    T inf = 1e20;
     Vec ones_N, ones_M, ones_l;
     const SpMat& A_tr, B_tr, L_tr;
     Vec H_diag, H_diag_inv;
@@ -79,14 +78,14 @@ public:
 
     SSN(const int Q_info_, const Vec& Q_diag_, const SpMat& L_, const SpMat& L_tr_,
         const SpMat& A_, const SpMat& B_, const SpMat& A_tr_, const SpMat& B_tr_,
-        const Vec& c_, const Vec& b_, const Vec& D1_diag_, const Vec& D2_diag_,
+        const Vec& c_, const Vec& b_, const Vec& D1A_diag_, const Vec& D1B_diag_, const Vec& D2_diag_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_, const T obj_const_,
         int n_, int m_, int N_, int M_, int l_,
         T SSN_tol_, int SSN_max_in_iter_, bool more_rows_than_cols_,
         T eps_pinf_, T eps_dinf_)
     : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
       A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
-      c(c_), b(b_), D1_diag(D1_diag_), D2_diag(D2_diag_),
+      c(c_), b(b_), D1A_diag(D1A_diag_), D1B_diag(D1B_diag_), D2_diag(D2_diag_),
       lx(lx_), ux(ux_), lw(lw_), uw(uw_), obj_const(obj_const_),
       n(n_), m(m_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
@@ -102,7 +101,8 @@ public:
     }
 
     void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-                           T mu_, T rho_, T gamma_, int SSN_iter_, bool pinf_y1z_) {
+                           const Vec& delta_y1_, const Vec& delta_z_,
+                           T mu_, T rho_, T gamma_, int SSN_iter_) {
         x = x_;
         y1 = y1_;
         y2 = y2_;
@@ -111,7 +111,8 @@ public:
         rho = rho_;
         gamma = gamma_;
         SSN_iter = SSN_iter_;
-        pinf_y1z = pinf_y1z_; // primal infeasibility determined by y1 and z
+        delta_y1 = delta_y1_;
+        delta_z = delta_z_;
     }
 
     static inline T inf_norm(const Vec& v) {
@@ -139,7 +140,7 @@ public:
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
-    bool primal_infeas_y2(const Vec& delta_y2, T eps_pinf);
+    bool primal_infeas(const Vec& delta_y1, const Vec& delta_y2, const Vec& delta_z, T eps_pinf);
     bool dual_infeas(const Vec& delta_x, T eps_dinf);
     SSN_result<T> solve_SSN(const T eps);
 

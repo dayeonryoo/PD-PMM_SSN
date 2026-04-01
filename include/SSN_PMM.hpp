@@ -66,10 +66,11 @@ public:
     SpMat A_tr, B_tr;
 
     SpMat Q_ruiz, A_ruiz, B_ruiz;
-    Vec problem_Q_diag, Q_diag_ruiz, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz;
-    Vec D1_diag, D2_diag;
-    Vec x_descaled, y1_descaled, z_descaled;
-    Vec x_sol, y1_sol, z_sol;
+    Vec problem_Q_diag, Q_diag_ruiz, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz, lw_ruiz, uw_ruiz;
+    Vec D1A_diag, D1B_diag, D2_diag;
+    Vec x_descaled, y1_descaled, y2_descaled, z_descaled;
+    Vec x_sol, y1_sol, y2_sol, z_sol;
+    T inf = 1e20;
 
     // Constant parameters
     T tol = 1e-4;
@@ -77,19 +78,19 @@ public:
     int SSN_max_iter = 6000;
     int SSN_max_in_iter = 40;
     T mu_limit = 1e4;
-    T rho_limit = 2e4;
+    T rho_limit = 1e4;
     T eps_limit = 1e-3*tol;
-    T eps_pinf = 1e-8;
-    T eps_dinf = 1e-8;
+    T eps_pinf = 1e-6;
+    T eps_dinf = 1e-6;
     T gamma = 0.95;
-    bool more_rows_than_cols = N < M + l;
+    bool more_rows_than_cols;
     
     // Updated parameters
     T mu0 = 1e0;
     T mu = 1e1;
     T rho = 1e1;
     T eps_bcl = 1e0;
-    T SSN_tol = 1e0;
+    T SSN_tol = 1e-2;
     
     // Outputs:
     int opt;
@@ -114,7 +115,7 @@ public:
             determine_dimensions(problem);
         }
         check_dimensions(problem);
-        ruiz_scaling(problem.Q, problem_Q_diag, problem.A, problem.B, problem.c, problem.b, problem.lx, problem.ux);
+        ruiz_scaling(problem, problem_Q_diag);
         set_default(problem);
         initialize_sols();
         check_bounds();
@@ -125,7 +126,7 @@ public:
     void get_Q_info(const SpMat& Q);
     void determine_dimensions(const Problem<T>& problem);
     void check_dimensions(const Problem<T>& problem);
-    void ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A, const SpMat& B, const Vec& c, const Vec& b, const Vec& lx, const Vec& ux);
+    void ruiz_scaling(const Problem<T>& problem, const Vec& Q_diag);
     void set_L_from_LLT(const SpMat& Q);
     void set_default(const Problem<T>& problem);
     void initialize_sols();
@@ -140,12 +141,11 @@ public:
     Vec compute_residual_norms();
     Vec compute_residual_norms_inf();
     T objective_value(const Vec& x);
-    void printable_sol(const Vec& x, const Vec& y1, const Vec& z);
+    void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
     void update_PMM_parameters(const Vec& res_norms, const Vec& new_res_norms, int SSN_opt);
     T compute_p(const Vec& x);
     void update_with_bcl(const Vec& y2_hat, T compl_W, T new_compl_W, int PMM_iter);
-    bool primal_infeas_y1(const Vec& delta_y1, T eps_pinf);
-    bool primal_infeas_z(const Vec& delta_z, T eps_pinf);
+    bool qpalm_termination();
     Solution<T> solve();
 };
 

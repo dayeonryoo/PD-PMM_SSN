@@ -121,7 +121,7 @@ void SSN_PMM<T>::check_dimensions(const Problem<T>& problem) {
 }
 
 template <typename T>
-void SSN_PMM<T>::ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A, const SpMat& B, const Vec& c, const Vec& b, const Vec& lx, const Vec& ux) {
+void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_diag) {
     using SpMat = Eigen::SparseMatrix<T>;
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -129,97 +129,143 @@ void SSN_PMM<T>::ruiz_scaling(const SpMat& Q, const Vec& Q_diag, const SpMat& A,
     const T ruiz_tol = 1e-3;
     const T eps = std::numeric_limits<T>::epsilon();
 
-    A_ruiz = A;
-    B_ruiz = B;
-    c_ruiz = c;
-    b_ruiz = b;
-    lx_ruiz = lx;
-    ux_ruiz = ux;
+    A_ruiz = problem.A;
+    B_ruiz = problem.B;
+    c_ruiz = problem.c;
+    b_ruiz = problem.b;
+    lx_ruiz = problem.lx;
+    ux_ruiz = problem.ux;
+    lw_ruiz = problem.lw;
+    uw_ruiz = problem.uw;
+
     if (Q_info == 2) {
-        Q_ruiz = Q;
+        Q_ruiz = problem.Q;
     } else {
-        Q_diag_ruiz = Q_diag;
+        Q_diag_ruiz = problem_Q_diag;
     }
 
-    D1_diag = Vec::Ones(m); // Cumulative row scaling factors
-    D2_diag = Vec::Ones(n); // Cumulative column scaling factors
+    D2_diag = Vec::Ones(n);  // Column scalings for x
+    D1A_diag = Vec::Ones(m); // Row scalings for equality constraint matrix A
+    D1B_diag = Vec::Ones(l); // Row scalings for box constraint matrix B
 
-    if (A_ruiz.rows() == 0 || A_ruiz.cols() == 0) return;
+    if (n == 0) return;
 
     for (int k = 0; k < max_ruiz_iter; ++k) {
 
-        // Compute row-/column-wise infinity norms of current A_ruiz
-        Vec row_max = Vec::Zero(m); // row_max(i) = max_j |A(i,j)|
-        Vec col_max = Vec::Zero(n); // col_max(j) = max_i |A(i,j)|
+        // Compute row-/column-wise infinity norms of constraint matrices
+        Vec row_max_A = Vec::Zero(m); // row_max(i) = max_j |A(i,j)|
+        Vec row_max_B = Vec::Zero(l); // row_max(i) = max_j |B(i,j)|
+        Vec col_max = Vec::Ones(n); // col_max(j) = max_i |[A; B; I](i,j)| (starts at 1 due to I)
+
+        // Contribution from A
         for (int col = 0; col < n; ++col) {
             for (typename SpMat::InnerIterator it(A_ruiz, col); it; ++it) {
                 const int i = it.row();
-                const int j = it.col();
                 const T val = std::abs(it.value());
-                if (val > row_max(i)) row_max(i) = val;
-                if (val > col_max(j)) col_max(j) = val;
+                if (val > row_max_A(i)) row_max_A(i) = val;
+                if (val > col_max(col)) col_max(col) = val;
             }
         }
 
-        // Check convergence
-        const T max_row = row_max.maxCoeff();
-        const T max_col = col_max.maxCoeff();
-        if (std::abs(T(1) - max_row) < ruiz_tol && std::abs(T(1) - max_col) < ruiz_tol) break;
+        // Contribution from B
+        for (int col = 0; col < n; ++col) {
+            for (typename SpMat::InnerIterator it(B_ruiz, col); it; ++it) {
+                const int i = it.row();
+                const T val = std::abs(it.value());
+                if (val > row_max_B(i)) row_max_B(i) = val;
+                if (val > col_max(col)) col_max(col) = val;
+            }
+        }
 
-        // Scaling factors: dr, dc = sqrt(max)
-        Vec dr = Vec::Ones(m);
-        Vec dc = Vec::Ones(n);
+        // Check convergence on [A; B; I]
+        T row_dev = T(0);
+        if (m > 0) row_dev = std::max(row_dev, (row_max_A.array() - T(1)).abs().maxCoeff());
+        if (l > 0) row_dev = std::max(row_dev, (row_max_B.array() - T(1)).abs().maxCoeff());
 
-        for (int i = 0; i < m; ++i) if (row_max(i) > eps) dr(i) = std::sqrt(row_max(i));
-        for (int j = 0; j < n; ++j) if (col_max(j) > eps) dc(j) = std::sqrt(col_max(j));
+        T col_dev = (col_max.array() - T(1)).abs().maxCoeff();
+        if (row_dev < ruiz_tol && col_dev < ruiz_tol) break;
 
-        Vec dr_inv = dr.cwiseInverse();
+        // Scaling factors: dr, dc = sqrt(max_norms)
+        Vec drA = Vec::Ones(m);
+        Vec drB = Vec::Ones(l);
+        Vec dc  = Vec::Ones(n);
+
+        for (int i = 0; i < m; ++i) if (row_max_A(i) > eps) drA(i) = std::sqrt(row_max_A(i));
+        for (int i = 0; i < l; ++i) if (row_max_B(i) > eps) drB(i) = std::sqrt(row_max_B(i));
+        for (int j = 0; j < n; ++j) if (col_max(j) > eps)   dc(j) = std::sqrt(col_max(j));
+
+        Vec drA_inv = drA.cwiseInverse();
+        Vec drB_inv = drB.cwiseInverse();
         Vec dc_inv = dc.cwiseInverse();
 
-        // Scale A_ruiz: A <- diag(dr)^{-1} A diag(dc)^{-1}
+        // Scale A: A <-  D1A^{-1} A D2^{-1}
         for (int j = 0; j < n; ++j) {
             const T col_fac = dc_inv(j);
             for (typename SpMat::InnerIterator it(A_ruiz, j); it; ++it) {
-                const T row_fac = dr_inv(it.row());
+                const T row_fac = drA_inv(it.row());
                 it.valueRef() *= row_fac * col_fac;
             }
         }
-        // Scale B_ruiz: B <- B D2 with D2 <- D2 * diag(dc)^{-1}
+        // Scale B: B <- D1B^{-1} B D2^{-1}
         for (int j = 0; j < n; ++j) {
             const T col_fac = dc_inv(j);
             for (typename SpMat::InnerIterator it(B_ruiz, j); it; ++it) {
-                it.valueRef() *= col_fac;
+                const T row_fac = drB_inv(it.row());
+                it.valueRef() *= row_fac * col_fac;
             }
         }
 
-        // Scale Q_ruiz if Q is nonzero: Q <- D2 Q D2
+        // Scale I: I <- D1I^{-1} I D2^{-1}
+        // This is represented through the variable substitution and scaling of lx, ux below.
+
+        // Scale Q if Q is nonzero: Q <- D2^{-1} Q D2^{-1}
         if (Q_info == 2) {
             for (int j = 0; j < n; ++j) {
                 const T col_fac = dc_inv(j);
                 for (typename SpMat::InnerIterator it(Q_ruiz, j); it; ++it) {
-                    const int i = it.row();
-                    it.valueRef() *= dc_inv(i) * col_fac; // Q_ij *= d_i * d_j
+                    const T row_fac = dc_inv(it.row());
+                    it.valueRef() *= row_fac * col_fac; // Q_ij *= 1/d_i * 1/d_j
                 }
             }
         } else if (Q_info == 1) {
-            Q_diag_ruiz.array() *= dc_inv.array().square(); // Q_ii *= d_i * d_i
+            Q_diag_ruiz.array() *= dc_inv.array().square(); // Q_ii *= 1/d_i * 1/d_i
         }
 
-        // Scale c_ruiz: c <- D2 c
-        if (c_ruiz.size() != 0) c_ruiz.array() *= dc_inv.array();
+        // Scale c: c <- D2^{-1} c
+        if (c_ruiz.size() == n) c_ruiz.array() *= dc_inv.array();
 
-        // Scale b_ruiz: b <- D1 b with D1 <- D1 * diag(dr)^{-1}
-        if (b_ruiz.size() != 0) b_ruiz.array() *= dr_inv.array();
+        // Scale b: b <- D1A^{-1} b
+        if (b_ruiz.size() == m) b_ruiz.array() *= drA_inv.array();
 
-        // Scale lx_ruiz, ux_ruiz: D2^{-1} lx <= D2^{-1} x <= D2^{-1} ux
-        if (lx_ruiz.size() != 0) lx_ruiz.array() *= dc.array();
-        if (ux_ruiz.size() != 0) ux_ruiz.array() *= dc.array();
+        // Scale lw, uw:  lw, uw <- D1B^{-1} lw, uw
+        if (lw_ruiz.size() == l) {
+            for (int i = 0; i < l; ++i) {
+                if (lw_ruiz(i) > -inf) lw_ruiz(i) *= drB_inv(i);
+            }
+        }
+        if (uw_ruiz.size() == l) {
+            for (int i = 0; i < l; ++i) {
+                if (uw_ruiz(i) < inf) uw_ruiz(i) *= drB_inv(i);
+            }
+        }
 
-        // Accumulate scaling factors (D <- D * diag(d)^{-1})
-        D1_diag.array() *= dr_inv.array();
-        D2_diag.array() *= dc_inv.array();
+        // Scale lx, ux:  lx, ux <- D2 lx, ux
+        if (lx_ruiz.size() == n) {
+            for (int i = 0; i < n; ++i) {
+                if (lx_ruiz(i) > -inf) lx_ruiz(i) *= dc(i);
+            }
+        }
+        if (ux_ruiz.size() == n) {
+            for (int i = 0; i < n; ++i) {
+                if (ux_ruiz(i) < inf) ux_ruiz(i) *= dc(i);
+            }
+        }
+
+        // Accumulate scaling factors (D <- D * diag(d))
+        if (m > 0) D1A_diag.array() *= drA.array();
+        if (l > 0) D1B_diag.array() *= drB.array();
+        D2_diag.array() *= dc.array();
     }
-
 }
 
 template <typename T>
@@ -397,14 +443,17 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
     if (problem.lw.size() == 0) {
         lw = Vec::Constant(l, -inf);
     } else {
-        lw = problem.lw;
+        lw = lw_ruiz;
     }
     if (problem.uw.size() == 0) {
         uw = Vec::Constant(l, inf);
     } else {
-        uw = problem.uw;
+        uw = uw_ruiz;
     }
 
+    // Decide whether to solve KKT or Schur
+    more_rows_than_cols = N < M + l;
+    // more_rows_than_cols = true; // always solve KKT
 }
 
 template <typename T>
@@ -521,15 +570,14 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
     // Primal residual norm
     T res_p;
     if (M == 0) res_p = T(0);
-    else res_p = inf_norm(A * x - b) / (1 + inf_norm(b)); 
+    else res_p = inf_norm(A * x - b) / (1 + inf_norm(b));
 
     // Dual residual norm
-    T res_d;
-    if (Q_info == 0) {
-        res_d = inf_norm(c - A_tr * y1 - B_tr * y2 + z) / (1 + inf_norm(c));
-    } else {
-        res_d = inf_norm(c + Q_diag.cwiseProduct(x) - A_tr * y1 - B_tr * y2 + z) / (1 + inf_norm(c));
-    }
+    Vec num = c + z;
+    if (M != 0) num -= A_tr * y1;
+    if (l != 0) num -= B_tr * y2;
+    if (Q_info != 0) num += Q_diag.cwiseProduct(x);
+    T res_d = inf_norm(num) / (1 + inf_norm(c));
 
     // Complementarity residual norm for box constraints
     T compl_x = inf_norm(x - proj(x + z, lx, ux));
@@ -559,16 +607,18 @@ T SSN_PMM<T>::objective_value(const Vec& x) {
 }
 
 template <typename T>
-void SSN_PMM<T>::printable_sol(const Vec& x, const Vec& y1, const Vec& z) {
+void SSN_PMM<T>::printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z) {
     // Ruiz descale, and shrink to original dimension if needed
     if (Q_info == 2) {
-        x_sol = x.head(n).array() * D2_diag.array();
-        y1_sol = y1.head(m).array() * D1_diag.array();
-        z_sol = z.head(n).array() / D2_diag.array();
+        x_sol = x.head(n).array() / D2_diag.array();
+        y1_sol = y1.head(m).array() / D1A_diag.array();
+        y2_sol = y2.head(l).array() / D1B_diag.array();
+        z_sol = z.head(n).array() * D2_diag.array();
     } else {
-        x_sol = x.cwiseProduct(D2_diag);
-        y1_sol = y1.cwiseProduct(D1_diag);
-        z_sol = z.cwiseQuotient(D2_diag);
+        x_sol = x.cwiseQuotient(D2_diag);
+        y1_sol = y1.cwiseQuotient(D1A_diag);
+        y2_sol = y2.cwiseQuotient(D1B_diag);
+        z_sol = z.cwiseProduct(D2_diag);
     }
 }
 
@@ -585,23 +635,30 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
     bool ssn_good = SSN_opt == 0;
     // std::cout << "Norm ratio = " << norm_ratio << "\n";
     if (ssn_good) {
-        if (norm_ratio > 0.95) {
-            mu = std::min(mu_limit, 1.15 * mu);
-            rho = std::min(rho_limit, 1.20 * rho);
-        }
-        else if (norm_ratio > 0.90) {
+        if (worst_res > 10 * tol) { // still far from convergence
+            if (norm_ratio < 1.0 && norm_ratio > 0.95) { // some improvement, but not much
+                mu = std::min(mu_limit, 1.2 * mu);
+                rho = std::min(rho_limit, 1.15 * rho);
+            }
+            else if (norm_ratio > 0.90) { // decent improvement
+                mu = std::min(mu_limit, 1.02 * mu);
+                rho = std::min(rho_limit, 1.02 * rho);
+            }
+        } else {
+            // Near convergence, be more conservative to avoid oscillation
             mu = std::min(mu_limit, 1.02 * mu);
-            rho = std::min(rho_limit, 1.05 * rho);
+            rho = std::min(rho_limit, 1.02 * rho);
         }
-        SSN_tol = std::max(eps_limit, std::min(SSN_tol, std::pow(worst_res, 1.2)));
+        if (worst_res < 1.0) {
+            SSN_tol = std::max(eps_limit, std::min(SSN_tol, std::pow(worst_res, 1.2)));
+        } else {
+            SSN_tol = std::max(eps_limit, 0.95 * SSN_tol);
+        }
     } else {
-        if (norm_ratio > 0.99) {
-            // mu = std::min(mu_limit, 1.01 * mu);
-            // rho = std::min(rho_limit, 1.01 * rho);
-        }
+        mu = std::max(mu0, 0.95 * mu);
+        rho = std::max(mu0, 0.95 * rho);
     }
 }
-
 
 template <typename T>
 T SSN_PMM<T>::compute_p(const Vec& x) {
@@ -622,47 +679,50 @@ void SSN_PMM<T>::update_with_bcl(const Vec& y2_hat, T compl_W, T new_compl_W, in
 }
 
 template <typename T>
-bool SSN_PMM<T>::primal_infeas_y1(const Vec& delta_y1, T eps_pinf) {
-    if (M == 0) return false;
-
-    T delta_y1_inf = inf_norm(delta_y1);
-    if (delta_y1_inf == T(0)) return false;
-
-    T rhs_y1 = eps_pinf * delta_y1_inf;
-    
-    bool cond1 = inf_norm(A_tr * delta_y1) <= rhs_y1;
-    if (!cond1) return false;
-
-    bool cond2 = b.dot(delta_y1) <= -rhs_y1;
-    if (!cond2) return false;
-
-    return true;
-}
-
-template <typename T>
-bool SSN_PMM<T>::primal_infeas_z(const Vec& delta_z, T eps_pinf) {
-
-    T delta_z_inf = inf_norm(delta_z);
-    if (delta_z_inf == T(0)) return false;
-
-    T rhs_z = eps_pinf * delta_z_inf;
-
-    T lhs = T(0);
-    for (int i = 0; i < N; ++i) {
-        if (lx(i) > -1e20 && delta_z(i) < T(0)) {
-            lhs += lx(i) * delta_z(i);
-        }
-        if (ux(i) < 1e20 && delta_z(i) > T(0)) {
-            lhs += ux(i) * delta_z(i);
-        }
+bool SSN_PMM<T>::qpalm_termination() {
+    // Primal feasibility
+    bool primal_feas;
+    if (M == 0) {
+        primal_feas = true;
+    } else {
+        primal_feas = inf_norm(A * x - b) < tol * (1 + std::max(inf_norm(A * x), inf_norm(b)));
     }
 
-    return lhs <= -rhs_z;
+    // Dual feasibility
+    bool dual_feas;
+    Vec Ay1, By2;
+    if (M == 0) Ay1 = Vec::Zero(N);
+    else Ay1 = A_tr * y1;
+    if (l == 0) By2 = Vec::Zero(N);
+    else By2 = B_tr * y2;
+
+    Vec dual_terms(5);
+    if (Q_info == 0) {
+        dual_terms << inf_norm(c), T(0), inf_norm(Ay1), inf_norm(By2), inf_norm(z);
+        dual_feas = inf_norm(c - Ay1 - By2 + z) < tol * (1 + dual_terms.maxCoeff());
+    } else {
+        dual_terms << inf_norm(c), inf_norm(Q_diag.cwiseProduct(x)), inf_norm(Ay1), inf_norm(By2), inf_norm(z);
+        dual_feas = inf_norm(c + Q_diag.cwiseProduct(x) - Ay1 - By2 + z) < tol * (1 + dual_terms.maxCoeff());
+    }
+
+    // Complementarity for box constraints
+    Vec proj_K = proj(x + z, lx, ux);
+    bool compl_x = inf_norm(x - proj_K) < tol * (1 + std::max(inf_norm(x), inf_norm(proj_K)));
+
+    bool compl_w;
+    if (l == 0) {
+        compl_w = true;
+    } else {
+        Vec proj_W = proj(B * x - y2, lw, uw);
+        compl_w = inf_norm(B * x - proj_W) < tol * (1 + std::max(inf_norm(B * x), inf_norm(proj_W)));
+    }
+
+    return primal_feas && dual_feas && compl_x && compl_w;
 }
 
 template <typename T>
 Solution<T> SSN_PMM<T>::solve() {
-
+    
     // Initialize variables
     opt = -1;
     PMM_iter = 0;
@@ -670,11 +730,12 @@ Solution<T> SSN_PMM<T>::solve() {
     Vec y2_hat = y2;
     Vec res_norms = compute_residual_norms_inf();
     SSN_tol_achieved = T(0);
-    bool pinf_y1z = false;
+    Vec delta_y1 = Vec::Zero(M);
+    Vec delta_z = Vec::Zero(N);
 
     // Build the Newton system
     SSN<T> NS(Q_info, Q_diag, L, L_tr,
-            A, B, A_tr, B_tr, c, b, D1_diag, D2_diag,
+            A, B, A_tr, B_tr, c, b, D1A_diag, D1B_diag, D2_diag,
             lx, ux, lw, uw, obj_const, n, m, N, M, l,
             SSN_tol, SSN_max_in_iter, more_rows_than_cols,
             eps_pinf, eps_dinf);
@@ -698,7 +759,7 @@ Solution<T> SSN_PMM<T>::solve() {
         auto t0_pmm = std::chrono::steady_clock::now();
 
         // Call semismooth Newton method
-        NS.update_SSN_system(x, y1, y2, z, mu, rho, gamma, SSN_iter, pinf_y1z);
+        NS.update_SSN_system(x, y1, y2, z, delta_y1, delta_z, mu, rho, gamma, SSN_iter);
         SSN_result<T> NS_solution = NS.solve_SSN(SSN_tol);
 
         SSN_iter += NS_solution.iter;
@@ -712,9 +773,10 @@ Solution<T> SSN_PMM<T>::solve() {
             std::cout << std::setw(8) << PMM_iter << std::setw(8) << SSN_iter << ": Linesearch failed. Retrying with smaller mu and rho.\n";
             if (mu == mu0 && rho == mu0) { opt = 3; break; }
             else {
-                mu = std::max(mu0, 0.5 * mu);
-                rho = std::max(mu0, 0.5 * rho);
-                PMM_iter++;
+                mu = std::max(mu0, 0.7 * mu);
+                rho = std::max(mu0, 0.7 * rho);
+                // SSN_tol = std::max(eps_limit, 0.5 * SSN_tol);
+                // PMM_iter++;
                 continue;
             }
         } else if (NS_solution.opt == -2) { // Primal infeasible
@@ -747,18 +809,14 @@ Solution<T> SSN_PMM<T>::solve() {
         // update_PMM_parameters(res_norms(0), res_norms(1), new_res_norms(0), new_res_norms(1));
         update_PMM_parameters(res_norms, new_res_norms, NS_solution.opt);
         res_norms = new_res_norms; // for next iteration
-
-        // Check infeasibility with y1 and z.
-        // Inside SSN iteration together with x and y2, infeasibility will be detected.
-        bool pinf_y1 = primal_infeas_y1(delta_y1, eps_pinf);
-        bool pinf_z = primal_infeas_z(delta_z, eps_pinf);
-        pinf_y1z = pinf_y1 || pinf_z;
+        PMM_tol_achieved = res_norms.maxCoeff();
 
         // Ruiz-descale and shrink to the original dimension (n, m, l) for printing
-        printable_sol(x, y1, z); // (Modifies x_sol, y1_sol, z_sol.)
+        printable_sol(x, y1, y2, z); // (Modifies x_sol, y1_sol, y2_sol, z_sol.)
         obj_val = objective_value(x);
 
         // Check termination criterion
+        // if (PMM_tol_achieved < tol)
         if (PMM_tol_achieved < tol) {
             opt = 0; // Optimal solution found
             if (when != PrintWhen::NEVER || when != PrintWhen::ALWAYS) {
@@ -790,10 +848,10 @@ Solution<T> SSN_PMM<T>::solve() {
         SSN_tol_achieved = 1e20;
         x_sol = Vec::Zero(n);
         y1_sol = Vec::Zero(m);
-        y2 = Vec::Zero(l);
+        y2_sol = Vec::Zero(l);
         z_sol = Vec::Zero(n);
     }
 
     print(when, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol);
-    return Solution<T>(opt, x_sol, y1_sol, y2, z_sol, obj_val, PMM_iter, SSN_iter, PMM_tol_achieved, SSN_tol_achieved);
+    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, PMM_iter, SSN_iter, PMM_tol_achieved, SSN_tol_achieved);
 }
