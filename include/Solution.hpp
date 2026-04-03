@@ -29,13 +29,17 @@ public:
     int SSN_iter;   // Number of SSN iterations performed per PMM iteration
     T PMM_tol_achieved; // Tolerance achieved by PMM
     T SSN_tol_achieved; // Tolerance achieved by SSN
+    
+    double solving_time; // Total time in seconds taken to solve the problem
+    int linesearch_fail; // Number of linesearch failures
 
-    Solution(const int opt_, const Vec& x_, const Vec& y1_, const Vec& y2_,
-             const Vec& z_, const T obj_val_, const int PMM_iter_, const int SSN_iter_,
-             const T PMM_tol_achieved_ = 0, const T SSN_tol_achieved_ = 0)
+    Solution(int opt_, const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
+             T obj_val_, int PMM_iter_, int SSN_iter_, T PMM_tol_achieved_, T SSN_tol_achieved_,
+             double solving_time_, int linesearch_fail_)
     : opt(opt_), x(x_), y1(y1_), y2(y2_), z(z_), obj_val(obj_val_),
       PMM_iter(PMM_iter_), SSN_iter(SSN_iter_),
-      PMM_tol_achieved(PMM_tol_achieved_), SSN_tol_achieved(SSN_tol_achieved_)
+      PMM_tol_achieved(PMM_tol_achieved_), SSN_tol_achieved(SSN_tol_achieved_),
+      solving_time(solving_time_), linesearch_fail(linesearch_fail_)
     {}
 
     void print_summary() const {
@@ -54,6 +58,7 @@ public:
             std::cout << "PMM tolerance achieved (PMM_tol_achieved): " << PMM_tol_achieved << std::endl;
             std::cout << "SSN tolerance achieved (SSN_tol_achieved): " << SSN_tol_achieved << std::endl;
         }
+        std::cout << "Total solving time (solving_time): " << solving_time << " seconds\n";
     }
 
 };

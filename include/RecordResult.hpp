@@ -26,7 +26,9 @@ struct TestResult {
     int SSN_iter;
     T PMM_tol_achieved;
     T SSN_tol_achieved;
+
     double solving_time_sec;
+    int linesearch_fail;
 };
 
 template <typename T>
@@ -78,7 +80,7 @@ inline void write_csv_header(const std::string& path) {
     if (!fs::exists(fs::path(path)) || fs::is_empty(fs::path(path))) {
         std::ofstream csv(path);
         csv << "System,agree,opt_status,diverged,name,abs_err,rel_err,obj_val,"
-            << "PMM_iter,SSN_iter,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec\n";
+            << "PMM_iter,SSN_iter,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec,linesearch_fail\n";
     } else if (!fs::is_empty(fs::path(path))) {
         std::ofstream csv(path, std::ios::out | std::ios::app);
         csv << "\n";
@@ -92,5 +94,5 @@ void append_csv_result(const std::string& path, const TestResult<T>& r) {
         << r.name << "," << r.abs_err << "," << r.rel_err << ","
         << r.obj_val << "," << r.PMM_iter << "," << r.SSN_iter << ","
         << r.PMM_tol_achieved << "," << r.SSN_tol_achieved << ","
-        << r.solving_time_sec << "\n";
+        << r.solving_time_sec << "," << r.linesearch_fail << "\n";
 }

@@ -528,19 +528,19 @@ template <typename T>
 T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
     /* 
     psi(t) = <∇ M(u + t du), du>,
-            = eta t + beta + mu <proj_K (s + t dx), dx> + <dc, proj_W (v + t dv)>,
+            = eta t + beta + mu <dist_K (s + t dx), dx> + <mu/gamma dv, dist_W (v + t dv)>,
     where eta  = <(Q + mu A^T A + I_n/rho) dx, dx> + (1-gamma)/mu ||dy2||^2,
           beta = <c + Q x_curr - A^T y1 + mu A^T (A x_curr - b) + (x_curr - x)/rho, dx> + (1 - gamma)/mu <y2, dy2>,
           s = z / mu + x_curr,
           v = B x_curr + ((1-gamma) y2_curr - y2) / mu,
-          dv = B dx + (1-gamma)/mu dy2,
-          dc = mu/gamma B dx + (1-gamma)/gamma dy2. 
+          dv = B dx + (1-gamma)/mu dy2.
     Compute all breakpoints t and corresponding slope changes of psi, and sort them in increasing order.
     Write psi(t) = p + m(t - t_prev).
     For each breakpoint t, if psi(t) >= 0, return t = t_prev - p / m;
     otherwise, set p = psi(t), t_prev = t and continue.
     */
     using Vec = typename SSN<T>::Vec;
+    T eps = 1e-12; // Numerical tolerance for checking zero
 
     // Useful vectors
     Vec Ax = A * x_curr;
@@ -551,7 +551,6 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     Vec s = z / mu + x_curr;
     Vec v = Bx + ((1 - gamma) * y2_curr - y2) / mu;
     Vec dv = Bdx + (1 - gamma) / mu * dy2;
-    Vec dc = mu / gamma * Bdx + (1 - gamma) / gamma * dy2;
 
     // eta: smooth linear term in psi(t)
     T eta = T(0);
@@ -576,23 +575,25 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
         T slope_change;
     };
     std::vector<Breakpoint> breakpoints;
+    breakpoints.reserve(2 * (N + l));
 
     // Breakpoints and corresponding slope changes for K
     for (int i = 0; i < N; ++i) {
         T s_i = s(i);
         T dx_i = dx(i);
-        if (dx_i == 0) continue;
+        if (std::abs(dx_i) < eps) continue;
 
         T change = mu * dx_i * dx_i;
         T t_l = (lx(i) - s_i) / dx_i;
         T t_u = (ux(i) - s_i) / dx_i;
 
-        if (dx_i > 0) {
-            if (t_l > 0) breakpoints.push_back({t_l, -change}); // into K
-            if (t_u > 0) breakpoints.push_back({t_u, +change}); // out of K
-        } else { // dx_i < 0
-            if (t_l > 0) breakpoints.push_back({t_l, +change}); // out of K
-            if (t_u > 0) breakpoints.push_back({t_u, -change}); // into K
+        if (t_l > eps) {
+            if (dx_i > 0) breakpoints.push_back({t_l, -change}); // into K
+            if (dx_i < 0) breakpoints.push_back({t_l, +change}); // out of K
+        } 
+        if (t_u > eps) {
+            if (dx_i > 0) breakpoints.push_back({t_u, +change}); // out of K
+            if (dx_i < 0) breakpoints.push_back({t_u, -change}); // into K
         }
     }
 
@@ -600,23 +601,38 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     for (int i = 0; i < l; ++i) {
         T v_i = v(i);
         T dv_i = dv(i);
-        if (dv_i == 0) continue;
+        if (std::abs(dv_i) < eps) continue;
             
-        T change = dc(i) * dv_i;
+        T change = mu / gamma * dv_i * dv_i;
         T t_l = (lw(i) - v_i) / dv_i;
         T t_u = (uw(i) - v_i) / dv_i;
 
-        if (dv_i > 0) {
-            if (t_l > 0) breakpoints.push_back({t_l, -change}); // into W
-            if (t_u > 0) breakpoints.push_back({t_u, +change}); // out of W
-        } else { // dv_i < 0
-            if (t_l > 0) breakpoints.push_back({t_l, +change}); // out of W
-            if (t_u > 0) breakpoints.push_back({t_u, -change}); // into W
+        if (t_l > eps) {
+            if (dv_i > 0) breakpoints.push_back({t_l, -change}); // into W
+            if (dv_i < 0) breakpoints.push_back({t_l, +change}); // out of W
+        }
+        if (t_u > eps) {
+            if (dv_i > 0) breakpoints.push_back({t_u, +change}); // out of W
+            if (dv_i < 0) breakpoints.push_back({t_u, -change}); // into W
         }
     }
 
     // Sort by t
     std::sort(breakpoints.begin(), breakpoints.end(), [](Breakpoint& a, Breakpoint& b){ return a.t < b.t; });
+
+    // Group breakpoints with the same t by summing up their slope changes
+    std::vector<Breakpoint> unique_breakpoints;
+    for (size_t i = 0; i < breakpoints.size();) {
+        T t = breakpoints[i].t;
+        T slope_change_sum = T(0);
+        while (i < breakpoints.size()) {
+            if (std::abs(breakpoints[i].t - t) < eps * std::max<T>(1, std::abs(t))) {
+                slope_change_sum += breakpoints[i].slope_change;
+            }
+            ++i;
+        }
+        unique_breakpoints.push_back({t, slope_change_sum});
+    }
 
     // Check if psi(0) >= 0
     Vec dist_K_s = compute_dist_box(s, lx, ux);
@@ -625,59 +641,53 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     p += mu * dist_K_s.dot(dx);
     p += mu / gamma * dist_W_v.dot(Bdx);
     p += (1 - gamma) / gamma * dist_W_v.dot(dy2);
-    if (p >= T(0)) return T(0);
+    if (p >= T(0)) return T(0); // No crossing, linesearch failed.
 
     // If psi(0) < 0, check at every breakpoint t.
     T t_prev = T(0);
     T m = eta; // initial slope at t=0
     for (int i = 0; i < N; ++i) {
-        if (s(i) < lx(i) || s(i) > ux(i)) {
+        if (s(i) < lx(i) - eps || s(i) > ux(i) + eps) {
             m += mu * dx(i) * dx(i);
         }
     }
     for (int i = 0; i < l; ++i) {
-        if (v(i) < lw(i) || v(i) > uw(i)) {
-            m += dc(i) * dc(i);
+        if (v(i) < lw(i) - eps || v(i) > uw(i) + eps) {
+            m += mu / gamma * dv(i) * dv(i);
         }
     }
 
     // Check at each breakpoint t
     size_t k = 0;
-    while (k < breakpoints.size()) {
-        T t = breakpoints[k].t;
+    for (Breakpoint& bp : breakpoints) {
+        T t = bp.t;
         T p_t = p + m * (t - t_prev);
         if (p_t >= 0) return t_prev - p / m;
-
-        // Taking care of idential breakpoints at the same time
-        T change_sum = T(0);
-        while (k < breakpoints.size() && std::abs(breakpoints[k].t - t) < 1e-6) {
-            change_sum += breakpoints[k].slope_change;
-            ++k;
-        }
 
         // Cross the breakpoint(s)
         t_prev = t;
         p = p_t;
-        m += change_sum;
+        m += bp.slope_change;
     }
 
     // Checking the last breakpoint.
     if (m > T(0)) return t_prev - p / m;
     return T(0); // safeguard
-
 }
 
 template <typename T>
 bool SSN<T>::primal_infeas(const Vec& delta_y1, const Vec& delta_y2, const Vec& delta_z, T eps_pinf) {
     /*
     The QP is determined to be primal infeasible if all 2 conditions hold for nonzero [delta_y1, delta_y2, delta_z]:
-    1. ||A^T delta_y1 + B^T delta_y2 + delta_z||_inf <= eps_pinf * max{||delta_y1||_inf, ||delta_y2||_inf, ||delta_z||_inf};
-    2. b^T delta_y1 + sum_i [uw_i * max(y2_i, 0)] + sum_i [lw_i * min(y2_i, 0)]
-                    + sum_i [ux_i * max(z_i, 0)] + sum_i [lx_i * min(z_i, 0)]
-       <= eps_pinf * max{||delta_y1||_inf, ||delta_y2||_inf, ||delta_z||_inf}
+    1. ||A^T delta_y1 + B^T delta_y2 - delta_z||_inf <= eps_pinf * max{||delta_y1||_inf, ||delta_y2||_inf, ||delta_z||_inf};
+    2. -b^T delta_y1 + sum_i [uw_i * max(-delta_y2_i, 0)] + sum_i [lw_i * min(-delta_y2_i, 0)]
+                     + sum_i [ux_i * max(delta_z_i, 0)]   + sum_i [lx_i * min(delta_z_i, 0)]
+       <= -eps_pinf * max{||delta_y1||_inf, ||delta_y2||_inf, ||delta_z||_inf}
        for finite lx_i, ux_i, lw_i, uw_i.
     */
     using Vec = typename SSN<T>::Vec;
+
+    T eps_zero = 1e-12; // Numerical tolerance for checking zero
 
     T delta_y1_inf = T(0);
     if (M != 0) delta_y1_inf = inf_norm(delta_y1);
@@ -685,9 +695,9 @@ bool SSN<T>::primal_infeas(const Vec& delta_y1, const Vec& delta_y2, const Vec& 
     if (l != 0) delta_y2_inf = inf_norm(delta_y2);
     T delta_z_inf = inf_norm(delta_z);
     T delta_inf = std::max({delta_y1_inf, delta_y2_inf, delta_z_inf});
-    if (delta_inf == T(0)) return false;
+    if (delta_inf < eps_zero) return false;
 
-    Vec lhs1 = delta_z;
+    Vec lhs1 = -delta_z;
     if (M != 0) lhs1 += A_tr * delta_y1;
     if (l != 0) lhs1 += B_tr * delta_y2;
     bool cond1 = inf_norm(lhs1) <= eps_pinf * delta_inf;
@@ -695,16 +705,16 @@ bool SSN<T>::primal_infeas(const Vec& delta_y1, const Vec& delta_y2, const Vec& 
     if (!cond1) return false;
 
     T lhs2 = T(0);
-    if (M != 0) lhs2 += b.dot(delta_y1);
+    if (M != 0) lhs2 -= b.dot(delta_y1);
     for (int i = 0; i < l; ++i) {
-        if (uw(i) < inf) lhs2 += uw(i) * std::max(delta_y2(i), T(0));
-        if (lw(i) > -inf) lhs2 += lw(i) * std::min(delta_y2(i), T(0));
+        if (uw(i) < inf) lhs2 += uw(i) * std::max(-delta_y2(i), T(0));
+        if (lw(i) > -inf) lhs2 += lw(i) * std::min(-delta_y2(i), T(0));
     }
     for (int i = 0; i < N; ++i) {
         if (ux(i) < inf) lhs2 += ux(i) * std::max(delta_z(i), T(0));
         if (lx(i) > -inf) lhs2 += lx(i) * std::min(delta_z(i), T(0));
     }
-    bool cond2 = lhs2 <= eps_pinf * delta_inf;
+    bool cond2 = lhs2 <= -eps_pinf * delta_inf;
 
     if (!cond2) return false;
 
@@ -717,10 +727,10 @@ bool SSN<T>::dual_infeas(const Vec& delta_x, T eps_dinf) {
     The QP is determined to be dual infeasible if all 5 conditions hold for nonzero delta_x:
     1. ||Q delta_x||_inf <= eps_dinf * ||delta_x||_inf;
     2. c^T delta_x <= -eps_dinf * ||delta_x||_inf;
-    3. A delta_x ∈ [-eps_dinf, eps_dinf] * ||delta_x||_inf;
-    4. delta_x_i ∈ [-eps_dinf, eps_dinf] * ||delta_x||_inf  for finite bounds on x_i,
-       delta_x_i >= -eps_dinf * ||delta_x||_inf  for finite lower bounds on x_i,
-       delta_x_i <= eps_dinf  * ||delta_x||_inf  for finite upper bounds on x_i;
+    3. ||A delta_x||_inf <= eps_dinf * ||delta_x||_inf;
+    4. (delta_x)_i ∈ [-eps_dinf, eps_dinf] * ||delta_x||_inf  for finite bounds on x_i,
+       (delta_x)_i >= -eps_dinf * ||delta_x||_inf  for finite lower bounds on x_i,
+       (delta_x)_i <= eps_dinf  * ||delta_x||_inf  for finite upper bounds on x_i;
     5. (B delta_x)_i ∈ [-eps_dinf, eps_dinf]  * ||delta_x||_inf for finite bounds on (Bx)_i,
        (B delta_x)_i >= -eps_dinf * ||delta_x||_inf for finite lower bounds on (Bx)_i,
        (B delta_x)_i <= eps_dinf  * ||delta_x||_inf for finite upper bounds on (Bx)_i.
@@ -728,8 +738,10 @@ bool SSN<T>::dual_infeas(const Vec& delta_x, T eps_dinf) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
 
+    T eps_zero = 1e-12; // Numerical tolerance for checking zero
+
     const T delta_x_inf = inf_norm(delta_x);
-    if (delta_x_inf == T(0)) return false;
+    if (delta_x_inf < eps_zero) return false;
     const T rhs = eps_dinf * delta_x_inf;
     
     bool cond1 = true;
@@ -748,9 +760,16 @@ bool SSN<T>::dual_infeas(const Vec& delta_x, T eps_dinf) {
     if (!cond3) return false;
 
     for (int i = 0; i < N; ++i) {
-        if (std::abs(delta_x(i)) > rhs) return false;
-        if (lx(i) > -inf && delta_x(i) < -rhs) return false;
-        if (ux(i) < inf && delta_x(i) > rhs) return false;
+        const bool has_lx = lx(i) > -inf;
+        const bool has_ux = ux(i) < inf;
+
+        if (has_lx && has_ux) {
+            if (std::abs(delta_x(i)) > rhs) return false;
+        } else if (has_lx) {
+             if (delta_x(i) < -rhs) return false;
+        } else if (has_ux) {
+             if (delta_x(i) > rhs) return false;
+        }
     }
 
     for (int i = 0; i < l; ++i) {
@@ -758,11 +777,17 @@ bool SSN<T>::dual_infeas(const Vec& delta_x, T eps_dinf) {
         for (typename SpMat::InnerIterator it(B_tr, i); it; ++it) {
             B_delta_x_i += it.value() * delta_x[it.row()];
         }
-        if (std::abs(B_delta_x_i) > rhs) return false;
-        if (lw(i) > -inf && B_delta_x_i < -rhs) return false;
-        if (uw(i) < inf && B_delta_x_i > rhs) return false;
-    }
+        const bool has_lw = lw(i) > -inf;
+        const bool has_uw = uw(i) < inf;
 
+        if (has_lw && has_uw) {
+            if (std::abs(B_delta_x_i) > rhs) return false;
+        } else if (has_lw) {
+            if (B_delta_x_i < -rhs) return false;
+        } else if (has_uw) {
+             if (B_delta_x_i > rhs) return false;
+        }
+    }
     return true;
 }
 
@@ -904,6 +929,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // ========== Backtracking/exact linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
         T alpha;
+        // alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
         alpha = exact_line_search(result.x, result.y2, dx, dy2);
         /*
         if (do_exact) {
@@ -973,5 +999,6 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     if (result.opt == -1) {
         result.opt = 2; // Maximum number of SSN inner iterations reached without convergence
     }
+
     return result;
 }

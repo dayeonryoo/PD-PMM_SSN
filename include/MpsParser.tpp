@@ -359,7 +359,6 @@ void MpsParser<T>::parse_bounds(const std::vector<std::string>& tokens) {
     
     if (tokens.size() < 2) return; // Invalid line, ignore
 
-    // const T inf = std::numeric_limits<T>::infinity();
     const T inf = 1e20;
     const std::string& btype = tokens[0];
 
@@ -391,7 +390,8 @@ void MpsParser<T>::parse_bounds(const std::vector<std::string>& tokens) {
     // Enforce that bound name is consistent if provided
     if (bound_name_.empty()) bound_name_ = bname;
     else if (bound_name_ != bname) {
-        throw std::runtime_error("Multiple bound sets defined in BOUNDS section: " + bname);
+        // throw std::runtime_error("Multiple bound sets defined in BOUNDS section: " + bname);
+        return; // Ignore lines with different bound names instead of throwing an error
     }
 
     // Check if value is provided when required
@@ -492,7 +492,7 @@ void MpsParser<T>::finalize_defaults() {
         int old_size = model_.col_lower.size();
         model_.col_lower.conservativeResize(model_.num_cols);
         model_.col_upper.conservativeResize(model_.num_cols);
-        model_.col_lower.segment(old_size, model_.num_cols - old_size).setConstant(-inf); // Default lower bound is -inf
+        model_.col_lower.segment(old_size, model_.num_cols - old_size).setConstant(static_cast<T>(0)); // Default lower bound is 0
         model_.col_upper.segment(old_size, model_.num_cols - old_size).setConstant(inf);  // Default upper bound is inf
     }
 

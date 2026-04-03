@@ -63,7 +63,7 @@ public:
     T delta = 0.995;
 
     // Conjugate gradient parameters
-    T Krylov_tol = 1e-12;
+    T Krylov_tol = 1e-14;
     int Krylov_max_in_iter = 50;
 
     using CGSolver = Eigen::ConjugateGradient<

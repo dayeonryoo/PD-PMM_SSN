@@ -73,24 +73,27 @@ public:
     T inf = 1e20;
 
     // Constant parameters
-    T tol = 1e-4;
-    int max_iter = 500;
-    int SSN_max_iter = 6000;
+    T tol = 1e-6;
+    int max_iter = 10000000;
+    int SSN_max_iter = 10000000;
     int SSN_max_in_iter = 40;
     T mu_limit = 1e4;
     T rho_limit = 1e4;
     T eps_limit = 1e-3*tol;
-    T eps_pinf = 1e-6;
-    T eps_dinf = 1e-6;
+    T eps_pinf = 1e-5;
+    T eps_dinf = 1e-5;
     T gamma = 0.95;
     bool more_rows_than_cols;
+    double time_limit = 1200.0; // in seconds
+    int stagnation = 0;
+    int linesearch_fail = 0;
     
     // Updated parameters
     T mu0 = 1e0;
-    T mu = 1e1;
+    T mu = 5e0;
     T rho = 1e1;
     T eps_bcl = 1e0;
-    T SSN_tol = 1e-2;
+    T SSN_tol = 1e0;
     
     // Outputs:
     int opt;
@@ -142,7 +145,7 @@ public:
     Vec compute_residual_norms_inf();
     T objective_value(const Vec& x);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
-    void update_PMM_parameters(const Vec& res_norms, const Vec& new_res_norms, int SSN_opt);
+    void update_PMM_parameters(const Vec& res_norms, const Vec& new_res_norms, int SSN_opt, T SSN_tol_achieved);
     T compute_p(const Vec& x);
     void update_with_bcl(const Vec& y2_hat, T compl_W, T new_compl_W, int PMM_iter);
     bool qpalm_termination();
