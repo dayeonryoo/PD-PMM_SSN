@@ -572,29 +572,29 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
     if (M == 0) res_p = T(0);
     else {
         Vec Ax = A * x;
-        // T denom = 1 + inf_norm(b);
-        T denom = 1 + std::max(inf_norm(Ax), inf_norm(b));
+        T denom = 1 + inf_norm(b);
+        // T denom = 1 + std::max(inf_norm(Ax), inf_norm(b));
         res_p = inf_norm(Ax - b) / denom;
     }
 
     // Dual residual norm
     Vec num = c + z;
-    // T denom = 1 + inf_norm(c);
-    T denom = std::max(inf_norm(c), inf_norm(z));
+    T denom = 1 + inf_norm(c);
+    // T denom = std::max(inf_norm(c), inf_norm(z));
     if (Q_info != 0) {
         Vec Qx = Q_diag.cwiseProduct(x);
         num += Qx;
-        denom = std::max(denom, inf_norm(Qx));
+        // denom = std::max(denom, inf_norm(Qx));
     }
     if (M != 0) {
         Vec A_tr_y1 = A_tr * y1;
         num -= A_tr_y1;
-        denom = std::max(denom, inf_norm(A_tr_y1));
+        // denom = std::max(denom, inf_norm(A_tr_y1));
     }
     if (l != 0) {
         Vec B_tr_y2 = B_tr * y2;
         num -= B_tr_y2;
-        denom = std::max(denom, inf_norm(B_tr_y2));
+        // denom = std::max(denom, inf_norm(B_tr_y2));
     }
     denom += T(1);
     T res_d = inf_norm(num) / denom;
@@ -602,7 +602,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
     // Complementarity residual norm for box constraints
     Vec proj_K = proj(x + z, lx, ux);
     T compl_x = inf_norm(x - proj_K);
-    compl_x /= (T(1) + std::max(inf_norm(x), inf_norm(proj_K)));
+    // compl_x /= (T(1) + std::max(inf_norm(x), inf_norm(proj_K)));
 
     // Complementarity residual norm for Bx constraints
     T compl_w;
@@ -611,7 +611,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
         Vec Bx = B * x;
         Vec proj_W = proj(Bx - y2, lw, uw);
         compl_w = inf_norm(Bx - proj_W);
-        compl_w /= (T(1) + std::max(inf_norm(Bx), inf_norm(proj_W)));
+        // compl_w /= (T(1) + std::max(inf_norm(Bx), inf_norm(proj_W)));
     }
 
     // Collect residual norms
@@ -835,7 +835,6 @@ Solution<T> SSN_PMM<T>::solve() {
         obj_val = objective_value(x);
 
         // Check termination criterion
-        // if (PMM_tol_achieved < tol)
         if (PMM_tol_achieved < tol) {
             opt = 0; // Optimal solution found
             if (when != PrintWhen::NEVER || when != PrintWhen::ALWAYS) {

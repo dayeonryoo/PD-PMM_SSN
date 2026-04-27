@@ -58,6 +58,7 @@ public:
             std::cout << "PMM tolerance achieved (PMM_tol_achieved): " << PMM_tol_achieved << std::endl;
             std::cout << "SSN tolerance achieved (SSN_tol_achieved): " << SSN_tol_achieved << std::endl;
         }
+        std::cout << "Number of linesearch failures (linesearch_fail): " << linesearch_fail << std::endl;
         std::cout << "Total solving time (solving_time): " << solving_time << " seconds\n";
     }
 

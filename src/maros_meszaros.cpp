@@ -26,20 +26,8 @@ using Triplet = Eigen::Triplet<T>;
 int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     
-    std::string name = "LISWET5";
-    T obj_val = 2.5034253e+01;
-
-    // std::string name = "AUG2DQP";
-    // T obj_val = 6.2370121e+06;
-
-    // std::string name = "DUALC1";
-    // T obj_val = 6.1552508e+03;
-
-    // std::string name = "HS118";
-    // T obj_val = 6.6482045e+02;
-
-    // std::string name = "PRIMAL4";
-    // T obj_val = -7.4609083e-01;
+    std::string name = "CVXQP1S";
+    T obj_val = 1.1590718e+04;
 
     std::string filename = root + name + ".SIF";
 
@@ -50,7 +38,7 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-4;
-    int max_iter = 300;
+    int max_iter = 10000000;
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
@@ -412,6 +400,7 @@ void run_Netlib_infeas() {
 }
 
 // ----------------------- Solving a set of problems -----------------------
+
 int main() {
 
     // run_Netlib_infeas();
@@ -594,13 +583,13 @@ int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
 
     // Parameters
-    T tol = 1e-6;
+    T tol = 1e-4;
     int max_iter = 10000000;
     PrintWhen when = PrintWhen::EVERY10;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0403mm.csv";
+    std::string csv_path = root + "results/0426mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -660,7 +649,8 @@ int main() {
                 agree, sol.opt, diverged, name,
                 abs_err, rel_err,
                 sol.obj_val, sol.PMM_iter, sol.SSN_iter,
-                sol.PMM_tol_achieved, sol.SSN_tol_achieved, sol.solving_time
+                sol.PMM_tol_achieved, sol.SSN_tol_achieved,
+                sol.solving_time, sol.linesearch_fail
             };
             append_csv_result(csv_path, result);
 
@@ -679,4 +669,3 @@ int main() {
 
     return 0;
 }
-
