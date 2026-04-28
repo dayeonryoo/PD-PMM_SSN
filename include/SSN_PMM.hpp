@@ -5,7 +5,6 @@
 #include "Solution.hpp"
 #include "SSN.hpp"
 #include "Printing.hpp"
-#include "QInfo.hpp"
 
 
 // =============================================================
@@ -106,8 +105,7 @@ public:
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::NONE;
 
-    // Constructors
-    SSN_PMM() {}
+    // Constructor
     SSN_PMM(const Problem<T>& problem)
     : tol(problem.tol), max_iter(problem.max_iter),
       n(problem.n), m(problem.m), l(problem.l), obj_const(problem.obj_const),

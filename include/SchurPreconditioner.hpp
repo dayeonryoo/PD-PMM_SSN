@@ -22,13 +22,21 @@ public:
     SchurPreconditioner(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const BoolArr& active_K, T mu)
         : G_(&G), G_tr_(&G_tr), H_diag_(&H_diag), active_K_(&active_K), mu_(mu) {}
 
-    void setData(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const BoolArr& active_K, T mu, bool rebuild) {
+    // prec_pattern_changed must be true whenever G's sparsity structure or active_K changes:
+    // P = G E G^T + (1/mu) I, where E_ii = 1/H_diag_i if active_K_i else 0.
+    // Both G's column structure and which entries of E are nonzero determine P's sparsity.
+    void setData(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const BoolArr& active_K, T mu, bool rebuild, bool prec_pattern_changed) {
         G_ = &G;
         G_tr_ = &G_tr;
         H_diag_ = &H_diag;
         active_K_ = &active_K;
         mu_ = mu;
         rebuild_ = rebuild;
+
+        bool size_changed = (P_.rows() != G.rows()) || (P_.cols() != G.rows());
+        if (!pattern_analyzed_ || prec_pattern_changed || size_changed) {
+            pattern_dirty_ = true;
+        }
     }
 
     template <typename MatrixType>
@@ -62,6 +70,11 @@ private:
         const Eigen::Index s = G.rows();
         const Eigen::Index n = G.cols();
 
+        assert(G_tr.rows() == n);
+        assert(G_tr.cols() == s);
+        assert(H_diag.size() == n);
+        assert(active_K.size() == n);
+
         // Build E diagonal as a sparse diagonal matrix
         std::vector<Triplet> trips;
         trips.reserve(n);
@@ -92,9 +105,15 @@ private:
         }
         P_.makeCompressed();
 
-        // Compute Cholesky decomposition of the preconditioner P
-        llt_.compute(P_);
+        // Symbolic analysis only when P's sparsity pattern may have changed.
+        if (pattern_dirty_) {
+            llt_.analyzePattern(P_);
+            pattern_analyzed_ = true;
+            pattern_dirty_ = false;
+        }
+        llt_.factorize(P_);
         info_ = llt_.info();
+
     }
 
     const SpMat* G_ = nullptr;
@@ -102,8 +121,11 @@ private:
     const Vec* H_diag_ = nullptr;
     const BoolArr* active_K_ = nullptr;
     T mu_ = T(1);
+
     bool rebuild_ = true;
     bool initialized_ = false;
+    bool pattern_analyzed_ = false;
+    bool pattern_dirty_ = true;
 
     SpMat P_;
     Eigen::SimplicialLLT<SpMat> llt_;

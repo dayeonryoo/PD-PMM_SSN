@@ -12,7 +12,7 @@
 #include "SSN_PMM.hpp"
 #include "Problem.hpp"
 #include "Printing.hpp"
-#include "PDE_problem_generator.hpp"
+#include "PDEgenerator.hpp"
 
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
@@ -50,14 +50,12 @@ int main() {
 
     double tol = 1e-4;
     int max_iter = 30;
-    PrintWhen PMM_print_when = PrintWhen::ALWAYS;
-    PrintWhat PMM_print_what = PrintWhat::MINIMAL;
-    PrintWhen SSN_print_when = PrintWhen::ALWAYS;
-    PrintWhat SSN_print_what = PrintWhat::MINIMAL;
+    PrintWhen when = PrintWhen::ALWAYS;
+    PrintWhat what = PrintWhat::MINIMAL;
 
     // ====== Poisson ======
     PDPMMdata<T> data1 = pdegen::make_poisson_L1L2_control_default<T>();
-    Problem<T> pb1(data1, tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
+    Problem<T> pb1(data1, tol, max_iter, when, what);
     SSN_PMM<T> solver1(pb1);
 
     auto start1 = std::chrono::high_resolution_clock::now();
@@ -71,7 +69,7 @@ int main() {
 
     // ====== Convection-diffusion ======
     PDPMMdata<T> data2 = pdegen::make_convdiff_L1L2_control_default<T>();
-    Problem<T> pb2(data2, tol, max_iter, PMM_print_when, PMM_print_what, SSN_print_when, SSN_print_what);
+    Problem<T> pb2(data2, tol, max_iter, when, what);
     SSN_PMM<T> solver2(pb2);
 
     auto start2 = std::chrono::high_resolution_clock::now();

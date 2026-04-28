@@ -6,7 +6,6 @@
 #include <vector>
 #include <filesystem>
 #include "MpsParser.hpp"
-#include "highs.h"
 
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;

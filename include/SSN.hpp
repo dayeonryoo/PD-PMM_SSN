@@ -21,6 +21,7 @@ class SSN {
 public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using SpMat = Eigen::SparseMatrix<T>;
+    using RowMajorSpMat = Eigen::SparseMatrix<T, Eigen::RowMajor>;
     using BoolArr = Eigen::Array<bool, Eigen::Dynamic, 1>;
     using Triplet = Eigen::Triplet<T>;
 
@@ -48,6 +49,11 @@ public:
     int n_active_W, n_inactive_W;
     SpMat B_active_W, B_inactive_W, G, G_tr;
 
+    // Row-major B for O(nnz_row) active-row access when rebuilding G.
+    // G_A_trips_: A's contribution to G (rows 0..M-1), computed once (A is const).
+    RowMajorSpMat B_rm;
+    std::vector<Triplet> G_A_trips_;
+
     bool more_rows_than_cols;
     bool do_exact = true;
 
@@ -73,8 +79,13 @@ public:
     >;
     CGSolver cg;
     Vec prev_dy_;
-    
-    // SSN() = default;
+
+    // Stored LDLT factorization for the KKT system [-H, G^T; G, (1/mu)I].
+    // ldlt_pattern_dirty_: true when G's sparsity pattern changed (active_W changed).
+    // ldlt_numeric_dirty_: true when G or H_diag changed value (any active-set or mu/rho change).
+    Eigen::SimplicialLDLT<SpMat> ldlt_;
+    bool ldlt_pattern_dirty_ = true;
+    bool ldlt_numeric_dirty_ = true;
 
     SSN(const int Q_info_, const Vec& Q_diag_, const SpMat& L_, const SpMat& L_tr_,
         const SpMat& A_, const SpMat& B_, const SpMat& A_tr_, const SpMat& B_tr_,
@@ -98,6 +109,15 @@ public:
         SSN_iter = 0;
         delta_x = Vec::Zero(N);
         delta_y2 = Vec::Zero(l);
+
+        // Convert column-major B to row-major once for efficient row-selective access.
+        B_rm = B;
+
+        // Cache A's triplets (rows 0..M-1 of G are always A — A is const).
+        G_A_trips_.reserve(A.nonZeros());
+        for (int col = 0; col < A.outerSize(); ++col)
+            for (typename SpMat::InnerIterator it(A, col); it; ++it)
+                G_A_trips_.emplace_back(it.row(), col, it.value());
     }
 
     void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
@@ -113,6 +133,7 @@ public:
         SSN_iter = SSN_iter_;
         delta_y1 = delta_y1_;
         delta_z = delta_z_;
+        ldlt_numeric_dirty_ = true; // mu, rho may have changed
     }
 
     static inline T inf_norm(const Vec& v) {
@@ -125,16 +146,17 @@ public:
         return (v - proj(v, lower, upper));
     }
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
-    Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new);
+    Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
     Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
     bool is_P_unchanged(const Vec& diag_P, const Vec& new_diag_P);
     void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
     void build_B_active_inactive(const SpMat& B, const BoolArr& mask, SpMat& B_active, SpMat& B_inactive);
+    void rebuild_G();
     SpMat scale_columns(const SpMat& M, const Vec& d);
     Vec retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
     bool form_schur(const SpMat& G);
-    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec);
+    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);

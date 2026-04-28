@@ -24,10 +24,11 @@ using Triplet = Eigen::Triplet<T>;
 // ----------------------- Solving individual problem -----------------------
 /*
 int main() {
-    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
+    // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
+    std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
     
-    std::string name = "CVXQP1S";
-    T obj_val = 1.1590718e+04;
+    std::string name = "EXDATA";
+    T obj_val = -1.4184343e+02;
 
     std::string filename = root + name + ".SIF";
 
@@ -194,17 +195,18 @@ void run_Netlib() {
         {"WOODW", 1.3044763331E+00}
     };
     
-    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
+    // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
+    std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/";
 
     // Parameters in common
-    T tol = 1e-6;
-    int max_iter = 1000;
+    T tol = 1e-4;
+    int max_iter = 10000000;
 
-    PrintWhen when = PrintWhen::ALWAYS;
+    PrintWhen when = PrintWhen::EVERY10;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/netlib_lps_with_inf_det.csv";
+    std::string csv_path = root + "results/0427netlib.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : LPs) {
@@ -404,7 +406,7 @@ void run_Netlib_infeas() {
 int main() {
 
     // run_Netlib_infeas();
-    // run_Netlib();
+    run_Netlib();
 
     // Filenames and objective values of Maros/Meszaros QPs
     // static const std::map<std::string, double> QPs = {
@@ -580,7 +582,8 @@ int main() {
         {"ZECEVIC2",  -4.1250000e+00},
     };
 
-    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
+    // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
+    std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/";
 
     // Parameters
     T tol = 1e-4;
@@ -589,7 +592,7 @@ int main() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0426mm.csv";
+    std::string csv_path = root + "results/0427mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
