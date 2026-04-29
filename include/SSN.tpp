@@ -53,15 +53,15 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     // Compute gradient of Lagrangian
     Vec grad_L_x;
     if (Q_info == 0) {
-        grad_L_x = c - A_tr * y1 + mu * A_tr * res_p
+        grad_L_x = c - A_tr_y1_ + mu * A_tr * res_p
                     + mu * dist_K
                     + (mu / gamma) * B_tr * dist_W
                     + (x_new - x) / rho;
     } else {
-        grad_L_x = c + Q_diag.cwiseProduct(x_new) - A_tr * y1 + mu * A_tr * res_p
+        grad_L_x = c + Q_diag.cwiseProduct(x_new) - A_tr_y1_ + mu * A_tr * res_p
                     + mu * dist_K
                     + (mu / gamma) * B_tr * dist_W
-                    + (x_new - x) / rho; 
+                    + (x_new - x) / rho;
     }
     Vec grad_L_y2 = ((1 - gamma) / gamma) * dist_W + ((1 - gamma) / mu) * y2_new;
 
@@ -382,6 +382,111 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 }
 
 template <typename T>
+typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv,
+                                               const BoolArr& active_K, const Vec& r1, const Vec& r2,
+                                               T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed) {
+    using Vec = typename SSN<T>::Vec;
+
+    const int s = G.rows();
+    const int n = G.cols();
+
+    SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
+
+    Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
+
+    minres.setTolerance(tol);
+    minres.setMaxIterations(max_iter);
+    minres.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec, prec_pattern_changed);
+
+    minres.compute(S);
+
+    if (minres.preconditioner().info() != Eigen::Success) {
+        throw std::runtime_error("Preconditioner setup failed.");
+    }
+
+    Vec dy_;
+    if (prev_dy_.size() == s) {
+        dy_ = minres.solveWithGuess(rhs, prev_dy_);
+    } else {
+        dy_ = minres.solve(rhs);
+    }
+
+    if (minres.info() != Eigen::Success) {
+        // ...
+    }
+
+    prev_dy_ = dy_;
+
+    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
+
+    Vec dxdy_(n + s);
+    dxdy_.head(n) = dx;
+    dxdy_.tail(s) = dy_;
+    return dxdy_;
+}
+
+template <typename T>
+typename SSN<T>::Vec SSN<T>::solve_using_cg_primal(const SpMat& G, const SpMat& G_tr, const Vec& H_diag,
+                                                    const Vec& r1, const Vec& r2,
+                                                    T mu, T tol, int max_iter) {
+    using Vec = typename SSN<T>::Vec;
+
+    const int s = G.rows();
+    const int n = G.cols();
+
+    // Diagonal preconditioner: diag(H + mu G^T G)^{-1}.
+    // diag(G^T G)_i = ||column i of G||^2, computed in O(nnz(G)) without forming G^T G.
+    Vec prec_inv = H_diag;
+    for (int col = 0; col < G.outerSize(); ++col) {
+        T sq = T(0);
+        for (typename SpMat::InnerIterator it(G, col); it; ++it)
+            sq += it.value() * it.value();
+        prec_inv(col) += mu * sq;
+    }
+    prec_inv = prec_inv.cwiseInverse();
+
+    // RHS: mu G^T r2 - r1  (derived by eliminating dy from the Newton system)
+    Vec rhs = mu * (G_tr * r2) - r1;
+
+    // Matrix-free preconditioned CG for (H + mu G^T G) dx = rhs.
+    // Each mat-vec: (H + mu G^T G) v = H.*v + mu * G^T (G v)  — no explicit G^T G formed.
+    auto matvec = [&](const Vec& v) -> Vec {
+        return H_diag.cwiseProduct(v) + mu * (G_tr * (G * v));
+    };
+
+    Vec x = (prev_dx_primal_.size() == n) ? prev_dx_primal_ : Vec::Zero(n);
+    Vec r = rhs - matvec(x);
+    Vec z = prec_inv.cwiseProduct(r);
+    Vec p = z;
+    T rz = r.dot(z);
+    const T tol_sq = tol * tol * rhs.squaredNorm();
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+        if (r.squaredNorm() <= tol_sq) break;
+        Vec Ap = matvec(p);
+        T pAp = p.dot(Ap);
+        if (std::abs(pAp) < T(1e-30) * std::abs(rz)) break;
+        T alpha = rz / pAp;
+        x += alpha * p;
+        r -= alpha * Ap;
+        z = prec_inv.cwiseProduct(r);
+        T rz_new = r.dot(z);
+        T beta = rz_new / rz;
+        p = z + beta * p;
+        rz = rz_new;
+    }
+    prev_dx_primal_ = x;
+
+    // Recover dy = mu (r2 - G dx)
+    Vec dy = mu * (r2 - G * x);
+
+    Vec dxdy(n + s);
+    dxdy.head(n) = x;
+    dxdy.tail(s) = dy;
+    return dxdy;
+}
+
+template <typename T>
 typename SSN<T>::Vec SSN<T>::solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
@@ -576,8 +681,9 @@ T SSN<T>::exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const V
 }
 
 template <typename T>
-T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
-    /* 
+T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
+                             const Vec& Ax_curr, const Vec& Bx_curr) {
+    /*
     psi(t) = <∇ M(u + t du), du>,
             = eta t + beta + mu <dist_K (s + t dx), dx> + <mu/gamma dv, dist_W (v + t dv)>,
     where eta  = <(Q + mu A^T A + I_n/rho) dx, dx> + (1-gamma)/mu ||dy2||^2,
@@ -593,10 +699,10 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     using Vec = typename SSN<T>::Vec;
     T eps = 1e-12; // Numerical tolerance for checking zero
 
-    // Useful vectors
-    Vec Ax = A * x_curr;
+    // Useful vectors (Ax_curr and Bx_curr are passed in to avoid redundant SpMVs)
+    const Vec& Ax = Ax_curr;
     Vec Adx = A * dx;
-    Vec Bx = B * x_curr;
+    const Vec& Bx = Bx_curr;
     Vec Bdx = B * dx;
 
     Vec s = z / mu + x_curr;
@@ -615,9 +721,9 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     // beta: constant term in psi(t)
     T beta = T(0);
     if (Q_info != 0) {
-        beta += dx.dot(Q_diag.cwiseProduct(x_curr)); 
+        beta += dx.dot(Q_diag.cwiseProduct(x_curr));
     }
-    beta += dx.dot(c - A_tr * y1 + mu * A_tr * (Ax - b) + (x_curr - x) / rho);
+    beta += dx.dot(c - A_tr_y1_ + mu * A_tr * (Ax - b) + (x_curr - x) / rho);
     beta += (1 - gamma) / mu * dy2.dot(y2_curr);
 
     // Breakpoint and slope change of psi when crossing it
@@ -988,7 +1094,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         auto t0_alpha = std::chrono::steady_clock::now();
         T alpha;
         // alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
-        alpha = exact_line_search(result.x, result.y2, dx, dy2);
+        alpha = exact_line_search(result.x, result.y2, dx, dy2, Ax, Bx);
         /*
         if (do_exact) {
             // std::cout << "  Exact linesearch applied.\n";

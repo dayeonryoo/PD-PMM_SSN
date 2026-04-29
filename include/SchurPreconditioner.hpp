@@ -1,4 +1,5 @@
 #pragma once
+#include <cassert>
 #include <Eigen/Core>
 #include <Eigen/Sparse>
 #include <Eigen/IterativeLinearSolvers>

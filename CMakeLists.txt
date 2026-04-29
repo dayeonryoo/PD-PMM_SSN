@@ -49,6 +49,9 @@ enable_testing()
 # ----------------------
 add_library(ssn_pmm INTERFACE)
 target_include_directories(ssn_pmm INTERFACE include)
+# Eigen's unsupported modules (including MINRES in unsupported/Eigen/IterativeSolvers)
+# are bundled in the Eigen download above. This explicit include ensures the path resolves.
+target_include_directories(ssn_pmm INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
 target_link_libraries(ssn_pmm
     INTERFACE
         Eigen3::Eigen)

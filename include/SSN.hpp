@@ -1,6 +1,7 @@
 #pragma once
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
+#include <unsupported/Eigen/IterativeSolvers>
 #include "Printing.hpp"
 #include "SchurOperator.hpp"
 #include "SchurPreconditioner.hpp"
@@ -78,7 +79,17 @@ public:
         SchurPreconditioner<T>
     >;
     CGSolver cg;
+
+    using MINRESSolver = Eigen::MINRES<
+        SchurOperator<T>,
+        Eigen::Lower | Eigen::Upper,
+        SchurPreconditioner<T>
+    >;
+    MINRESSolver minres;
+
     Vec prev_dy_;
+    Vec prev_dx_primal_;
+    Vec A_tr_y1_; // cached A^T y1, recomputed once per PMM iteration in update_SSN_system
 
     // Stored LDLT factorization for the KKT system [-H, G^T; G, (1/mu)I].
     // ldlt_pattern_dirty_: true when G's sparsity pattern changed (active_W changed).
@@ -134,6 +145,7 @@ public:
         delta_y1 = delta_y1_;
         delta_z = delta_z_;
         ldlt_numeric_dirty_ = true; // mu, rho may have changed
+        A_tr_y1_ = A_tr * y1; // y1 is fixed for the entire SSN run; cache A^T y1 once
     }
 
     static inline T inf_norm(const Vec& v) {
@@ -157,11 +169,14 @@ public:
     SpMat stack_rows(const SpMat& A, const SpMat& B);
     bool form_schur(const SpMat& G);
     Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed);
+    Vec solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed);
+    Vec solve_using_cg_primal(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
-    T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
+    T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
+                        const Vec& Ax_curr, const Vec& Bx_curr);
     bool primal_infeas(const Vec& delta_y1, const Vec& delta_y2, const Vec& delta_z, T eps_pinf);
     bool dual_infeas(const Vec& delta_x, T eps_dinf);
     SSN_result<T> solve_SSN(const T eps);

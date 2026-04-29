@@ -789,7 +789,7 @@ Solution<T> SSN_PMM<T>::solve() {
             break;
         } else if (NS_solution.opt == 3) { // Linesearch failed
             linesearch_fail++;
-            std::cout << std::setw(8) << PMM_iter << std::setw(8) << SSN_iter << ": Linesearch failed with mu = " << mu << ", rho = " << rho << ".\n";
+            // std::cout << std::setw(8) << PMM_iter << std::setw(8) << SSN_iter << ": Linesearch failed with mu = " << mu << ", rho = " << rho << ".\n";
             if (mu == mu0 && rho == mu0) { opt = 3; break; }
             else {
                 mu = std::max(mu0, 0.8 * mu);

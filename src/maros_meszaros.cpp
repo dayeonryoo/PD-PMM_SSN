@@ -22,13 +22,13 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 // ----------------------- Solving individual problem -----------------------
-/*
+
 int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
     
-    std::string name = "EXDATA";
-    T obj_val = -1.4184343e+02;
+    std::string name = "BOYD2";
+    T obj_val = 2.1256767e+01;
 
     std::string filename = root + name + ".SIF";
 
@@ -49,8 +49,8 @@ int main() {
     // Chosen system
     std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";
     std::cout << "N = " << solver.N << ", M = " << solver.M << "\n";
-    if (solver.more_rows_than_cols) std::cout << "Solving KKT.\n";
-    else std::cout << "Solving Schur.\n";
+    // if (solver.more_rows_than_cols) std::cout << "Solving KKT.\n";
+    // else std::cout << "Solving Schur.\n";
 
     // Solve:
     auto start = std::chrono::high_resolution_clock::now();
@@ -89,7 +89,7 @@ int main() {
 
     return 0;
 }
-*/
+
 
 // ----------------------- Running Netlib problems -----------------------
 void run_Netlib() {
@@ -202,11 +202,11 @@ void run_Netlib() {
     T tol = 1e-4;
     int max_iter = 10000000;
 
-    PrintWhen when = PrintWhen::EVERY10;
+    PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0427netlib.csv";
+    std::string csv_path = root + "results/0428netlib.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : LPs) {
@@ -233,9 +233,8 @@ void run_Netlib() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            if (solver.more_rows_than_cols) std::cout << "Solving KKT.\n";
-            else std::cout << "Solving Schur.\n";
-            std::string system = solver.more_rows_than_cols ? "K" : "S";
+            // std::string system = solver.more_rows_than_cols ? "K" : "S";
+            std::string system = "M"; // MINRES
 
             // Solve the LP
             Solution<T> sol = solver.solve();
@@ -272,7 +271,7 @@ void run_Netlib() {
                 abs_err, rel_err, sol.obj_val,
                 sol.PMM_iter, sol.SSN_iter,
                 sol.PMM_tol_achieved, sol.SSN_tol_achieved,
-                sol.solving_time
+                sol.solving_time, sol.linesearch_fail
             };
             append_csv_result(csv_path, result);
 
@@ -402,11 +401,11 @@ void run_Netlib_infeas() {
 }
 
 // ----------------------- Solving a set of problems -----------------------
-
+/*
 int main() {
 
     // run_Netlib_infeas();
-    run_Netlib();
+    // run_Netlib();
 
     // Filenames and objective values of Maros/Meszaros QPs
     // static const std::map<std::string, double> QPs = {
@@ -588,11 +587,11 @@ int main() {
     // Parameters
     T tol = 1e-4;
     int max_iter = 10000000;
-    PrintWhen when = PrintWhen::EVERY10;
+    PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0427mm.csv";
+    std::string csv_path = root + "results/0428mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -646,7 +645,8 @@ int main() {
             else std::cout << "Incorrect. Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
 
             // Record result
-            std::string system = { solver.more_rows_than_cols? "K" : "S" };
+            // std::string system = { solver.more_rows_than_cols? "K" : "S" };
+            std::string system = "M"; // MINRES
             TestResult<T> result = {
                 system,
                 agree, sol.opt, diverged, name,
@@ -672,3 +672,4 @@ int main() {
 
     return 0;
 }
+*/
