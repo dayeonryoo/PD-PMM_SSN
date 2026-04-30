@@ -382,50 +382,6 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv,
-                                               const BoolArr& active_K, const Vec& r1, const Vec& r2,
-                                               T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed) {
-    using Vec = typename SSN<T>::Vec;
-
-    const int s = G.rows();
-    const int n = G.cols();
-
-    SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
-
-    Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
-
-    minres.setTolerance(tol);
-    minres.setMaxIterations(max_iter);
-    minres.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec, prec_pattern_changed);
-
-    minres.compute(S);
-
-    if (minres.preconditioner().info() != Eigen::Success) {
-        throw std::runtime_error("Preconditioner setup failed.");
-    }
-
-    Vec dy_;
-    if (prev_dy_.size() == s) {
-        dy_ = minres.solveWithGuess(rhs, prev_dy_);
-    } else {
-        dy_ = minres.solve(rhs);
-    }
-
-    if (minres.info() != Eigen::Success) {
-        // ...
-    }
-
-    prev_dy_ = dy_;
-
-    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
-
-    Vec dxdy_(n + s);
-    dxdy_.head(n) = dx;
-    dxdy_.tail(s) = dy_;
-    return dxdy_;
-}
-
-template <typename T>
 typename SSN<T>::Vec SSN<T>::solve_using_cg_primal(const SpMat& G, const SpMat& G_tr, const Vec& H_diag,
                                                     const Vec& r1, const Vec& r2,
                                                     T mu, T tol, int max_iter) {
@@ -484,6 +440,50 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg_primal(const SpMat& G, const SpMat& 
     dxdy.head(n) = x;
     dxdy.tail(s) = dy;
     return dxdy;
+}
+
+template <typename T>
+typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv,
+                                               const BoolArr& active_K, const Vec& r1, const Vec& r2,
+                                               T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed) {
+    using Vec = typename SSN<T>::Vec;
+
+    const int s = G.rows();
+    const int n = G.cols();
+
+    SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
+
+    Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
+
+    minres.setTolerance(tol);
+    minres.setMaxIterations(max_iter);
+    minres.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec, prec_pattern_changed);
+
+    minres.compute(S);
+
+    if (minres.preconditioner().info() != Eigen::Success) {
+        throw std::runtime_error("Preconditioner setup failed.");
+    }
+
+    Vec dy_;
+    if (prev_dy_.size() == s) {
+        dy_ = minres.solveWithGuess(rhs, prev_dy_);
+    } else {
+        dy_ = minres.solve(rhs);
+    }
+
+    if (minres.info() != Eigen::Success) {
+        // ...
+    }
+
+    prev_dy_ = dy_;
+
+    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
+
+    Vec dxdy_(n + s);
+    dxdy_.head(n) = dx;
+    dxdy_.tail(s) = dy_;
+    return dxdy_;
 }
 
 template <typename T>
@@ -682,7 +682,7 @@ T SSN<T>::exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const V
 
 template <typename T>
 T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
-                             const Vec& Ax_curr, const Vec& Bx_curr) {
+                             const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx) {
     /*
     psi(t) = <∇ M(u + t du), du>,
             = eta t + beta + mu <dist_K (s + t dx), dx> + <mu/gamma dv, dist_W (v + t dv)>,
@@ -699,11 +699,9 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     using Vec = typename SSN<T>::Vec;
     T eps = 1e-12; // Numerical tolerance for checking zero
 
-    // Useful vectors (Ax_curr and Bx_curr are passed in to avoid redundant SpMVs)
+    // Ax_curr, Bx_curr, Adx, Bdx are all passed in to avoid redundant SpMVs
     const Vec& Ax = Ax_curr;
-    Vec Adx = A * dx;
     const Vec& Bx = Bx_curr;
-    Vec Bdx = B * dx;
 
     Vec s = z / mu + x_curr;
     Vec v = Bx + ((1 - gamma) * y2_curr - y2) / mu;
@@ -1077,6 +1075,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         } else {
             dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
         }
+        // dxdy_ = solve_using_minres(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
         auto t1_solve_lin_sys = std::chrono::steady_clock::now();
         double timer_solve_line_sys = time_diff_ms(t0_solve_lin_sys, t1_solve_lin_sys);
         // std::cout << "  Solving SSN system took " << timer_solve_line_sys << " ms.\n";
@@ -1092,9 +1091,11 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // ========== Backtracking/exact linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
+        Vec Adx = A * dx;
+        Vec Bdx = B * dx;
         T alpha;
         // alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
-        alpha = exact_line_search(result.x, result.y2, dx, dy2, Ax, Bx);
+        alpha = exact_line_search(result.x, result.y2, dx, dy2, Ax, Bx, Adx, Bdx);
         /*
         if (do_exact) {
             // std::cout << "  Exact linesearch applied.\n";
@@ -1145,8 +1146,8 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         }
 
         // Compute gradient of Lagrangian at current (x, y2)
-        Ax = A * result.x; // Update Ax for gradient computation
-        Bx = B * result.x; // Update Bx for gradient computation
+        Ax += alpha * Adx; // Update Ax for gradient computation
+        Bx += alpha * Bdx; // Update Bx for gradient computation
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2, Ax, Bx);
         result.tol_achieved = inf_norm(grad_L);
 
@@ -1165,7 +1166,6 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     if (result.opt == -1) {
         result.opt = 2; // Maximum number of SSN inner iterations reached without convergence
     }
-    
 
     return result;
 }

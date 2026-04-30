@@ -579,22 +579,22 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
 
     // Dual residual norm
     Vec num = c + z;
-    T denom = 1 + inf_norm(c);
-    // T denom = std::max(inf_norm(c), inf_norm(z));
+    // T denom = 1 + inf_norm(c);
+    T denom = std::max(inf_norm(c), inf_norm(z));
     if (Q_info != 0) {
         Vec Qx = Q_diag.cwiseProduct(x);
         num += Qx;
-        // denom = std::max(denom, inf_norm(Qx));
+        denom = std::max(denom, inf_norm(Qx));
     }
     if (M != 0) {
         Vec A_tr_y1 = A_tr * y1;
         num -= A_tr_y1;
-        // denom = std::max(denom, inf_norm(A_tr_y1));
+        denom = std::max(denom, inf_norm(A_tr_y1));
     }
     if (l != 0) {
         Vec B_tr_y2 = B_tr * y2;
         num -= B_tr_y2;
-        // denom = std::max(denom, inf_norm(B_tr_y2));
+        denom = std::max(denom, inf_norm(B_tr_y2));
     }
     denom += T(1);
     T res_d = inf_norm(num) / denom;
@@ -602,7 +602,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
     // Complementarity residual norm for box constraints
     Vec proj_K = proj(x + z, lx, ux);
     T compl_x = inf_norm(x - proj_K);
-    // compl_x /= (T(1) + std::max(inf_norm(x), inf_norm(proj_K)));
+    compl_x /= (T(1) + std::max(inf_norm(x), inf_norm(proj_K)));
 
     // Complementarity residual norm for Bx constraints
     T compl_w;
@@ -611,7 +611,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
         Vec Bx = B * x;
         Vec proj_W = proj(Bx - y2, lw, uw);
         compl_w = inf_norm(Bx - proj_W);
-        // compl_w /= (T(1) + std::max(inf_norm(Bx), inf_norm(proj_W)));
+        compl_w /= (T(1) + std::max(inf_norm(Bx), inf_norm(proj_W)));
     }
 
     // Collect residual norms
@@ -664,16 +664,6 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
     // Update stagnation counter
     if (!ssn_success || stagnating) stagnation++;
     else stagnation = 0;
-
-    // Reset penalties if repeatedly stuck without improvement
-    // if (stagnation >= 5) {
-    // std::cout << "Stagnation detected. Resetting penalties.\n";
-    //     mu = std::max(T(5), T(0.8) * mu);
-    //     rho = std::max(T(5), T(0.8) * rho);
-    //     SSN_tol = std::min(T(1e-3), T(1.1) * SSN_tol);
-    //     stagnation = 0;
-    //     return;
-    // }
 
     if (ssn_success) {
         if (far_from_conv) {

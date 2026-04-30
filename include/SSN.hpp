@@ -169,14 +169,14 @@ public:
     SpMat stack_rows(const SpMat& A, const SpMat& B);
     bool form_schur(const SpMat& G);
     Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed);
-    Vec solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed);
     Vec solve_using_cg_primal(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter);
+    Vec solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
-                        const Vec& Ax_curr, const Vec& Bx_curr);
+                        const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);
     bool primal_infeas(const Vec& delta_y1, const Vec& delta_y2, const Vec& delta_z, T eps_pinf);
     bool dual_infeas(const Vec& delta_x, T eps_dinf);
     SSN_result<T> solve_SSN(const T eps);

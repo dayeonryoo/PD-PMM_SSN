@@ -22,7 +22,7 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 // ----------------------- Solving individual problem -----------------------
-
+/*
 int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
@@ -38,7 +38,7 @@ int main() {
     ParsedModel<T> model = parser.parse(filename);
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
-    T tol = 1e-4;
+    T tol = 1e-6;
     int max_iter = 10000000;
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
@@ -89,7 +89,7 @@ int main() {
 
     return 0;
 }
-
+*/
 
 // ----------------------- Running Netlib problems -----------------------
 void run_Netlib() {
@@ -199,14 +199,14 @@ void run_Netlib() {
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/";
 
     // Parameters in common
-    T tol = 1e-4;
+    T tol = 1e-6;
     int max_iter = 10000000;
 
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0428netlib.csv";
+    std::string csv_path = root + "results/0429netlib.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : LPs) {
@@ -233,8 +233,8 @@ void run_Netlib() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            // std::string system = solver.more_rows_than_cols ? "K" : "S";
-            std::string system = "M"; // MINRES
+            std::string system = solver.more_rows_than_cols ? "K" : "S";
+            // std::string system = "M"; // MINRES
 
             // Solve the LP
             Solution<T> sol = solver.solve();
@@ -401,197 +401,198 @@ void run_Netlib_infeas() {
 }
 
 // ----------------------- Solving a set of problems -----------------------
-/*
+
 int main() {
 
     // run_Netlib_infeas();
     // run_Netlib();
 
     // Filenames and objective values of Maros/Meszaros QPs
-    // static const std::map<std::string, double> QPs = {
-    //     {"CVXQP1S",    1.1590718e+04},
-    //     {"CVXQP2S",    8.1209405e+03},
-    //     {"CVXQP3S",    1.1943432e+04},
-    //     {"DUALC2",     3.5513077e+03},
-    //     {"DUALC5",     4.2723233e+02},
-    //     {"DUALC8",     1.8309359e+04},
-    //     {"HS118",      6.6482045e+02},
-    //     {"LASER",      2.4096014e+06},
-    //     {"LISWET1",    3.6122402e+01},
-    //     {"LISWET5",    2.5034253e+01},
-    //     {"LISWET9",    1.9632513e+03},
-    //     {"MOSARQP1",  -9.5287544e+02},
-    //     {"PRIMALC1",  -6.1552508e+03},
-    //     {"QADLITTL",   4.8031886e+05},
-    //     {"QBEACONF",   1.6471206e+05},
-    //     {"QE226",      2.1265343e+02},
-    //     {"QFORPLAN",   7.4566315e+09},
-    //     {"QGFRDXPN",   1.0079059e+11},
-    //     {"QISRAEL",    2.5347838e+07}, 
-    //     {"QPCBLEND",  -7.8425409e-03},
-    //     {"QPCBOEI1",   1.1503914e+07},
-    //     {"QSC205",    -5.8139518e-03},
-    //     {"QSCAGR25",   2.0173794e+08},
-    //     {"QSCFXM1",    1.6882692e+07},
-    //     {"QSCTAP1",    1.4158611e+03},
-    //     {"QSHARE1B",   7.2007832e+05},
-    //     {"QSIERRA",    2.3750458e+07},
-    //     {"S268",       5.7310705e-07},
-    //     {"STCQP1",     1.5514356e+05}
-    // };
-
     static const std::map<std::string, double> QPs = {
-        {"AUG2D",      1.6874118e+06},
-        {"AUG2DC",     1.8183681e+06},
-        {"AUG2DCQP",   6.4981348e+06},
-        {"AUG2DQP",    6.2370121e+06},
-        {"AUG3D",      5.5406773e+02},
-        {"AUG3DC",     7.7126244e+02},
-        {"AUG3DCQP",   9.9336215e+02},
-        {"AUG3DQP",    6.7523767e+02},
-        {"BOYD1",     -6.1735220e+07},
-        {"BOYD2",      2.1256767e+01}, // KKT
-        {"CONT-050",  -4.5638509e+00},
-        {"CONT-100",  -4.6443979e+00},
-        {"CONT-101",   1.9552733e-01},
-        {"CONT-200",  -4.6848759e+00},
-        {"CONT-201",   1.9248337e-01},
-        {"CONT-300",   1.9151232e-01},
-        {"CVXQP1L",    1.0870480e+08}, // too many QNZ
-        {"CVXQP1M",    1.0875116e+06},
         {"CVXQP1S",    1.1590718e+04},
-        {"CVXQP2L",    8.1842458e+07}, // too many QNZ
-        {"CVXQP2M",    8.2015543e+05},
         {"CVXQP2S",    8.1209405e+03},
-        {"CVXQP3L",    1.1571110e+08}, // too many QNZ
-        {"CVXQP3M",    1.3628287e+06},
-        {"CVXQP3S",    1.1943432e+04},
-        {"DPKLO1",     3.7009622e-01},
-        {"DTOC3",      2.3526248e+02},
-        {"DUAL1",      3.5012966e-02},
-        {"DUAL2",      3.3733676e-02},
-        {"DUAL3",      1.3575584e-01},
-        {"DUAL4",      7.4609084e-01},
-        {"DUALC1",     6.1552508e+03},
+        // {"CVXQP3S",    1.1943432e+04},
         {"DUALC2",     3.5513077e+03},
         {"DUALC5",     4.2723233e+02},
         {"DUALC8",     1.8309359e+04},
-        {"EXDATA",    -1.4184343e+02}, // too many QNZ
-        {"GENHS28",    9.2717369e-01},
-        {"GOULDQP2",   1.8427534e-04},
-        {"GOULDQP3",   2.0627840e+00},
         {"HS118",      6.6482045e+02},
-        {"HS21",      -9.9960000e+01},
-        {"HS268",      5.7310705e-07},
-        {"HS35",       1.1111111e-01},
-        {"HS35MOD",    2.5000000e-01},
-        {"HS51",       8.8817842e-16},
-        {"HS52",       5.3266476e+00},
-        {"HS53",       4.0930233e+00},
-        {"HS76",      -4.6818182e+00},
-        {"HUES-MOD",   3.4824690e+07},
-        {"HUESTIS",    3.4824690e+11},
-        {"KSIP",       5.7579794e-01},
         {"LASER",      2.4096014e+06},
         {"LISWET1",    3.6122402e+01},
-        {"LISWET10",   4.9485785e+01},
-        {"LISWET11",   4.9523957e+01},
-        {"LISWET12",   1.7369274e+03},
-        {"LISWET2",    2.4998076e+01},
-        {"LISWET3",    2.5001220e+01},
-        {"LISWET4",    2.5000112e+01},
         {"LISWET5",    2.5034253e+01},
-        {"LISWET6",    2.4995748e+01},
-        {"LISWET7",    4.9884089e+02},
-        {"LISWET8",    7.1447006e+03},
-        {"LISWET9",    1.9632513e+03},
-        {"LOTSCHD",    2.3984159e+03},
-        {"MOSARQP1",  -9.5287544e+02}, // KKT
-        {"MOSARQP2",  -1.5974821e+03},
-        {"POWELL20",   5.2089583e+10}, // KKT
-        {"PRIMAL1",   -3.5012965e-02},
-        {"PRIMAL2",   -3.3733676e-02},
-        {"PRIMAL3",   -1.3575584e-01},
-        {"PRIMAL4",   -7.4609083e-01},
+        // {"LISWET9",    1.9632513e+03},
+        {"MOSARQP1",  -9.5287544e+02},
         {"PRIMALC1",  -6.1552508e+03},
-        {"PRIMALC2",  -3.5513077e+03},
-        {"PRIMALC5",  -4.2723233e+02},
-        {"PRIMALC8",  -1.8309430e+04},
-        {"Q25FV47",    1.3744448e+07},
-        {"QADLITTL",   4.8031886e+05},
-        {"QAFIRO",    -1.5907818e+00},
-        {"QBANDM",     1.6352342e+04},
+        // {"QADLITTL",   4.8031886e+05},
         {"QBEACONF",   1.6471206e+05},
-        {"QBORE3D",    3.1002008e+03},
-        {"QBRANDY",    2.8375115e+04},
-        {"QCAPRI",     6.6793293e+07}, // KKT
         {"QE226",      2.1265343e+02},
-        {"QETAMACR",   8.6760370e+04},
-        {"QFFFFF80",   8.7314747e+05},
         {"QFORPLAN",   7.4566315e+09},
         {"QGFRDXPN",   1.0079059e+11},
-        {"QGROW15",   -1.0169364e+08},
-        {"QGROW22",   -1.4962895e+08},
-        {"QGROW7",    -4.2798714e+07},
-        {"QISRAEL",    2.5347838e+07}, // KKT
+        {"QISRAEL",    2.5347838e+07}, 
         {"QPCBLEND",  -7.8425409e-03},
-        {"QPCBOEI1",   1.1503914e+07}, // KKT
-        {"QPCBOEI2",   8.1719623e+06},
-        {"QPCSTAIR",   6.2043875e+06}, // KKT
-        {"QPILOTNO",   4.7285869e+06}, // KKT
-        {"QPTEST",     4.3718750e+00},
-        {"QRECIPE",   -2.6661600e+02}, // KKT
-        {"QSC205",    -5.8139518e-03}, // KKT
-        {"QSCAGR25",   2.0173794e+08}, // KKT
-        {"QSCAGR7",    2.6865949e+07}, 
-        {"QSCFXM1",    1.6882692e+07}, // KKT
-        {"QSCFXM2",    2.7776162e+07}, // KKT
-        {"QSCFXM3",    3.0816355e+07},
-        {"QSCORPIO",   1.8805096e+03},
-        {"QSCRS8",     9.0456001e+02}, // KKT
-        {"QSCSD1",     8.6666667e+00}, 
-        {"QSCSD6",     5.0808214e+01},
-        {"QSCSD8",     9.4076357e+02},
+        {"QPCBOEI1",   1.1503914e+07},
+        {"QSC205",    -5.8139518e-03},
+        {"QSCAGR25",   2.0173794e+08},
+        {"QSCFXM1",    1.6882692e+07},
         {"QSCTAP1",    1.4158611e+03},
-        {"QSCTAP2",    1.7350265e+03}, // KKT
-        {"QSCTAP3",    1.4387547e+03}, 
-        {"QSEBA",      8.1481801e+07},
-        {"QSHARE1B",   7.2007832e+05},
-        {"QSHARE2B",   1.1703692e+04},
-        {"QSHELL",     1.5726368e+12},
-        {"QSHIP04L",   2.4200155e+06},
+        // {"QSHARE1B",   7.2007832e+05},
         {"QSHIP04S",   2.4249937e+06},
-        {"QSHIP08L",   2.3760406e+06},
-        {"QSHIP08S",   2.3857289e+06},
-        {"QSHIP12L",   3.0188766e+06},
-        {"QSHIP12S",   3.0569623e+06},
         {"QSIERRA",    2.3750458e+07},
-        {"QSTAIR",     7.9854528e+06},
-        {"QSTANDAT",   6.4118384e+03},
-        {"S268",       5.7310705e-07},
-        {"STADAT1",   -2.8526864e+07}, // KKT
-        {"STADAT2",   -3.2626665e+01}, // KKT
-        {"STADAT3",   -3.5779453e+01}, // KKT
-        {"STCQP1",     1.5514356e+05},
-        {"STCQP2",     2.2327313e+04},
-        {"TAME",       0.0000000e+00},
-        {"UBH1",       1.1160008e+00},
-        {"VALUES",    -1.3966211e+00},
-        {"YAO",        1.9770426e+02}, // KKT
-        {"ZECEVIC2",  -4.1250000e+00},
+        {"S268",       5.7310705e-07}
+        // {"STCQP1",     1.5514356e+05}
     };
+
+    // static const std::map<std::string, double> QPs = {
+    //     {"AUG2D",      1.6874118e+06},
+    //     {"AUG2DC",     1.8183681e+06},
+    //     {"AUG2DCQP",   6.4981348e+06},
+    //     {"AUG2DQP",    6.2370121e+06},
+    //     {"AUG3D",      5.5406773e+02},
+    //     {"AUG3DC",     7.7126244e+02},
+    //     {"AUG3DCQP",   9.9336215e+02},
+    //     {"AUG3DQP",    6.7523767e+02},
+    //     {"BOYD1",     -6.1735220e+07},
+    //     {"BOYD2",      2.1256767e+01}, // KKT
+    //     {"CONT-050",  -4.5638509e+00},
+    //     {"CONT-100",  -4.6443979e+00},
+    //     {"CONT-101",   1.9552733e-01},
+    //     {"CONT-200",  -4.6848759e+00},
+    //     {"CONT-201",   1.9248337e-01},
+    //     {"CONT-300",   1.9151232e-01},
+    //     {"CVXQP1L",    1.0870480e+08}, // too many QNZ
+    //     {"CVXQP1M",    1.0875116e+06},
+    //     {"CVXQP1S",    1.1590718e+04},
+    //     {"CVXQP2L",    8.1842458e+07}, // too many QNZ
+    //     {"CVXQP2M",    8.2015543e+05},
+    //     {"CVXQP2S",    8.1209405e+03},
+    //     {"CVXQP3L",    1.1571110e+08}, // too many QNZ
+    //     {"CVXQP3M",    1.3628287e+06},
+    //     {"CVXQP3S",    1.1943432e+04},
+    //     {"DPKLO1",     3.7009622e-01},
+    //     {"DTOC3",      2.3526248e+02},
+    //     {"DUAL1",      3.5012966e-02},
+    //     {"DUAL2",      3.3733676e-02},
+    //     {"DUAL3",      1.3575584e-01},
+    //     {"DUAL4",      7.4609084e-01},
+    //     {"DUALC1",     6.1552508e+03},
+    //     {"DUALC2",     3.5513077e+03},
+    //     {"DUALC5",     4.2723233e+02},
+    //     {"DUALC8",     1.8309359e+04},
+    //     {"EXDATA",    -1.4184343e+02}, // too many QNZ
+    //     {"GENHS28",    9.2717369e-01},
+    //     {"GOULDQP2",   1.8427534e-04},
+    //     {"GOULDQP3",   2.0627840e+00},
+    //     {"HS118",      6.6482045e+02},
+    //     {"HS21",      -9.9960000e+01},
+    //     {"HS268",      5.7310705e-07},
+    //     {"HS35",       1.1111111e-01},
+    //     {"HS35MOD",    2.5000000e-01},
+    //     {"HS51",       8.8817842e-16},
+    //     {"HS52",       5.3266476e+00},
+    //     {"HS53",       4.0930233e+00},
+    //     {"HS76",      -4.6818182e+00},
+    //     {"HUES-MOD",   3.4824690e+07},
+    //     {"HUESTIS",    3.4824690e+11},
+    //     {"KSIP",       5.7579794e-01},
+    //     {"LASER",      2.4096014e+06},
+    //     {"LISWET1",    3.6122402e+01},
+    //     {"LISWET10",   4.9485785e+01},
+    //     {"LISWET11",   4.9523957e+01},
+    //     {"LISWET12",   1.7369274e+03},
+    //     {"LISWET2",    2.4998076e+01},
+    //     {"LISWET3",    2.5001220e+01},
+    //     {"LISWET4",    2.5000112e+01},
+    //     {"LISWET5",    2.5034253e+01},
+    //     {"LISWET6",    2.4995748e+01},
+    //     {"LISWET7",    4.9884089e+02},
+    //     {"LISWET8",    7.1447006e+03},
+    //     {"LISWET9",    1.9632513e+03},
+    //     {"LOTSCHD",    2.3984159e+03},
+    //     {"MOSARQP1",  -9.5287544e+02}, // KKT
+    //     {"MOSARQP2",  -1.5974821e+03},
+    //     {"POWELL20",   5.2089583e+10}, // KKT
+    //     {"PRIMAL1",   -3.5012965e-02},
+    //     {"PRIMAL2",   -3.3733676e-02},
+    //     {"PRIMAL3",   -1.3575584e-01},
+    //     {"PRIMAL4",   -7.4609083e-01},
+    //     {"PRIMALC1",  -6.1552508e+03},
+    //     {"PRIMALC2",  -3.5513077e+03},
+    //     {"PRIMALC5",  -4.2723233e+02},
+    //     {"PRIMALC8",  -1.8309430e+04},
+    //     {"Q25FV47",    1.3744448e+07},
+    //     {"QADLITTL",   4.8031886e+05},
+    //     {"QAFIRO",    -1.5907818e+00},
+    //     {"QBANDM",     1.6352342e+04},
+    //     {"QBEACONF",   1.6471206e+05},
+    //     {"QBORE3D",    3.1002008e+03},
+    //     {"QBRANDY",    2.8375115e+04},
+    //     {"QCAPRI",     6.6793293e+07}, // KKT
+    //     {"QE226",      2.1265343e+02},
+    //     {"QETAMACR",   8.6760370e+04},
+    //     {"QFFFFF80",   8.7314747e+05},
+    //     {"QFORPLAN",   7.4566315e+09},
+    //     {"QGFRDXPN",   1.0079059e+11},
+    //     {"QGROW15",   -1.0169364e+08},
+    //     {"QGROW22",   -1.4962895e+08},
+    //     {"QGROW7",    -4.2798714e+07},
+    //     {"QISRAEL",    2.5347838e+07}, // KKT
+    //     {"QPCBLEND",  -7.8425409e-03},
+    //     {"QPCBOEI1",   1.1503914e+07}, // KKT
+    //     {"QPCBOEI2",   8.1719623e+06},
+    //     {"QPCSTAIR",   6.2043875e+06}, // KKT
+    //     {"QPILOTNO",   4.7285869e+06}, // KKT
+    //     {"QPTEST",     4.3718750e+00},
+    //     {"QRECIPE",   -2.6661600e+02}, // KKT
+    //     {"QSC205",    -5.8139518e-03}, // KKT
+    //     {"QSCAGR25",   2.0173794e+08}, // KKT
+    //     {"QSCAGR7",    2.6865949e+07}, 
+    //     {"QSCFXM1",    1.6882692e+07}, // KKT
+    //     {"QSCFXM2",    2.7776162e+07}, // KKT
+    //     {"QSCFXM3",    3.0816355e+07},
+    //     {"QSCORPIO",   1.8805096e+03},
+    //     {"QSCRS8",     9.0456001e+02}, // KKT
+    //     {"QSCSD1",     8.6666667e+00}, 
+    //     {"QSCSD6",     5.0808214e+01},
+    //     {"QSCSD8",     9.4076357e+02},
+    //     {"QSCTAP1",    1.4158611e+03},
+    //     {"QSCTAP2",    1.7350265e+03}, // KKT
+    //     {"QSCTAP3",    1.4387547e+03}, 
+    //     {"QSEBA",      8.1481801e+07},
+    //     {"QSHARE1B",   7.2007832e+05},
+    //     {"QSHARE2B",   1.1703692e+04},
+    //     {"QSHELL",     1.5726368e+12},
+    //     {"QSHIP04L",   2.4200155e+06},
+    //     {"QSHIP04S",   2.4249937e+06},
+    //     {"QSHIP08L",   2.3760406e+06},
+    //     {"QSHIP08S",   2.3857289e+06},
+    //     {"QSHIP12L",   3.0188766e+06},
+    //     {"QSHIP12S",   3.0569623e+06},
+    //     {"QSIERRA",    2.3750458e+07},
+    //     {"QSTAIR",     7.9854528e+06},
+    //     {"QSTANDAT",   6.4118384e+03},
+    //     {"S268",       5.7310705e-07},
+    //     {"STADAT1",   -2.8526864e+07}, // KKT
+    //     {"STADAT2",   -3.2626665e+01}, // KKT
+    //     {"STADAT3",   -3.5779453e+01}, // KKT
+    //     {"STCQP1",     1.5514356e+05},
+    //     {"STCQP2",     2.2327313e+04},
+    //     {"TAME",       0.0000000e+00},
+    //     {"UBH1",       1.1160008e+00},
+    //     {"VALUES",    -1.3966211e+00},
+    //     {"YAO",        1.9770426e+02}, // KKT
+    //     {"ZECEVIC2",  -4.1250000e+00},
+    // };
 
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/";
 
     // Parameters
-    T tol = 1e-4;
-    int max_iter = 10000000;
-    PrintWhen when = PrintWhen::NEVER;
+    T tol = 1e-6;
+    int max_iter = 10000000000;
+    PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0428mm.csv";
+    std::string csv_path = root + "results/0430mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -645,8 +646,8 @@ int main() {
             else std::cout << "Incorrect. Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
 
             // Record result
-            // std::string system = { solver.more_rows_than_cols? "K" : "S" };
-            std::string system = "M"; // MINRES
+            std::string system = { solver.more_rows_than_cols? "K" : "S" };
+            // std::string system = "M"; // MINRES
             TestResult<T> result = {
                 system,
                 agree, sol.opt, diverged, name,
@@ -672,4 +673,3 @@ int main() {
 
     return 0;
 }
-*/
