@@ -76,14 +76,14 @@ public:
     int max_iter = 10000000000;
     int SSN_max_iter = 10000000000;
     int SSN_max_in_iter = 40;
+    T eps_limit = 1e-3*tol;
     T mu_limit = 1e8;
     T rho_limit = 1e8;
-    T eps_limit = 1e-3*tol;
     T eps_pinf = 1e-5;
     T eps_dinf = 1e-5;
     T gamma = 0.95;
     bool more_rows_than_cols;
-    double time_limit = 1200.0; // in seconds
+    double time_limit = 600.0; // in seconds
     int stagnation = 0;
     int linesearch_fail = 0;
     

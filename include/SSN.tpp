@@ -697,7 +697,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     otherwise, set p = psi(t), t_prev = t and continue.
     */
     using Vec = typename SSN<T>::Vec;
-    T eps = 1e-12; // Numerical tolerance for checking zero
+    T eps = 1e-10; // Numerical tolerance for checking zero
 
     // Ax_curr, Bx_curr, Adx, Bdx are all passed in to avoid redundant SpMVs
     const Vec& Ax = Ax_curr;
@@ -794,7 +794,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     p += mu * dist_K_s.dot(dx);
     p += mu / gamma * dist_W_v.dot(Bdx);
     p += (1 - gamma) / gamma * dist_W_v.dot(dy2);
-    if (p >= T(0)) return T(0); // No crossing, linesearch failed.
+    if (p >= eps * (T(1) + std::abs(beta))) return T(0); // No crossing, linesearch failed.
 
     // If psi(0) < 0, check at every breakpoint t.
     T t_prev = T(0);
@@ -824,8 +824,9 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     }
 
     // Checking the last breakpoint.
-    if (m > T(0)) return t_prev - p / m;
-    return T(0); // safeguard
+    // m should be >= 0 (sum of squares); slightly negative means floating-point cancellation.
+    if (m > -eps * (T(1) + eta)) return t_prev - p / std::max(m, eps * (T(1) + eta));
+    return T(0); // safeguard: m truly negative
 }
 
 template <typename T>

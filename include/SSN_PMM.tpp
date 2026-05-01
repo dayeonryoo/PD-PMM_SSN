@@ -572,8 +572,8 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
     if (M == 0) res_p = T(0);
     else {
         Vec Ax = A * x;
-        T denom = 1 + inf_norm(b);
-        // T denom = 1 + std::max(inf_norm(Ax), inf_norm(b));
+        // T denom = 1 + inf_norm(b);
+        T denom = 1 + std::max(inf_norm(Ax), inf_norm(b));
         res_p = inf_norm(Ax - b) / denom;
     }
 
@@ -656,9 +656,7 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
 
     bool ssn_success = SSN_opt == 0;
     bool ssn_good = SSN_tol_achieved < T(0.1) * SSN_tol;
-    bool ssn_bad = SSN_tol_achieved > T(2) * SSN_tol;
-
-    bool far_from_conv = worst_res > T(50) * tol;
+    bool ssn_bad = SSN_tol_achieved > T(10) * SSN_tol;
     bool stagnating = worst_ratio > T(0.99);
 
     // Update stagnation counter
@@ -666,47 +664,34 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
     else stagnation = 0;
 
     if (ssn_success) {
-        if (far_from_conv) {
-            if (worst_ratio < T(0.95)) {
-                // good progress -> mild increase
-                mu = std::min(mu_limit, T(1.05) * mu);
-                rho = std::min(rho_limit, T(1.05) * rho);
-                // std::cout << "Good progress\n";
-            } else if (ssn_good || stagnating) {
-                // Almost no progress -> aggressive increase to escape stagnation
-                // Or, reliable ssn solve -> aggressive increase to speed up convergence
-                mu = std::min(mu_limit, T(1.20) * mu);
-                rho = std::min(rho_limit, T(1.15) * rho);
-                if (stagnating) {
-                    // std::cout << "Stagnation\n";
-                } else {
-                    // std::cout << "Reliable SSN solve\n";
-                }
-            }
-        } else {
-            // Near convergence, be more conservative to avoid oscillation
-            if (ssn_good || stagnating) {
-                mu = std::min(mu_limit, T(1.10) * mu);
-                rho = std::min(rho_limit, T(1.10) * rho);
-                if (stagnating) {
-                    // std::cout << "Stagnation near convergence\n";
-                } else {
-                    // std::cout << "Reliable SSN solve near convergence\n";
-                }
-            }
+        if (ssn_good || stagnating) {
+            // Reliable SSN solve -> aggessive increase to speed up convergence
+            mu = std::min(mu_limit, T(1.20) * mu);
+            rho = std::min(rho_limit, T(1.15) * rho);
+            // std::cout << "Reliable SSN solve\n";
+        } else if (worst_ratio < T(0.95)) {
+            // Good progress -> mild increase
+            mu = std::min(mu_limit, T(1.10) * mu);
+            rho = std::min(rho_limit, T(1.05) * rho);
+            // std::cout << "Good progress\n";
         }
-
-        SSN_tol = std::max(eps_limit, std::min(T(0.95) * SSN_tol, std::pow(worst_res, T(1.2))));
+        SSN_tol = std::max(eps_limit, std::min({worst_res, T(0.90) * SSN_tol, std::pow(worst_res, T(1.2))}));
 
     } else {
         // Unsuccessful SSN
-        if (true || ssn_bad) {
+        if (ssn_bad) {
             mu = std::max(T(5), T(0.99) * mu);
             rho = std::max(T(5), T(0.99) * rho);
-            SSN_tol = std::min(T(1e-3), T(1.05) * SSN_tol);
+            SSN_tol = std::min(worst_res, T(1.05) * SSN_tol);
             // std::cout << "Bad SSN solve\n";
+        } else if (stagnating) {
+            // Mild increase to escape possible local difficulties
+            mu = std::min(mu_limit, T(1.05) * mu);
+            rho = std::min(rho_limit, T(1.05) * rho);
+            // std::cout << "Mild increase\n";
         }
     }
+
 }
 
 
@@ -782,8 +767,8 @@ Solution<T> SSN_PMM<T>::solve() {
             // std::cout << std::setw(8) << PMM_iter << std::setw(8) << SSN_iter << ": Linesearch failed with mu = " << mu << ", rho = " << rho << ".\n";
             if (mu == mu0 && rho == mu0) { opt = 3; break; }
             else {
-                mu = std::max(mu0, 0.8 * mu);
-                rho = std::max(mu0, 0.8 * rho);
+                mu = std::max(mu0, 0.9 * mu);
+                rho = std::max(mu0, 0.9 * rho);
                 // SSN_tol = std::max(eps_limit, 0.9 * SSN_tol);
                 // PMM_iter++;
                 continue;
