@@ -58,6 +58,7 @@ public:
     }
 
     Eigen::ComputationInfo info() const { return info_; }
+    int fact_count() const { return fact_count_; }
 
 private:
     // Build a preconditioner P = G E G^T + (1/mu) I
@@ -114,6 +115,7 @@ private:
         }
         llt_.factorize(P_);
         info_ = llt_.info();
+        fact_count_++;
 
     }
 
@@ -131,4 +133,5 @@ private:
     SpMat P_;
     Eigen::SimplicialLLT<SpMat> llt_;
     Eigen::ComputationInfo info_ = Eigen::Success;
+    int fact_count_ = 0;
 };

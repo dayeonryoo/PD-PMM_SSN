@@ -77,10 +77,10 @@ public:
     int SSN_max_iter = 10000000000;
     int SSN_max_in_iter = 40;
     T eps_limit = 1e-3*tol;
-    T mu_limit = 1e8;
-    T rho_limit = 1e8;
-    T eps_pinf = 1e-5;
-    T eps_dinf = 1e-5;
+    T mu_limit = 1e6;
+    T rho_limit = 1e6;
+    T eps_pinf = 5e-2 * tol;
+    T eps_dinf = 5e-2 * tol;
     T gamma = 0.95;
     bool more_rows_than_cols;
     double time_limit = 600.0; // in seconds
@@ -99,6 +99,7 @@ public:
     Vec x, y1, y2, z;
     T obj_val;
     int PMM_iter, SSN_iter;
+    int Krylov_iter = 0, fact = 0;
     T PMM_tol_achieved, SSN_tol_achieved;
 
     // Printing
@@ -107,7 +108,7 @@ public:
 
     // Constructor
     SSN_PMM(const Problem<T>& problem)
-    : tol(problem.tol), max_iter(problem.max_iter),
+    : tol(problem.tol), max_iter(problem.max_iter), time_limit(problem.time_limit),
       n(problem.n), m(problem.m), l(problem.l), obj_const(problem.obj_const),
       when(problem.when), what(problem.what)
     {
@@ -140,13 +141,15 @@ public:
         return v.cwiseAbs().maxCoeff();
     }
     Vec compute_residual_norms();
-    Vec compute_residual_norms_inf();
-    T objective_value(const Vec& x);
+    Vec compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx);
+    T objective_value(const Vec& x, const Vec& Qx);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
     void update_PMM_parameters(const Vec& res_norms, const Vec& new_res_norms, int SSN_opt, T SSN_tol_achieved);
     T compute_p(const Vec& x);
     void update_with_bcl(const Vec& y2_hat, T compl_W, T new_compl_W, int PMM_iter);
     bool qpalm_termination();
+    bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
+    bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     Solution<T> solve();
 };
 

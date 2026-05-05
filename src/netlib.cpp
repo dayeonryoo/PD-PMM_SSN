@@ -21,7 +21,7 @@ using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
-
+// ==================== Individual Netlib LP ====================
 /*
 int main() {
 
@@ -82,6 +82,8 @@ int main() {
 }
 */
 
+// ==================== Run a set of Netlib LPs ====================
+/*
 int main() {
     std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
 
@@ -275,13 +277,13 @@ int main() {
 
     return 0;
 }
-
+*/
 
 // ==================== Netlib infeasible problems ====================
 
-/*
 int main() {
-    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
+    // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
+    std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/";
 
     std::vector<std::string> LPs = {
         "BGDBG1",
@@ -316,19 +318,21 @@ int main() {
     };
     
     // Parameters in common
-    T tol = 1e-4;
-    int max_iter = 500;
+    T tol = 1e-6;
+    int max_iter = 1000;
+    double time_limit = 600.0; // in seconds
+
     PrintWhen when = PrintWhen::EVERY10;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/netlib_infeas.csv";
+    std::string csv_path = root + "results/0504netlib_infeas.csv";
 
     // Write header
     if (!std::filesystem::exists(std::filesystem::path(csv_path))
         || std::filesystem::is_empty(std::filesystem::path(csv_path))) {
         std::ofstream csv(csv_path);
-        csv << "System,infeas_detected,opt_status,name,PMM_iter,SSN_iter,PMM_res,SSN_res,solving_time_sec\n";
+        csv << "System,infeas_detected,opt_status,name,PMM_iter,SSN_iter,Krylov_iter,fact,PMM_res,SSN_res,solving_time_sec,linesearch_fails\n";
     }
 
     // Loop over all LPs
@@ -348,7 +352,7 @@ int main() {
             ParsedModel<T> model = parser.parse(filename);
             PDPMMdata<T> pd = parser.to_pdpmm(model);
 
-            Problem<T> prob(pd, tol, max_iter, when, what);
+            Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
             SSN_PMM<T> solver(prob);
 
             std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -369,32 +373,36 @@ int main() {
             std::ofstream csv(csv_path, std::ios::out | std::ios::app);
             csv << system << "," << infeas_detected << "," << sol.opt << ","
                 << name << "," << sol.PMM_iter << "," << sol.SSN_iter << ","
+                << sol.Krylov_iter << "," << sol.fact << ","
                 << sol.PMM_tol_achieved << "," << sol.SSN_tol_achieved << ","
-                << solving_time_sec << "\n";
+                << solving_time_sec << "," << sol.linesearch_fail << "\n";
             csv.close();
 
         } catch (const std::exception& e) {
             std::cerr << "ERROR solving " << name << ": " << e.what() << "\n"; 
             std::ofstream csv(csv_path, std::ios::out | std::ios::app);
-            csv << system << "," << 0 << "," << -1 << ","
+            csv << e.what() << "," << 0 << "," << -1 << ","
                 << name << "," << -1 << "," << -1 << ","
-                << -1.0 << "," << -1.0 << "," << -1.0 << "\n";
+                << -1 << "," << -1 << ","
+                << -1.0 << "," << -1.0 << "," << -1.0 << "," << 0 << "\n";
             csv.close();
         }
     }
 }
-*/
+
 
 /*
 int main() {
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib_infeas/BGDBG1.mps";
+    std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/netlib_infeas/";
+    std::string name = "GOSH";
+    std::string filename = root + name + ".mps";
 
     // Parameters for PD-PMM_SSN solver
-    T tol = 1e-3;
-    int max_iter = 200;
+    T tol = 1e-6;
+    int max_iter = 1000;
     PrintWhen when = PrintWhen::EVERY10;
-    PrintWhat what = PrintWhat::FULL;
+    PrintWhat what = PrintWhat::TUNING;
 
     // Extract problem data from the mps file using our MpsParser and construct solver
     MpsParser<T> parser;
@@ -403,6 +411,8 @@ int main() {
 
     Problem<T> prob(pd, tol, max_iter, when, what);
     SSN_PMM<T> solver(prob);
+
+    std::cout << "================================================ Solving " << name << " =================================================\n";
 
     // Chosen system
     std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";

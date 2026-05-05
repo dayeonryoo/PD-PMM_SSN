@@ -566,23 +566,21 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms() {
 }
 
 template <typename T>
-typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
+typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx) {
     // Primal residual norm
     T res_p;
     if (M == 0) res_p = T(0);
     else {
-        Vec Ax = A * x;
-        // T denom = 1 + inf_norm(b);
+        // T denom = 1 + inf_norm(b); // original denominator based only on a constant term b
         T denom = 1 + std::max(inf_norm(Ax), inf_norm(b));
         res_p = inf_norm(Ax - b) / denom;
     }
 
     // Dual residual norm
     Vec num = c + z;
-    // T denom = 1 + inf_norm(c);
+    // T denom = 1 + inf_norm(c); // original denominator based only on a constant term c
     T denom = std::max(inf_norm(c), inf_norm(z));
     if (Q_info != 0) {
-        Vec Qx = Q_diag.cwiseProduct(x);
         num += Qx;
         denom = std::max(denom, inf_norm(Qx));
     }
@@ -599,7 +597,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
     denom += T(1);
     T res_d = inf_norm(num) / denom;
 
-    // Complementarity residual norm for box constraints
+    // Complementarity residual norm for box constraints on x
     Vec proj_K = proj(x + z, lx, ux);
     T compl_x = inf_norm(x - proj_K);
     compl_x /= (T(1) + std::max(inf_norm(x), inf_norm(proj_K)));
@@ -608,24 +606,21 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf() {
     T compl_w;
     if (l == 0) compl_w = T(0);
     else {
-        Vec Bx = B * x;
         Vec proj_W = proj(Bx - y2, lw, uw);
         compl_w = inf_norm(Bx - proj_W);
         compl_w /= (T(1) + std::max(inf_norm(Bx), inf_norm(proj_W)));
     }
 
-    // Collect residual norms
     Vec res_norms(4);
     res_norms << res_p, res_d, compl_x, compl_w;
-
     return res_norms;
 }
 
 template <typename T>
-T SSN_PMM<T>::objective_value(const Vec& x) {
+T SSN_PMM<T>::objective_value(const Vec& x, const Vec& Qx) {
     T obj_val = obj_const + c.dot(x);
     if (Q_info != 0) {
-        obj_val += T(0.5) * Q_diag.cwiseProduct(x).dot(x);
+        obj_val += T(0.5) * Qx.dot(x);
     }
     return obj_val;
 }
@@ -666,6 +661,7 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
     if (ssn_success) {
         if (ssn_good || stagnating) {
             // Reliable SSN solve -> aggessive increase to speed up convergence
+            // Stagnating -> aggressive increase to escape possible local difficulties
             mu = std::min(mu_limit, T(1.20) * mu);
             rho = std::min(rho_limit, T(1.15) * rho);
             // std::cout << "Reliable SSN solve\n";
@@ -694,7 +690,6 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
 
 }
 
-
 template <typename T>
 T SSN_PMM<T>::compute_p(const Vec& x) {
     using Vec = typename SSN_PMM<T>::Vec;
@@ -713,6 +708,94 @@ void SSN_PMM<T>::update_with_bcl(const Vec& y2_hat, T compl_W, T new_compl_W, in
 }
 
 template <typename T>
+bool SSN_PMM<T>::primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z) {
+    /*
+    Primal infeasibility certificate at the PMM level:
+    cert_y1 = delta_y1 = y1_new - y1_old
+    cert_y2 = y2_new - y2_old (after SSN iterations)
+    cert_z  = delta_z = z_new - z_old
+
+    The QP is determined to be primal infeasible if all 2 conditions hold for nonzero [delta_y1, delta_y2, delta_z]:
+    1. ||A^T cert_y1 + B^T cert_y2 - cert_z||_inf <= eps_pinf * max{||cert_y1||_inf, ||cert_y2||_inf, ||cert_z||_inf};
+    2. -b^T cert_y1 + sum_i [uw_i * max(-cert_y2_i, 0)] + sum_i [lw_i * min(-cert_y2_i, 0)]
+                     + sum_i [ux_i * max(cert_z_i, 0)]   + sum_i [lx_i * min(cert_z_i, 0)]
+       <= -eps_pinf * max{||cert_y1||_inf, ||cert_y2||_inf, ||cert_z||_inf}
+       for finite lx_i, ux_i, lw_i, uw_i.
+    */
+    T cert_inf = std::max({M > 0 ? inf_norm(cert_y1) : T(0),
+                           l  > 0 ? inf_norm(cert_y2) : T(0),
+                           inf_norm(cert_z)});
+    if (cert_inf < T(1e-12)) return false;
+
+    // Condition 2
+    T lhs2 = T(0);
+    if (M > 0) lhs2 -= b.dot(cert_y1);
+    for (int i = 0; i < l; ++i) {
+        if (uw(i) < inf) lhs2 += uw(i) * std::max(-cert_y2(i), T(0));
+        if (lw(i) > -inf) lhs2 += lw(i) * std::min(-cert_y2(i), T(0));
+    }
+    for (int i = 0; i < N; ++i) {
+        if (ux(i) < inf) lhs2 += ux(i) * std::max(cert_z(i), T(0));
+        if (lx(i) > -inf) lhs2 += lx(i) * std::min(cert_z(i), T(0));
+    }
+    if (lhs2 > -eps_pinf * cert_inf) return false;
+
+    // Condition 1
+    Vec lhs1 = -cert_z;
+    if (M > 0) lhs1 += A_tr * cert_y1;
+    if (l  > 0) lhs1 += B_tr * cert_y2;
+    return inf_norm(lhs1) <= eps_pinf * cert_inf;
+}
+
+template <typename T>
+bool SSN_PMM<T>::dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx) {
+    /*
+    Dual infeasibility certificate at the PMM level:
+    delta_x = x_new - x_old (PMM-level primal change used as certificate direction).
+    Adx = A * delta_x, Bdx = B * delta_x — pre-computed by caller.
+
+    The QP is determined to be dual infeasible if all 5 conditions hold for nonzero delta_x:
+    1. ||Q delta_x||_inf <= eps_dinf * ||delta_x||_inf;
+    2. c^T delta_x <= -eps_dinf * ||delta_x||_inf;
+    3. ||A delta_x||_inf <= eps_dinf * ||delta_x||_inf;
+    4. (delta_x)_i ∈ [-eps_dinf, eps_dinf] * ||delta_x||_inf  for finite bounds on x_i,
+       (delta_x)_i >= -eps_dinf * ||delta_x||_inf  for finite lower bounds on x_i,
+       (delta_x)_i <= eps_dinf  * ||delta_x||_inf  for finite upper bounds on x_i;
+    5. (B delta_x)_i ∈ [-eps_dinf, eps_dinf]  * ||delta_x||_inf for finite bounds on (Bx)_i,
+       (B delta_x)_i >= -eps_dinf * ||delta_x||_inf for finite lower bounds on (Bx)_i,
+       (B delta_x)_i <= eps_dinf  * ||delta_x||_inf for finite upper bounds on (Bx)_i.
+    */
+    T eps_zero = T(1e-12);
+    const T delta_x_inf = inf_norm(delta_x);
+    if (delta_x_inf < eps_zero) return false;
+    const T rhs = eps_dinf * delta_x_inf;
+
+    // Conditions 1, 2, 3
+    if (Q_info != 0 && inf_norm(Q_diag.cwiseProduct(delta_x)) > rhs) return false;
+    if (c.dot(delta_x) > -rhs) return false;
+    if (M > 0 && inf_norm(Adx) > rhs) return false;
+
+    // Condition 4
+    for (int i = 0; i < N; ++i) {
+        const bool has_lx = lx(i) > -inf;
+        const bool has_ux = ux(i) < inf;
+        if (has_lx && has_ux) { if (std::abs(delta_x(i)) > rhs) return false; }
+        else if (has_lx)      { if (delta_x(i) < -rhs)          return false; }
+        else if (has_ux)      { if (delta_x(i) >  rhs)          return false; }
+    }
+
+    // Condition 5
+    for (int i = 0; i < l; ++i) {
+        const bool has_lw = lw(i) > -inf;
+        const bool has_uw = uw(i) < inf;
+        if (has_lw && has_uw) { if (std::abs(Bdx(i)) > rhs) return false; }
+        else if (has_lw)      { if (Bdx(i) < -rhs)          return false; }
+        else if (has_uw)      { if (Bdx(i) >  rhs)          return false; }
+    }
+    return true;
+}
+
+template <typename T>
 Solution<T> SSN_PMM<T>::solve() {
     
     // Initialize variables
@@ -720,10 +803,13 @@ Solution<T> SSN_PMM<T>::solve() {
     PMM_iter = 0;
     SSN_iter = 0;
     Vec y2_hat = y2;
-    Vec res_norms = compute_residual_norms_inf();
     SSN_tol_achieved = T(0);
     Vec delta_y1 = Vec::Zero(M);
     Vec delta_z = Vec::Zero(N);
+    Vec Ax_old = M > 0 ? Vec(A * x) : Vec::Zero(M);
+    Vec Bx_old = l  > 0 ? Vec(B * x) : Vec::Zero(l);
+    Vec Qx_init = Q_info != 0 ? Vec(Q_diag.cwiseProduct(x)) : Vec::Zero(N);
+    Vec res_norms = compute_residual_norms_inf(Ax_old, Bx_old, Qx_init);
     auto solving_start = std::chrono::steady_clock::now();
 
     // Build the Newton system
@@ -752,6 +838,8 @@ Solution<T> SSN_PMM<T>::solve() {
         auto t0_pmm = std::chrono::steady_clock::now();
 
         // Call semismooth Newton method
+        Vec x_old = x;
+        Vec y2_old = y2;
         NS.update_SSN_system(x, y1, y2, z, delta_y1, delta_z, mu, rho, gamma, SSN_iter);
         SSN_result<T> NS_solution = NS.solve_SSN(SSN_tol);
 
@@ -773,43 +861,50 @@ Solution<T> SSN_PMM<T>::solve() {
                 // PMM_iter++;
                 continue;
             }
-        } else if (NS_solution.opt == -2) { // Primal infeasible
-            opt = -2;
-            break;
-        } else if (NS_solution.opt == -3) { // Dual infeasible
-            opt = -3;
-            break;
         }
 
         // Update x and store candidate y2.
         x = NS_solution.x;
         y2_hat = NS_solution.y2;
 
-        // Update y2 and penalty parameters based on BCL
+        // Compute Ax, Bx, Qx for the new x.
+        Vec Ax = M > 0 ? Vec(A * x) : Vec::Zero(M);
+        Vec Bx = l  > 0 ? Vec(B * x) : Vec::Zero(l);
+        Vec Qx = Q_info != 0 ? Vec(Q_diag.cwiseProduct(x)) : Vec::Zero(N);
+        Vec Adx = Ax - Ax_old;
+        Vec Bdx = Bx - Bx_old;
+
+        // Update y2 and penalty parameters.
         // T p = compute_p(x); // L_inf primal feasibility violation of lw <= Bx <= uw
         // update_with_bcl(y2_hat, res_norms(3), p, PMM_iter);
         y2 = y2_hat;
 
-        // Update y1 and z
-        Vec delta_y1 = mu * (A * x - b);
-        y1 -= delta_y1;
-
-        Vec delta_z = mu * (x - proj(z / mu + x, lx, ux));
+        // Update y1 and z.
+        delta_y1 = -mu * (Ax - b);
+        delta_z = mu * (x - proj(z / mu + x, lx, ux));
+        y1 += delta_y1;
         z += delta_z;
 
-        // Compute residuals
-        Vec new_res_norms = compute_residual_norms_inf();
+        // Primal/dual infeasibility checks.
+        if (primal_infeas(delta_y1, y2 - y2_old, delta_z)) {
+            opt = -2; std::cout << "Primal infeasible.\n"; break;
+        }
+        if (dual_infeas(x - x_old, Adx, Bdx)) {
+            opt = -3; std::cout << "Dual infeasible.\n"; break;
+        }
+
+        // Update PMM parameters based on the progress of residual norms and SSN solve quality.
+        Vec new_res_norms = compute_residual_norms_inf(Ax, Bx, Qx);
         PMM_tol_achieved = new_res_norms.maxCoeff();
-        // update_PMM_parameters(res_norms(0), res_norms(1), new_res_norms(0), new_res_norms(1));
         update_PMM_parameters(res_norms, new_res_norms, NS_solution.opt, SSN_tol_achieved);
         res_norms = new_res_norms; // for next iteration
         PMM_tol_achieved = res_norms.maxCoeff();
 
-        // Ruiz-descale and shrink to the original dimension (n, m, l) for printing
+        // Ruiz-descale and shrink to the original dimension (n, m, l) for printing.
         printable_sol(x, y1, y2, z); // (Modifies x_sol, y1_sol, y2_sol, z_sol.)
-        obj_val = objective_value(x);
+        obj_val = objective_value(x, Qx);
 
-        // Check termination criterion
+        // Check termination criterion.
         if (PMM_tol_achieved < tol) {
             opt = 0; // Optimal solution found
             if (when != PrintWhen::NEVER || when != PrintWhen::ALWAYS) {
@@ -818,9 +913,13 @@ Solution<T> SSN_PMM<T>::solve() {
             break;
         }
 
-        // Print current iteration info
+        // Print current iteration info.
         print(when, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail);
         PMM_iter++;
+
+        // Carry Ax, Bx forward.
+        Ax_old = std::move(Ax);
+        Bx_old = std::move(Bx);
 
         // TIMER FOR PMM ITERATION
         auto t1_pmm = std::chrono::steady_clock::now();
@@ -837,10 +936,10 @@ Solution<T> SSN_PMM<T>::solve() {
 
     }
 
-    // Check if max number of PMM iterations is reached
+    // Check if max number of PMM iterations is reached.
     if (opt == -1) { opt = 1; }
 
-    // Check if infeasiblity is detected
+    // Check if infeasiblity is detected.
     if (opt == -2 || opt == -3) {
         obj_val = 1e20;
         res_norms = 1e20 * Vec::Ones(4);
@@ -855,6 +954,9 @@ Solution<T> SSN_PMM<T>::solve() {
     auto solving_end = std::chrono::steady_clock::now();
     double solving_time = time_diff_ms(solving_start, solving_end) * 1e-3; // in seconds
 
+    Krylov_iter = NS.Krylov_iter;
+    fact = NS.fact;
+
     print(when, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail);
-    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, PMM_iter, SSN_iter, PMM_tol_achieved, SSN_tol_achieved, solving_time, linesearch_fail);
+    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, PMM_iter, SSN_iter, Krylov_iter, fact, PMM_tol_achieved, SSN_tol_achieved, solving_time, linesearch_fail);
 }

@@ -64,6 +64,8 @@ public:
     T SSN_tol_achieved;
     int SSN_opt;
     T obj_val;
+    int Krylov_iter = 0;
+    int fact = 0;
 
     // Backtracking linesearch parameters
     T beta = 0.4995 / 2;
@@ -71,7 +73,7 @@ public:
 
     // Conjugate gradient parameters
     T Krylov_tol = 1e-14;
-    int Krylov_max_in_iter = 50;
+    int Krylov_max_in_iter = 100;
 
     using CGSolver = Eigen::ConjugateGradient<
         SchurOperator<T>,
@@ -177,8 +179,6 @@ public:
     T exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                         const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);
-    bool primal_infeas(const Vec& delta_y1, const Vec& delta_y2, const Vec& delta_z, T eps_pinf);
-    bool dual_infeas(const Vec& delta_x, T eps_dinf);
     SSN_result<T> solve_SSN(const T eps);
 
 };

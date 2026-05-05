@@ -348,8 +348,9 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     cg.setTolerance(tol);
     cg.setMaxIterations(max_iter);
     cg.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec, prec_pattern_changed);
-    
+    int prec_fact_before = cg.preconditioner().fact_count();
     cg.compute(S);
+    fact += cg.preconditioner().fact_count() - prec_fact_before;
 
     if (cg.preconditioner().info() != Eigen::Success) {
         throw std::runtime_error("Preconditioner setup failed.");
@@ -362,7 +363,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         dy_ = cg.solve(rhs);
     }
 
-    // std::cout << "PCG took " << cg.iterations() << " iterations.\n";
+    Krylov_iter += cg.iterations();
 
     if (cg.info() != Eigen::Success) {
         // ...
@@ -458,8 +459,9 @@ typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_t
     minres.setTolerance(tol);
     minres.setMaxIterations(max_iter);
     minres.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec, prec_pattern_changed);
-
+    int prec_fact_before = minres.preconditioner().fact_count();
     minres.compute(S);
+    fact += minres.preconditioner().fact_count() - prec_fact_before;
 
     if (minres.preconditioner().info() != Eigen::Success) {
         throw std::runtime_error("Preconditioner setup failed.");
@@ -471,6 +473,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_t
     } else {
         dy_ = minres.solve(rhs);
     }
+
+    Krylov_iter += minres.iterations();
 
     if (minres.info() != Eigen::Success) {
         // ...
@@ -569,6 +573,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_LDLT(const SpMat& G, const Vec& H_diag,
         if (ldlt_.info() != Eigen::Success)
             throw std::runtime_error("LDLT factorization of the augmented Lagrangian system failed.");
         ldlt_numeric_dirty_ = false;
+        fact++;
     }
 
     Vec dxdy_ = ldlt_.solve(rhs);
@@ -830,122 +835,6 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
 }
 
 template <typename T>
-bool SSN<T>::primal_infeas(const Vec& delta_y1, const Vec& delta_y2, const Vec& delta_z, T eps_pinf) {
-    /*
-    The QP is determined to be primal infeasible if all 2 conditions hold for nonzero [delta_y1, delta_y2, delta_z]:
-    1. ||A^T delta_y1 + B^T delta_y2 - delta_z||_inf <= eps_pinf * max{||delta_y1||_inf, ||delta_y2||_inf, ||delta_z||_inf};
-    2. -b^T delta_y1 + sum_i [uw_i * max(-delta_y2_i, 0)] + sum_i [lw_i * min(-delta_y2_i, 0)]
-                     + sum_i [ux_i * max(delta_z_i, 0)]   + sum_i [lx_i * min(delta_z_i, 0)]
-       <= -eps_pinf * max{||delta_y1||_inf, ||delta_y2||_inf, ||delta_z||_inf}
-       for finite lx_i, ux_i, lw_i, uw_i.
-    */
-    using Vec = typename SSN<T>::Vec;
-
-    T eps_zero = 1e-12; // Numerical tolerance for checking zero
-
-    T delta_y1_inf = T(0);
-    if (M != 0) delta_y1_inf = inf_norm(delta_y1);
-    T delta_y2_inf = T(0);
-    if (l != 0) delta_y2_inf = inf_norm(delta_y2);
-    T delta_z_inf = inf_norm(delta_z);
-    T delta_inf = std::max({delta_y1_inf, delta_y2_inf, delta_z_inf});
-    if (delta_inf < eps_zero) return false;
-
-    Vec lhs1 = -delta_z;
-    if (M != 0) lhs1 += A_tr * delta_y1;
-    if (l != 0) lhs1 += B_tr * delta_y2;
-    bool cond1 = inf_norm(lhs1) <= eps_pinf * delta_inf;
-
-    if (!cond1) return false;
-
-    T lhs2 = T(0);
-    if (M != 0) lhs2 -= b.dot(delta_y1);
-    for (int i = 0; i < l; ++i) {
-        if (uw(i) < inf) lhs2 += uw(i) * std::max(-delta_y2(i), T(0));
-        if (lw(i) > -inf) lhs2 += lw(i) * std::min(-delta_y2(i), T(0));
-    }
-    for (int i = 0; i < N; ++i) {
-        if (ux(i) < inf) lhs2 += ux(i) * std::max(delta_z(i), T(0));
-        if (lx(i) > -inf) lhs2 += lx(i) * std::min(delta_z(i), T(0));
-    }
-    bool cond2 = lhs2 <= -eps_pinf * delta_inf;
-
-    if (!cond2) return false;
-
-    return true;
-}
-
-template <typename T>
-bool SSN<T>::dual_infeas(const Vec& delta_x, T eps_dinf) {
-    /*
-    The QP is determined to be dual infeasible if all 5 conditions hold for nonzero delta_x:
-    1. ||Q delta_x||_inf <= eps_dinf * ||delta_x||_inf;
-    2. c^T delta_x <= -eps_dinf * ||delta_x||_inf;
-    3. ||A delta_x||_inf <= eps_dinf * ||delta_x||_inf;
-    4. (delta_x)_i ∈ [-eps_dinf, eps_dinf] * ||delta_x||_inf  for finite bounds on x_i,
-       (delta_x)_i >= -eps_dinf * ||delta_x||_inf  for finite lower bounds on x_i,
-       (delta_x)_i <= eps_dinf  * ||delta_x||_inf  for finite upper bounds on x_i;
-    5. (B delta_x)_i ∈ [-eps_dinf, eps_dinf]  * ||delta_x||_inf for finite bounds on (Bx)_i,
-       (B delta_x)_i >= -eps_dinf * ||delta_x||_inf for finite lower bounds on (Bx)_i,
-       (B delta_x)_i <= eps_dinf  * ||delta_x||_inf for finite upper bounds on (Bx)_i.
-    */
-    using Vec = typename SSN<T>::Vec;
-    using SpMat = typename SSN<T>::SpMat;
-
-    T eps_zero = 1e-12; // Numerical tolerance for checking zero
-
-    const T delta_x_inf = inf_norm(delta_x);
-    if (delta_x_inf < eps_zero) return false;
-    const T rhs = eps_dinf * delta_x_inf;
-    
-    bool cond1 = true;
-    if (Q_info != 0) { // Nontrivial Q
-        cond1 = inf_norm(Q_diag.cwiseProduct(delta_x)) <= rhs;
-    }
-    if (!cond1) return false;
-
-    bool cond2 = c.dot(delta_x) <= -rhs;
-    if (!cond2) return false;
-
-    bool cond3 = true;
-    if (M != 0) {
-        cond3 = inf_norm(A * delta_x) <= rhs;
-    }
-    if (!cond3) return false;
-
-    for (int i = 0; i < N; ++i) {
-        const bool has_lx = lx(i) > -inf;
-        const bool has_ux = ux(i) < inf;
-
-        if (has_lx && has_ux) {
-            if (std::abs(delta_x(i)) > rhs) return false;
-        } else if (has_lx) {
-             if (delta_x(i) < -rhs) return false;
-        } else if (has_ux) {
-             if (delta_x(i) > rhs) return false;
-        }
-    }
-
-    for (int i = 0; i < l; ++i) {
-        T B_delta_x_i = T(0);
-        for (typename SpMat::InnerIterator it(B_tr, i); it; ++it) {
-            B_delta_x_i += it.value() * delta_x[it.row()];
-        }
-        const bool has_lw = lw(i) > -inf;
-        const bool has_uw = uw(i) < inf;
-
-        if (has_lw && has_uw) {
-            if (std::abs(B_delta_x_i) > rhs) return false;
-        } else if (has_lw) {
-            if (B_delta_x_i < -rhs) return false;
-        } else if (has_uw) {
-             if (B_delta_x_i > rhs) return false;
-        }
-    }
-    return true;
-}
-
-template <typename T>
 SSN_result<T> SSN<T>::solve_SSN(const T eps) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
@@ -1139,11 +1028,6 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             // Go back to backtracking
             // do_exact = false;
 
-            // Check infeasibility
-            bool dinf = dual_infeas(delta_x, eps_dinf);
-            bool pinf = primal_infeas(delta_y1, delta_y2, delta_z, eps_pinf);
-            if (dinf) { result.opt = -3; std::cout << "Dual infeasible.\n"; break; } // Dual infeasible
-            if (pinf) { result.opt = -2; std::cout << "Primal infeasible.\n"; break; } // Primal infeasible
         }
 
         // Compute gradient of Lagrangian at current (x, y2)
