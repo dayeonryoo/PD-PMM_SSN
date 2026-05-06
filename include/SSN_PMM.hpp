@@ -55,55 +55,101 @@ public:
     SpMat Q, A, B;
     Vec c, b;
     Vec lx, ux, lw, uw;
-    T tol = 0.0;
-    int max_iter = 0;
+    T obj_const;
 
     int n, m, l;
+    int N, M;
+    int Q_info; // 0 = zero; 1 = diagonal; 2 = general
+    Vec Q_diag;
+    SpMat L, L_tr;
+    SpMat A_tr, B_tr;
 
-    // PMM parameters
-    T mu, rho;
+    SpMat Q_ruiz, A_ruiz, B_ruiz;
+    Vec problem_Q_diag, Q_diag_ruiz, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz, lw_ruiz, uw_ruiz;
+    Vec D1A_diag, D1B_diag, D2_diag;
+    Vec x_descaled, y1_descaled, y2_descaled, z_descaled;
+    Vec x_sol, y1_sol, y2_sol, z_sol;
+    T inf = 1e20;
 
-    // SSN parameters
-    int SSN_max_iter, SSN_max_in_iter;
-    T SSN_tol, reg_limit;
-
+    // Constant parameters
+    T tol = 1e-6;
+    int max_iter = 10000000000;
+    int SSN_max_iter = 10000000000;
+    int SSN_max_in_iter = 40;
+    T eps_limit = 1e-3*tol;
+    T mu_limit = 1e6;
+    T rho_limit = 1e6;
+    T eps_pinf = 5e-2 * tol;
+    T eps_dinf = 5e-2 * tol;
+    T gamma = 0.95;
+    bool more_rows_than_cols;
+    double time_limit = 600.0; // in seconds
+    int stagnation = 0;
+    int linesearch_fail = 0;
+    
+    // Updated parameters
+    T mu0 = 1e0;
+    T mu = 5e0;
+    T rho = 1e1;
+    T eps_bcl = 1e0;
+    T SSN_tol = 1e0;
+    
     // Outputs:
     int opt;
     Vec x, y1, y2, z;
     T obj_val;
     int PMM_iter, SSN_iter;
+    int Krylov_iter = 0, fact = 0;
     T PMM_tol_achieved, SSN_tol_achieved;
 
     // Printing
-    PrintWhen PMM_print_when = PrintWhen::NEVER;
-    PrintWhen SSN_print_when = PrintWhen::NEVER;
-    PrintWhat PMM_print_what = PrintWhat::NONE;
-    PrintWhat SSN_print_what = PrintWhat::NONE;
-    PrintLabel PMM_print_label = PrintLabel::PMM;
+    PrintWhen when = PrintWhen::NEVER;
+    PrintWhat what = PrintWhat::NONE;
 
-    // Constructors
-    SSN_PMM() {}
-    SSN_PMM(Problem<T>& problem)
-    : Q(problem.Q), A(problem.A), B(problem.B), c(problem.c), b(problem.b),
-      lx(problem.lx), ux(problem.ux), lw(problem.lw), uw(problem.uw),
-      tol(problem.tol), max_iter(problem.max_iter),
-      PMM_print_when(problem.PMM_print_when), PMM_print_what(problem.PMM_print_what),
-      SSN_print_when(problem.SSN_print_when), SSN_print_what(problem.SSN_print_what)
+    // Constructor
+    SSN_PMM(const Problem<T>& problem)
+    : tol(problem.tol), max_iter(problem.max_iter), time_limit(problem.time_limit),
+      n(problem.n), m(problem.m), l(problem.l), obj_const(problem.obj_const),
+      when(problem.when), what(problem.what)
     {
-        determine_dimensions();
-        set_default();
-        check_dimensionality();
-        check_infeasibility();
+        get_Q_info(problem.Q);
+        if (n == 0 && m == 0 && l == 0) {
+            determine_dimensions(problem);
+        }
+        check_dimensions(problem);
+        ruiz_scaling(problem, problem_Q_diag);
+        set_default(problem);
+        initialize_sols();
+        check_bounds();
+        A_tr = A.transpose();
+        B_tr = B.transpose();
     }
 
-    void determine_dimensions();
-    void set_default();
-    void check_dimensionality();
-    bool is_PSD(const SpMat& Q);
-    void check_infeasibility();
-    Vec proj(const Vec& u, const Vec& lower, const Vec& upper);
+    void get_Q_info(const SpMat& Q);
+    void determine_dimensions(const Problem<T>& problem);
+    void check_dimensions(const Problem<T>& problem);
+    void ruiz_scaling(const Problem<T>& problem, const Vec& Q_diag);
+    void set_L_from_LLT(const SpMat& Q);
+    void set_default(const Problem<T>& problem);
+    void initialize_sols();
+    void check_bounds();
+
+    static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
+        return u.cwiseMax(lower).cwiseMin(upper);
+    }
+    static inline T inf_norm(const Vec& v) {
+        return v.cwiseAbs().maxCoeff();
+    }
     Vec compute_residual_norms();
-    void update_PMM_parameters(const T res_p, const T res_d, const T new_res_p, const T new_res_d);
+    Vec compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx);
+    T objective_value(const Vec& x, const Vec& Qx);
+    void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
+    void update_PMM_parameters(const Vec& res_norms, const Vec& new_res_norms, int SSN_opt, T SSN_tol_achieved);
+    T compute_p(const Vec& x);
+    void update_with_bcl(const Vec& y2_hat, T compl_W, T new_compl_W, int PMM_iter);
+    bool qpalm_termination();
+    bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
+    bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     Solution<T> solve();
 };
 

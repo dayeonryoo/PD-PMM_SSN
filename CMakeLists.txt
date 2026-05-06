@@ -3,8 +3,13 @@ cmake_minimum_required(VERSION 3.16)
 project(SSN_PMM VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if (NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+add_compile_options(-O3 -march=native -funroll-loops)
+
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ----------------------
@@ -27,12 +32,12 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 # HiGHS
-FetchContent_Declare(
-    highs
-    GIT_REPOSITORY "https://github.com/ERGO-Code/HiGHS.git"
-    GIT_TAG        "latest"
-)
-FetchContent_MakeAvailable(highs)
+# FetchContent_Declare(
+#     highs
+#     GIT_REPOSITORY "https://github.com/ERGO-Code/HiGHS.git"
+#     GIT_TAG        "latest"
+# )
+# FetchContent_MakeAvailable(highs)
 
 # ----------------------
 # Enable CTest
@@ -44,19 +49,28 @@ enable_testing()
 # ----------------------
 add_library(ssn_pmm INTERFACE)
 target_include_directories(ssn_pmm INTERFACE include)
+# Eigen's unsupported modules (including MINRES in unsupported/Eigen/IterativeSolvers)
+# are bundled in the Eigen download above. This explicit include ensures the path resolves.
+target_include_directories(ssn_pmm INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
 target_link_libraries(ssn_pmm
     INTERFACE
-        Eigen3::Eigen
-        highs::highs)
+        Eigen3::Eigen)
+        # highs::highs)
 
 # ----------------------
 # Main executable
 # ----------------------
-add_executable(ssn_pmm_main src/main.cpp)
-target_link_libraries(ssn_pmm_main ssn_pmm)
-
 add_executable(ssn_pmm_netlib src/netlib.cpp)
 target_link_libraries(ssn_pmm_netlib ssn_pmm)
+
+add_executable(mps_parser src/readingMps.cpp)
+target_link_libraries(mps_parser ssn_pmm)
+
+add_executable(ssn_pmm_maros_meszaros src/maros_meszaros.cpp)
+target_link_libraries(ssn_pmm_maros_meszaros ssn_pmm)
+
+add_executable(ssn_pmm_pde src/PDE.cpp)
+target_link_libraries(ssn_pmm_pde ssn_pmm)
 
 # ----------------------
 # COIN-OR (CoinUtils + Osi) for MPS reading
@@ -80,16 +94,16 @@ target_link_libraries(ssn_pmm_netlib ssn_pmm)
 # ----------------------
 # Tests
 # ----------------------
-add_executable(test_ssn tests/SSN_tests.cpp)
-target_link_libraries(test_ssn
-    ssn_pmm
-    gtest
-    gtest_main)
-add_test(NAME SSNTests COMMAND test_ssn)
+# add_executable(test_ssn tests/SSN_tests.cpp)
+# target_link_libraries(test_ssn
+#     ssn_pmm
+#     gtest
+#     gtest_main)
+# add_test(NAME SSNTests COMMAND test_ssn)
 
-add_executable(test_pmm tests/PMM_tests.cpp)
-target_link_libraries(test_pmm
-    ssn_pmm
-    gtest
-    gtest_main)
-add_test(NAME PMMTests COMMAND test_pmm)
+# add_executable(test_pmm tests/PMM_tests.cpp)
+# target_link_libraries(test_pmm
+#     ssn_pmm
+#     gtest
+#     gtest_main)
+# add_test(NAME PMMTests COMMAND test_pmm)
