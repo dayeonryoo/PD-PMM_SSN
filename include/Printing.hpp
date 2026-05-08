@@ -35,6 +35,9 @@ void print_header(PrintWhen when, PrintWhat what) {
     const int w_val  = 14;
 
     std::cout << std::setw(w_iter) << "PMM" << std::setw(w_iter) << "SSN";
+    if (what == PrintWhat::TUNING) {
+        std::cout << std::setw(w_iter) << "Krylov" << std::setw(w_iter) << "fact";
+    }
     if (what == PrintWhat::FULL) {
         std::cout << std::setw(w_val)  << "Objective";
     }
@@ -47,11 +50,14 @@ void print_header(PrintWhen when, PrintWhat what) {
         std::cout << std::setw(w_val) << "mu" << std::setw(w_val)  << "rho"  << std::setw(w_val) << "eps";
         std::cout << std::setw(w_val) << "l.f.";
     }
+    if (what == PrintWhat::TUNING) {
+        std::cout << std::setw(w_val) << "k.f.";
+    }
     std::cout << "\n";
 
     std::cout << std::string(w_iter*2 + w_val*5, '-');
     if (what == PrintWhat::TUNING) {
-        std::cout << std::string(w_val*4, '-');
+        std::cout << std::string(w_iter*2 + w_val*5, '-');
     } else if (what == PrintWhat::FULL) {
         std::cout << std::string(w_val*4, '-');
     }
@@ -59,7 +65,7 @@ void print_header(PrintWhen when, PrintWhat what) {
 }
 
 template <typename T, typename Vec>
-void print(PrintWhen when, PrintWhat what, int PMM_iter, int SSN_iter, T obj_val, const Vec& res_norms, T SSN_res, T mu, T rho, T eps_bcl, T eps, int linesearch_failures) {
+void print(PrintWhen when, PrintWhat what, int PMM_iter, int SSN_iter, int Krylov_iter, int fact, T obj_val, const Vec& res_norms, T SSN_res, T mu, T rho, T eps_bcl, T eps, int linesearch_failures, int Krylov_fail) {
     if (when == PrintWhen::NEVER || what == PrintWhat::NONE) return;
     if (when == PrintWhen::EVERY10 && PMM_iter % 10 != 0) return;
 
@@ -67,6 +73,9 @@ void print(PrintWhen when, PrintWhat what, int PMM_iter, int SSN_iter, T obj_val
     const int w_val  = 14;
 
     std::cout << std::setw(w_iter) << PMM_iter << std::setw(w_iter) << SSN_iter;
+    if (what == PrintWhat::TUNING) {
+        std::cout << std::setw(w_iter) << Krylov_iter << std::setw(w_iter) << fact;
+    }
     if (what == PrintWhat::FULL) {
         std::cout << std::setw(w_val)  << std::scientific << obj_val;
     }
@@ -79,6 +88,9 @@ void print(PrintWhen when, PrintWhat what, int PMM_iter, int SSN_iter, T obj_val
     if (what == PrintWhat::TUNING || what == PrintWhat::FULL) {
         std::cout << std::setw(w_val)  << mu << std::setw(w_val)  << rho << std::setw(w_val) << eps;
         std::cout << std::setw(w_val) << linesearch_failures;
+    }
+    if (what == PrintWhat::TUNING) {
+        std::cout << std::setw(w_val) << Krylov_fail;
     }
     std::cout << "\n";
 }

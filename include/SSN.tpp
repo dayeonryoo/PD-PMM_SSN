@@ -366,7 +366,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     Krylov_iter += cg.iterations();
 
     if (cg.info() != Eigen::Success) {
-        // ...
+        Krylov_fail++;
+        return solve_using_LDLT(G, H_diag, r1, r2);
     }
 
     prev_dy_ = dy_;
@@ -477,7 +478,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_t
     Krylov_iter += minres.iterations();
 
     if (minres.info() != Eigen::Success) {
-        // ...
+        Krylov_fail++;
+        return solve_using_LDLT(G, H_diag, r1, r2);
     }
 
     prev_dy_ = dy_;
@@ -580,6 +582,64 @@ typename SSN<T>::Vec SSN<T>::solve_using_LDLT(const SpMat& G, const Vec& H_diag,
     if (ldlt_.info() != Eigen::Success)
         throw std::runtime_error("Solving the augmented Lagrangian system via LDLT failed.");
     return dxdy_;
+}
+
+template <typename T>
+typename SSN<T>::Vec SSN<T>::solve_using_primal_ldlt(const Vec& H_diag, const Vec& r1, const Vec& r2) {
+    // Solves the SSN system via the N×N primal normal equations:
+    //   (H + mu G^T G) dx = mu G^T r2 - r1
+    //   dy = mu (r2 - G dx)
+    // where G = [A; B_active_W], G^T G = A^T A + B_active_W^T B_active_W.
+    // A^T A is cached; only B_active_W^T B_active_W needs to be recomputed on active_W changes.
+    using Vec = typename SSN<T>::Vec;
+    using SpMat = typename SSN<T>::SpMat;
+
+    const int s = M + n_active_W;
+
+    if (primal_pattern_dirty_ || primal_numeric_dirty_) {
+        SpMat P = A_tr_A_;
+        if (n_active_W > 0) {
+            SpMat BaTBa = B_active_W.transpose() * B_active_W;
+            P += BaTBa;
+        }
+        // Add mu-scaled G^T G and diagonal H
+        P *= mu;
+        for (int i = 0; i < N; ++i)
+            P.coeffRef(i, i) += H_diag(i);
+        P.makeCompressed();
+
+        if (primal_pattern_dirty_) {
+            primal_llt_.analyzePattern(P);
+            primal_pattern_dirty_ = false;
+        }
+        primal_llt_.factorize(P);
+        if (primal_llt_.info() != Eigen::Success)
+            throw std::runtime_error("Primal LLT factorization failed.");
+        primal_numeric_dirty_ = false;
+        fact++;
+    }
+
+    // rhs = mu G^T r2 - r1 = mu (A^T r2_A + B_active_W^T r2_B) - r1
+    Vec r2_A = r2.head(M);
+    Vec r2_B = r2.tail(n_active_W);
+    Vec rhs = mu * (A_tr * r2_A) - r1;
+    if (n_active_W > 0)
+        rhs += mu * (B_active_W.transpose() * r2_B);
+
+    Vec dx = primal_llt_.solve(rhs);
+    if (primal_llt_.info() != Eigen::Success)
+        throw std::runtime_error("Primal LLT solve failed.");
+
+    // Recover dy = mu (r2 - G dx)
+    Vec dy(s);
+    dy.head(M) = mu * (r2_A - A * dx);
+    if (n_active_W > 0)
+        dy.tail(n_active_W) = mu * (r2_B - B_active_W * dx);
+
+    Vec dxdy(N + s);
+    dxdy.head(N) = dx;
+    dxdy.tail(s) = dy;
+    return dxdy;
 }
 
 template <typename T>
@@ -888,15 +948,65 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // If P_K and P_W are unchanged, reuse the preconditioner and LDLT factorization.
         bool update_prec = false;
-        // prec_pattern_changed: true when P = G E G^T + (1/mu) I may have a new sparsity pattern.
-        // Triggered by active_K changes (which alter E's diagonal) or G structure changes (active_W).
+        // prec_pattern_changed: true when P = G E G^T + (1/mu)I may have a new sparsity pattern.
+        // Triggered by active_K changes (which alter E's nonzero pattern) or G structure changes (active_W).
         bool prec_pattern_changed = false;
 
-        // Compare the new P_K to the previous P_K
-        if (!is_P_unchanged(diag_P_K, new_diag_P_K)) {
-            update_prec = true;
-            prec_pattern_changed = true; // active_K changes E's nonzero pattern, which changes P's pattern
-            ldlt_numeric_dirty_ = true;  // H_diag changes, K values change
+        // Detect active-set changes.
+        // Recompute on any single change, i.e. prec_max_outliers = 0:
+        /*
+          if (!is_P_unchanged(diag_P_K, new_diag_P_K)) {
+              update_prec = true;
+              prec_pattern_changed = true;
+              ldlt_numeric_dirty_ = true;
+              diag_P_K = new_diag_P_K;
+              active_K = (diag_P_K.array() == 1);
+              if (Q_info == 0) {
+                  H_diag = mu * (ones_N - diag_P_K) + ones_N / rho;
+              } else {
+                  H_diag = Q_diag + mu * (ones_N - diag_P_K) + ones_N / rho;
+              }
+              H_diag_inv = H_diag.cwiseInverse();
+          }
+          if (!is_P_unchanged(diag_P_W, new_diag_P_W)) {
+              update_prec = true;
+              prec_pattern_changed = true;
+              ldlt_pattern_dirty_ = true;
+              ldlt_numeric_dirty_ = true;
+              diag_P_W = new_diag_P_W;
+              active_W = (diag_P_W.array() == 0);
+              inactive_W = (diag_P_W.array() == 1);
+              n_active_W = active_W.count();
+              n_inactive_W = l - n_active_W;
+              rebuild_G();
+          }
+        */
+       // Recompute only when the number of changes > prec_max_outliers:
+        bool first_ssn_iter = (diag_P_K.size() == 0);
+        int n_changed_K = 0, n_changed_W = 0;
+        bool pk_changed = first_ssn_iter;
+        bool pw_changed = first_ssn_iter;
+
+        if (!first_ssn_iter) {
+            for (int i = 0; i < new_diag_P_K.size(); ++i)
+                if (diag_P_K[i] != new_diag_P_K[i]) ++n_changed_K;
+            pk_changed = (n_changed_K > 0);
+
+            for (int i = 0; i < new_diag_P_W.size(); ++i)
+                if (diag_P_W[i] != new_diag_P_W[i]) ++n_changed_W;
+            pw_changed = (n_changed_W > 0);
+        }
+
+        // Significant change: first iteration OR total flips exceed tolerance.
+        bool significant_change = first_ssn_iter || (n_changed_K + n_changed_W > prec_max_outliers);
+
+        if (pk_changed) {
+            if (significant_change) {
+                update_prec = true;
+                prec_pattern_changed = true; // active_K changes E's nonzero pattern → P's pattern
+            }
+            ldlt_numeric_dirty_ = true;    // H_diag changes, KKT values change
+            primal_numeric_dirty_ = true;  // H_diag changes, primal values change
 
             diag_P_K = new_diag_P_K;
             active_K = (diag_P_K.array() == 1);
@@ -910,12 +1020,15 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             H_diag_inv = H_diag.cwiseInverse();
         }
 
-        // Compare the new P_W to the previous P_W
-        if (!is_P_unchanged(diag_P_W, new_diag_P_W)) {
-            update_prec = true;
-            prec_pattern_changed = true; // G = [A; B_active_W] changes structure
-            ldlt_pattern_dirty_ = true;  // G changes, KKT system pattern changes
+        if (pw_changed) {
+            if (significant_change) {
+                update_prec = true;
+                prec_pattern_changed = true; // G = [A; B_active_W] changes structure → P's pattern
+            }
+            ldlt_pattern_dirty_ = true;  // G changes, KKT pattern changes
             ldlt_numeric_dirty_ = true;
+            primal_pattern_dirty_ = true;
+            primal_numeric_dirty_ = true;
 
             diag_P_W = new_diag_P_W;
             active_W = (diag_P_W.array() == 0);
@@ -959,6 +1072,8 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Solve for dx and dy2_active_W
         auto t0_solve_lin_sys = std::chrono::steady_clock::now();
+        T current_residual = (result.tol_achieved > T(0)) ? result.tol_achieved : eps;
+        // T Krylov_tol_adaptive = std::max(T(1e-12), std::min(T(0.1), T(1e-2) * current_residual));
         Vec dxdy_;
         if (more_rows_than_cols) {
             dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
