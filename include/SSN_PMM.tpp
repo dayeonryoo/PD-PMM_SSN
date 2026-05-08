@@ -454,6 +454,37 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
     // Decide whether to solve KKT or Schur
     more_rows_than_cols = N < M + l;
     // more_rows_than_cols = true; // always solve KKT
+
+    // compute_initial_penalties();
+}
+
+template <typename T>
+void SSN_PMM<T>::compute_initial_penalties() {
+    // Set mu and rho based on problem data (after Ruiz scaling).
+    // At x0 = 0: primal residual ~ ||b||_inf, dual residual ~ ||c||_inf.
+    // Choosing mu ~ ||c||_inf / ||b||_inf balances both terms in the
+    // augmented Lagrangian from the first iteration (OSQP/QPALM convention).
+
+    T c_inf = (c.size() > 0) ? inf_norm(c) : T(1);
+
+    // Use only the original m equality-constraint rows of b (the extra n rows
+    // added for the Q_info==2 reformulation are zero and should be excluded).
+    T b_inf = (m > 0 && b.size() >= m)
+              ? b.head(m).cwiseAbs().maxCoeff()
+              : T(1);
+
+    T sigma;
+    if (b_inf < T(1e-8)) {
+        // Homogeneous or constraint-free: scale directly with ||c||.
+        sigma = std::max(T(10), std::min(T(1e3), c_inf));
+    } else {
+        sigma = c_inf / b_inf;
+        sigma = std::max(T(10), std::min(T(1e3), sigma));
+    }
+
+    mu  = sigma;
+    rho = sigma;
+    mu0 = sigma;
 }
 
 template <typename T>
@@ -600,7 +631,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf(const Vec& Ax, c
     // Complementarity residual norm for box constraints on x
     Vec proj_K = proj(x + z, lx, ux);
     T compl_x = inf_norm(x - proj_K);
-    compl_x /= (T(1) + std::max(inf_norm(x), inf_norm(proj_K)));
+    compl_x /= (T(1) + std::max(inf_norm(z), inf_norm(proj_K)));
 
     // Complementarity residual norm for Bx constraints
     T compl_w;
@@ -608,7 +639,7 @@ typename SSN_PMM<T>::Vec SSN_PMM<T>::compute_residual_norms_inf(const Vec& Ax, c
     else {
         Vec proj_W = proj(Bx - y2, lw, uw);
         compl_w = inf_norm(Bx - proj_W);
-        compl_w /= (T(1) + std::max(inf_norm(Bx), inf_norm(proj_W)));
+        compl_w /= (T(1) + std::max(inf_norm(y2), inf_norm(proj_W)));
     }
 
     Vec res_norms(4);
@@ -662,16 +693,16 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
         if (ssn_good || stagnating) {
             // Reliable SSN solve -> aggessive increase to speed up convergence
             // Stagnating -> aggressive increase to escape possible local difficulties
-            mu = std::min(mu_limit, T(1.20) * mu);
+            mu = std::min(mu_limit, T(1.15) * mu);
             rho = std::min(rho_limit, T(1.15) * rho);
             // std::cout << "Reliable SSN solve\n";
         } else if (worst_ratio < T(0.95)) {
             // Good progress -> mild increase
             mu = std::min(mu_limit, T(1.10) * mu);
-            rho = std::min(rho_limit, T(1.05) * rho);
+            rho = std::min(rho_limit, T(1.10) * rho);
             // std::cout << "Good progress\n";
         }
-        SSN_tol = std::max(eps_limit, std::min({worst_res, T(0.90) * SSN_tol, std::pow(worst_res, T(1.2))}));
+        SSN_tol = std::max(eps_limit, std::min({worst_res, T(0.9) * SSN_tol, std::pow(worst_res, T(1.3))}));
 
     } else {
         // Unsuccessful SSN
@@ -908,13 +939,13 @@ Solution<T> SSN_PMM<T>::solve() {
         if (PMM_tol_achieved < tol) {
             opt = 0; // Optimal solution found
             if (when != PrintWhen::NEVER || when != PrintWhen::ALWAYS) {
-                print(PrintWhen::ALWAYS, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail);
+                print(PrintWhen::ALWAYS, what, PMM_iter, SSN_iter, NS.Krylov_iter, NS.fact, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail, NS.Krylov_fail);
             }
             break;
         }
 
         // Print current iteration info.
-        print(when, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail);
+        print(when, what, PMM_iter, SSN_iter, NS.Krylov_iter, NS.fact, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail, NS.Krylov_fail);
         PMM_iter++;
 
         // Carry Ax, Bx forward.
@@ -956,7 +987,8 @@ Solution<T> SSN_PMM<T>::solve() {
 
     Krylov_iter = NS.Krylov_iter;
     fact = NS.fact;
+    Krylov_fail = NS.Krylov_fail;
 
-    print(when, what, PMM_iter, SSN_iter, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail);
+    print(when, what, PMM_iter, SSN_iter, Krylov_iter, fact, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail, Krylov_fail);
     return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, PMM_iter, SSN_iter, Krylov_iter, fact, PMM_tol_achieved, SSN_tol_achieved, solving_time, linesearch_fail);
 }

@@ -77,8 +77,8 @@ public:
     int SSN_max_iter = 10000000000;
     int SSN_max_in_iter = 40;
     T eps_limit = 1e-3*tol;
-    T mu_limit = 1e6;
-    T rho_limit = 1e6;
+    T mu_limit = 1e4;
+    T rho_limit = 2e4;
     T eps_pinf = 5e-2 * tol;
     T eps_dinf = 5e-2 * tol;
     T gamma = 0.95;
@@ -89,8 +89,8 @@ public:
     
     // Updated parameters
     T mu0 = 1e0;
-    T mu = 5e0;
-    T rho = 1e1;
+    T mu = 1e1;
+    T rho = 2e1;
     T eps_bcl = 1e0;
     T SSN_tol = 1e0;
     
@@ -99,7 +99,7 @@ public:
     Vec x, y1, y2, z;
     T obj_val;
     int PMM_iter, SSN_iter;
-    int Krylov_iter = 0, fact = 0;
+    int Krylov_iter = 0, fact = 0, Krylov_fail = 0;
     T PMM_tol_achieved, SSN_tol_achieved;
 
     // Printing
@@ -131,6 +131,7 @@ public:
     void ruiz_scaling(const Problem<T>& problem, const Vec& Q_diag);
     void set_L_from_LLT(const SpMat& Q);
     void set_default(const Problem<T>& problem);
+    void compute_initial_penalties();
     void initialize_sols();
     void check_bounds();
 

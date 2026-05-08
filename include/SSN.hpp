@@ -66,6 +66,7 @@ public:
     T obj_val;
     int Krylov_iter = 0;
     int fact = 0;
+    int Krylov_fail = 0;
 
     // Backtracking linesearch parameters
     T beta = 0.4995 / 2;
@@ -73,7 +74,10 @@ public:
 
     // Conjugate gradient parameters
     T Krylov_tol = 1e-14;
-    int Krylov_max_in_iter = 100;
+    int Krylov_max_in_iter = 500;
+
+    // Max total active-set flips in P_K + P_W before recomputing the preconditioner.
+    int prec_max_outliers = 5;
 
     using CGSolver = Eigen::ConjugateGradient<
         SchurOperator<T>,
@@ -94,11 +98,21 @@ public:
     Vec A_tr_y1_; // cached A^T y1, recomputed once per PMM iteration in update_SSN_system
 
     // Stored LDLT factorization for the KKT system [-H, G^T; G, (1/mu)I].
-    // ldlt_pattern_dirty_: true when G's sparsity pattern changed (active_W changed).
-    // ldlt_numeric_dirty_: true when G or H_diag changed value (any active-set or mu/rho change).
+    // ldlt_pattern_dirty_: true when K's dimension changed (n_active_W changed), requires analyzePattern.
+    // ldlt_numeric_dirty_: true when K's values changed (H_diag or G rows swapped), requires factorize.
+    // Separating these avoids re-running the expensive AMD reordering when only row values swap.
     Eigen::SimplicialLDLT<SpMat> ldlt_;
     bool ldlt_pattern_dirty_ = true;
     bool ldlt_numeric_dirty_ = true;
+
+    // Primal N×N direct solve: factors P = H + mu*(A^T A + B_active_W^T B_active_W).
+    // Cheaper than the (N+M+n_act)×(N+M+n_act) KKT system when N < M+l.
+    // A^T A is constant (cached once); only B_active_W^T B_active_W changes with active_W.
+    // Pattern dirty only when B_active_W structure changes; numeric dirty when H_diag or mu changes.
+    Eigen::SimplicialLLT<SpMat> primal_llt_;
+    SpMat A_tr_A_;           // cached A^T A (never changes)
+    bool primal_pattern_dirty_ = true;
+    bool primal_numeric_dirty_ = true;
 
     SSN(const int Q_info_, const Vec& Q_diag_, const SpMat& L_, const SpMat& L_tr_,
         const SpMat& A_, const SpMat& B_, const SpMat& A_tr_, const SpMat& B_tr_,
@@ -131,6 +145,9 @@ public:
         for (int col = 0; col < A.outerSize(); ++col)
             for (typename SpMat::InnerIterator it(A, col); it; ++it)
                 G_A_trips_.emplace_back(it.row(), col, it.value());
+
+        // Cache A^T A once (A is constant throughout the solve).
+        A_tr_A_ = A_tr * A;
     }
 
     void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
@@ -146,7 +163,8 @@ public:
         SSN_iter = SSN_iter_;
         delta_y1 = delta_y1_;
         delta_z = delta_z_;
-        ldlt_numeric_dirty_ = true; // mu, rho may have changed
+        ldlt_numeric_dirty_ = true;    // mu, rho may have changed
+        primal_numeric_dirty_ = true;  // mu, rho may have changed
         A_tr_y1_ = A_tr * y1; // y1 is fixed for the entire SSN run; cache A^T y1 once
     }
 
@@ -175,6 +193,7 @@ public:
     Vec solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
+    Vec solve_using_primal_ldlt(const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,

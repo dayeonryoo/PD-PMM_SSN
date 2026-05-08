@@ -77,7 +77,7 @@ private:
         assert(H_diag.size() == n);
         assert(active_K.size() == n);
 
-        // Build E diagonal as a sparse diagonal matrix
+        // Build E diagonal: E_ii = 1/H_diag(i) if active_K(i), else 0
         std::vector<Triplet> trips;
         trips.reserve(n);
 
