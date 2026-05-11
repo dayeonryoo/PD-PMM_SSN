@@ -27,10 +27,11 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
         Q_info = 0;
     } else { // Is Q diagonal or not?
         Q_info = 1;
-        for (int k = 0; k < Q.outerSize(); ++k) {
+        for (int k = 0; k < Q.outerSize() && Q_info < 2; ++k) {
             for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
                 if (it.row() != it.col()) {
                     Q_info = 2;
+                    break;
                 }
             }
         }
@@ -185,18 +186,22 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
         T col_dev = (col_max.array() - T(1)).abs().maxCoeff();
         if (row_dev < ruiz_tol && col_dev < ruiz_tol) break;
 
-        // Scaling factors: dr, dc = sqrt(max_norms)
-        Vec drA = Vec::Ones(m);
-        Vec drB = Vec::Ones(l);
-        Vec dc  = Vec::Ones(n);
-
-        for (int i = 0; i < m; ++i) if (row_max_A(i) > eps) drA(i) = std::sqrt(row_max_A(i));
-        for (int i = 0; i < l; ++i) if (row_max_B(i) > eps) drB(i) = std::sqrt(row_max_B(i));
-        for (int j = 0; j < n; ++j) if (col_max(j) > eps)   dc(j) = std::sqrt(col_max(j));
-
-        Vec drA_inv = drA.cwiseInverse();
-        Vec drB_inv = drB.cwiseInverse();
-        Vec dc_inv = dc.cwiseInverse();
+        // Scaling factors: dr, dc = sqrt(max_norms); inverse computed in the same pass
+        Vec drA(m), drA_inv(m);
+        Vec drB(l), drB_inv(l);
+        Vec dc(n),  dc_inv(n);
+        for (int i = 0; i < m; ++i) {
+            drA(i)     = (row_max_A(i) > eps) ? std::sqrt(row_max_A(i)) : T(1);
+            drA_inv(i) = T(1) / drA(i);
+        }
+        for (int i = 0; i < l; ++i) {
+            drB(i)     = (row_max_B(i) > eps) ? std::sqrt(row_max_B(i)) : T(1);
+            drB_inv(i) = T(1) / drB(i);
+        }
+        for (int j = 0; j < n; ++j) {
+            dc(j)     = (col_max(j) > eps) ? std::sqrt(col_max(j)) : T(1);
+            dc_inv(j) = T(1) / dc(j);
+        }
 
         // Scale A: A <-  D1A^{-1} A D2^{-1}
         for (int j = 0; j < n; ++j) {
@@ -237,27 +242,25 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
         // Scale b: b <- D1A^{-1} b
         if (b_ruiz.size() == m) b_ruiz.array() *= drA_inv.array();
 
-        // Scale lw, uw:  lw, uw <- D1B^{-1} lw, uw
-        if (lw_ruiz.size() == l) {
+        // Scale lw, uw: D1B^{-1} lw, uw — single pass, shared drB_inv(i) load
+        const bool has_lw = (lw_ruiz.size() == l);
+        const bool has_uw = (uw_ruiz.size() == l);
+        if (has_lw || has_uw) {
             for (int i = 0; i < l; ++i) {
-                if (lw_ruiz(i) > -inf) lw_ruiz(i) *= drB_inv(i);
-            }
-        }
-        if (uw_ruiz.size() == l) {
-            for (int i = 0; i < l; ++i) {
-                if (uw_ruiz(i) < inf) uw_ruiz(i) *= drB_inv(i);
+                const T di = drB_inv(i);
+                if (has_lw && lw_ruiz(i) > -inf) lw_ruiz(i) *= di;
+                if (has_uw && uw_ruiz(i) <  inf) uw_ruiz(i) *= di;
             }
         }
 
-        // Scale lx, ux:  lx, ux <- D2 lx, ux
-        if (lx_ruiz.size() == n) {
+        // Scale lx, ux: D2 lx, ux — single pass, shared dc(i) load
+        const bool has_lx = (lx_ruiz.size() == n);
+        const bool has_ux = (ux_ruiz.size() == n);
+        if (has_lx || has_ux) {
             for (int i = 0; i < n; ++i) {
-                if (lx_ruiz(i) > -inf) lx_ruiz(i) *= dc(i);
-            }
-        }
-        if (ux_ruiz.size() == n) {
-            for (int i = 0; i < n; ++i) {
-                if (ux_ruiz(i) < inf) ux_ruiz(i) *= dc(i);
+                const T di = dc(i);
+                if (has_lx && lx_ruiz(i) > -inf) lx_ruiz(i) *= di;
+                if (has_ux && ux_ruiz(i) <  inf) ux_ruiz(i) *= di;
             }
         }
 
@@ -702,7 +705,7 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
             rho = std::min(rho_limit, T(1.10) * rho);
             // std::cout << "Good progress\n";
         }
-        SSN_tol = std::max(eps_limit, std::min({worst_res, T(0.9) * SSN_tol, std::pow(worst_res, T(1.3))}));
+        SSN_tol = std::max(eps_limit, std::min({worst_res, T(0.9) * SSN_tol, std::pow(worst_res, T(1.2))}));
 
     } else {
         // Unsuccessful SSN
@@ -762,12 +765,14 @@ bool SSN_PMM<T>::primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec
     T lhs2 = T(0);
     if (M > 0) lhs2 -= b.dot(cert_y1);
     for (int i = 0; i < l; ++i) {
-        if (uw(i) < inf) lhs2 += uw(i) * std::max(-cert_y2(i), T(0));
-        if (lw(i) > -inf) lhs2 += lw(i) * std::min(-cert_y2(i), T(0));
+        const T cy2i = -cert_y2(i);
+        if (uw(i) < inf)  lhs2 += uw(i) * std::max(cy2i, T(0));
+        if (lw(i) > -inf) lhs2 += lw(i) * std::min(cy2i, T(0));
     }
     for (int i = 0; i < N; ++i) {
-        if (ux(i) < inf) lhs2 += ux(i) * std::max(cert_z(i), T(0));
-        if (lx(i) > -inf) lhs2 += lx(i) * std::min(cert_z(i), T(0));
+        const T czi = cert_z(i);
+        if (ux(i) < inf)  lhs2 += ux(i) * std::max(czi, T(0));
+        if (lx(i) > -inf) lhs2 += lx(i) * std::min(czi, T(0));
     }
     if (lhs2 > -eps_pinf * cert_inf) return false;
 

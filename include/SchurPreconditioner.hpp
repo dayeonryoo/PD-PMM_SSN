@@ -32,12 +32,13 @@ public:
         H_diag_ = &H_diag;
         active_K_ = &active_K;
         mu_ = mu;
-        rebuild_ = rebuild;
-
         bool size_changed = (P_.rows() != G.rows()) || (P_.cols() != G.rows());
         if (!pattern_analyzed_ || prec_pattern_changed || size_changed) {
             pattern_dirty_ = true;
         }
+        // A size change means llt_'s stored factorization has the wrong dimension;
+        // rebuild regardless of whether the caller considers the change "significant".
+        rebuild_ = rebuild || size_changed;
     }
 
     template <typename MatrixType>

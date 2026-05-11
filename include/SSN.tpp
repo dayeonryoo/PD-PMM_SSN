@@ -292,17 +292,13 @@ bool SSN<T>::form_schur(const SpMat& G) {
     const long long nnzG = static_cast<long long>(G.nonZeros());
     const long long KKT = static_cast<long long>(N) + static_cast<long long>(s) + 2LL * nnzG;
 
-    // r[i] = nnz counter of column i
+    // r[i] = nnz of column i; densest column found in the same pass
     std::vector<long long> r(N);
     const StorageIndex* outer = G.outerIndexPtr();
-    for (Index i = 0; i < N; ++i) {
-        r[i] = static_cast<long long>(outer[i+1] - outer[i]);
-    }
-
-    // r_hat = nnz of densest column i_hat
     Index i_hat = 0;
     long long r_hat = 0;
     for (Index i = 0; i < N; ++i) {
+        r[i] = static_cast<long long>(outer[i+1] - outer[i]);
         if (r[i] > r_hat) { r_hat = r[i]; i_hat = i; }
     }
 
@@ -367,7 +363,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
     if (cg.info() != Eigen::Success) {
         Krylov_fail++;
-        return solve_using_LDLT(G, H_diag, r1, r2);
+        return solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
     }
 
     prev_dy_ = dy_;
@@ -479,7 +475,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_t
 
     if (minres.info() != Eigen::Success) {
         Krylov_fail++;
-        return solve_using_LDLT(G, H_diag, r1, r2);
+        return solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
     }
 
     prev_dy_ = dy_;
@@ -545,6 +541,16 @@ typename SSN<T>::Vec SSN<T>::solve_using_LDLT(const SpMat& G, const Vec& H_diag,
     Vec rhs(N_tot);
     rhs << r1, r2;
 
+    // If stored factorization is for a different system size, force re-analyze.
+    if (!ldlt_pattern_dirty_ && ldlt_.rows() > 0 &&
+        ldlt_.rows() != static_cast<Eigen::Index>(N_tot)) {
+        std::cerr << "[SSN LDLT] stale analysis: ldlt_.rows()=" << ldlt_.rows()
+                  << " vs N_tot=" << N_tot << " (n_active_W=" << n_active_W
+                  << ", M=" << M << ", N=" << N << "); forcing re-analyze\n";
+        ldlt_pattern_dirty_ = true;
+        ldlt_numeric_dirty_ = true;
+    }
+
     if (ldlt_pattern_dirty_ || ldlt_numeric_dirty_) {
         // Form K = [-H, G^T; G, (1/mu) I]
         std::vector<Triplet> trip;
@@ -595,6 +601,10 @@ typename SSN<T>::Vec SSN<T>::solve_using_primal_ldlt(const Vec& H_diag, const Ve
     using SpMat = typename SSN<T>::SpMat;
 
     const int s = M + n_active_W;
+
+    // Compute A^T A lazily on first use (A is const, so only once per SSN lifetime).
+    if (A_tr_A_.rows() == 0)
+        A_tr_A_ = A_tr * A;
 
     if (primal_pattern_dirty_ || primal_numeric_dirty_) {
         SpMat P = A_tr_A_;
@@ -652,9 +662,14 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
 
     // Evaluate Lagrangian and its gradient at current u = [x; y]
     T L = compute_Lagrangian(x_curr, y2_curr);
-    Vec grad_L = compute_grad_Lagrangian(x_curr, y2_curr);
+    Vec Ax_curr = A * x_curr;
+    Vec Bx_curr = B * x_curr;
+    Vec grad_L = compute_grad_Lagrangian(x_curr, y2_curr, Ax_curr, Bx_curr);
 
     T grad_desc = grad_L.head(N).dot(dx) + grad_L.tail(l).dot(dy2);
+
+    Vec Adx = A * dx;
+    Vec Bdx = B * dx;
 
     // Iterate until finding the largest step size satisfying the Armijo-Goldstein condition
     while (true) {
@@ -716,11 +731,15 @@ T SSN<T>::exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const V
     // Sort breakpoints in ascending order
     std::sort(breakpoints.begin(), breakpoints.end());
 
+    // Precompute matvecs; Bx and Bdx are already available above
+    Vec Ax_curr = A * x_curr;
+    Vec Adx = A * dx;
+
     // Find the smallest breakpoint t which yields grad(u + tdu) >= 0.
     T t_prev = T(0);
     Vec x_prev = x_curr;
     Vec y2_prev = y2_curr;
-    Vec grad = compute_grad_Lagrangian(x_curr, y2_curr);
+    Vec grad = compute_grad_Lagrangian(x_curr, y2_curr, Ax_curr, Bx);
     T phi_prev = grad.head(N).dot(dx) + grad.tail(l).dot(dy2);
     if (phi_prev >= 0) return T(0);
 
@@ -730,7 +749,9 @@ T SSN<T>::exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const V
     for (T t : breakpoints) {
         x_new = x_curr + t * dx;
         y2_new = y2_curr + t * dy2;
-        grad = compute_grad_Lagrangian(x_new, y2_new);
+        Vec Ax_new = Ax_curr + t * Adx;
+        Vec Bx_new = Bx + t * Bdx;
+        grad = compute_grad_Lagrangian(x_new, y2_new, Ax_new, Bx_new);
         phi_new = grad.head(N).dot(dx) + grad.tail(l).dot(dy2);
         if (phi_new >= 0) { t_opt = t; break; }
         else { t_prev = t; x_prev = x_new; y2_prev = y2_new; phi_prev = phi_new; }
@@ -797,60 +818,58 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     std::vector<Breakpoint> breakpoints;
     breakpoints.reserve(2 * (N + l));
 
-    // Breakpoints and corresponding slope changes for K
+    // Build K breakpoints and accumulate initial slope m in one pass
+    T m = eta;
     for (int i = 0; i < N; ++i) {
-        T s_i = s(i);
-        T dx_i = dx(i);
+        const T s_i = s(i);
+        const T dx_i = dx(i);
+        const T li = lx(i), ui = ux(i);
+
+        if (s_i < li - eps || s_i > ui + eps)
+            m += mu * dx_i * dx_i;
+
         if (std::abs(dx_i) < eps) continue;
 
-        T change = mu * dx_i * dx_i;
-        T t_l = (lx(i) - s_i) / dx_i;
-        T t_u = (ux(i) - s_i) / dx_i;
-
-        if (t_l > eps) {
-            if (dx_i > 0) breakpoints.push_back({t_l, -change}); // into K
-            if (dx_i < 0) breakpoints.push_back({t_l, +change}); // out of K
-        } 
-        if (t_u > eps) {
-            if (dx_i > 0) breakpoints.push_back({t_u, +change}); // out of K
-            if (dx_i < 0) breakpoints.push_back({t_u, -change}); // into K
-        }
+        const T change = mu * dx_i * dx_i;
+        const T t_l = (li - s_i) / dx_i;
+        const T t_u = (ui - s_i) / dx_i;
+        if (t_l > eps) breakpoints.push_back({t_l, dx_i > 0 ? -change : +change});
+        if (t_u > eps) breakpoints.push_back({t_u, dx_i > 0 ? +change : -change});
     }
 
-    // Breakpoints and corresponding slope changes for W
+    // Build W breakpoints and accumulate initial slope m in one pass
     for (int i = 0; i < l; ++i) {
-        T v_i = v(i);
-        T dv_i = dv(i);
-        if (std::abs(dv_i) < eps) continue;
-            
-        T change = mu / gamma * dv_i * dv_i;
-        T t_l = (lw(i) - v_i) / dv_i;
-        T t_u = (uw(i) - v_i) / dv_i;
+        const T v_i = v(i);
+        const T dv_i = dv(i);
+        const T li = lw(i), ui = uw(i);
 
-        if (t_l > eps) {
-            if (dv_i > 0) breakpoints.push_back({t_l, -change}); // into W
-            if (dv_i < 0) breakpoints.push_back({t_l, +change}); // out of W
-        }
-        if (t_u > eps) {
-            if (dv_i > 0) breakpoints.push_back({t_u, +change}); // out of W
-            if (dv_i < 0) breakpoints.push_back({t_u, -change}); // into W
-        }
+        if (v_i < li - eps || v_i > ui + eps)
+            m += mu / gamma * dv_i * dv_i;
+
+        if (std::abs(dv_i) < eps) continue;
+
+        const T change = mu / gamma * dv_i * dv_i;
+        const T t_l = (li - v_i) / dv_i;
+        const T t_u = (ui - v_i) / dv_i;
+        if (t_l > eps) breakpoints.push_back({t_l, dv_i > 0 ? -change : +change});
+        if (t_u > eps) breakpoints.push_back({t_u, dv_i > 0 ? +change : -change});
     }
 
     // Sort by t
-    std::sort(breakpoints.begin(), breakpoints.end(), [](Breakpoint& a, Breakpoint& b){ return a.t < b.t; });
+    std::sort(breakpoints.begin(), breakpoints.end(), [](const Breakpoint& a, const Breakpoint& b){ return a.t < b.t; });
 
-    // Group breakpoints with the same t by summing up their slope changes
-    std::vector<Breakpoint> unique_breakpoints;
-    for (size_t i = 0; i < breakpoints.size();) {
+    // Deduplicate in-place: merge entries with identical t
+    int n_uniq = 0;
+    for (size_t i = 0; i < breakpoints.size(); ) {
         T t = breakpoints[i].t;
         T slope_change_sum = T(0);
         while (i < breakpoints.size() && std::abs(breakpoints[i].t - t) < eps * std::max<T>(1, std::abs(t))) {
             slope_change_sum += breakpoints[i].slope_change;
             ++i;
         }
-        unique_breakpoints.push_back({t, slope_change_sum});
+        breakpoints[n_uniq++] = {t, slope_change_sum};
     }
+    breakpoints.resize(n_uniq);
 
     // Check if psi(0) >= 0
     Vec dist_K_s = compute_dist_box(s, lx, ux);
@@ -863,21 +882,10 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
 
     // If psi(0) < 0, check at every breakpoint t.
     T t_prev = T(0);
-    T m = eta; // initial slope at t=0
-    for (int i = 0; i < N; ++i) {
-        if (s(i) < lx(i) - eps || s(i) > ux(i) + eps) {
-            m += mu * dx(i) * dx(i);
-        }
-    }
-    for (int i = 0; i < l; ++i) {
-        if (v(i) < lw(i) - eps || v(i) > uw(i) + eps) {
-            m += mu / gamma * dv(i) * dv(i);
-        }
-    }
+    // m was computed during breakpoint generation above
 
     // Check at each breakpoint t
-    size_t k = 0;
-    for (Breakpoint& bp : unique_breakpoints) {
+    for (const Breakpoint& bp : breakpoints) {
         T t = bp.t;
         T p_t = p + m * (t - t_prev);
         if (p_t >= 0) return t_prev - p / m;
@@ -934,17 +942,14 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // ========== Preporation for Cholesky decomposition ==========
         auto t0_chol_prep = std::chrono::steady_clock::now();
 
-        // Compute Clarke subgradient of Proj_K(z/mu + x_new)
         Vec u = z / mu + result.x;
-        Vec new_diag_P_K = Clarke_subgrad_of_proj(u, lx, ux, false);
-
-        // Compute Clarke subgradient of Proj_W(B*x_new + ((1 - gamma)*y2_new - y2)/mu)
         Vec v = Bx + ((1 - gamma) * result.y2 - y2) / mu;
-        Vec new_diag_P_W = Clarke_subgrad_of_proj(v, lw, uw, true);
 
-        // Compute dist_K(u) and dist_W(v)
-        Vec dist_K_u = compute_dist_box(u, lx, ux);
-        Vec dist_W_v = compute_dist_box(v, lw, uw);
+        // Single pass each: Clarke subgradient and distance for K and W
+        Vec new_diag_P_K, dist_K_u;
+        Vec new_diag_P_W, dist_W_v;
+        compute_subgrad_and_dist(u, lx, ux, false, new_diag_P_K, dist_K_u);
+        compute_subgrad_and_dist(v, lw, uw, true,  new_diag_P_W, dist_W_v);
 
         // If P_K and P_W are unchanged, reuse the preconditioner and LDLT factorization.
         bool update_prec = false;
@@ -988,12 +993,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         bool pw_changed = first_ssn_iter;
 
         if (!first_ssn_iter) {
-            for (int i = 0; i < new_diag_P_K.size(); ++i)
-                if (diag_P_K[i] != new_diag_P_K[i]) ++n_changed_K;
+            n_changed_K = static_cast<int>((diag_P_K.array() != new_diag_P_K.array()).count());
             pk_changed = (n_changed_K > 0);
-
-            for (int i = 0; i < new_diag_P_W.size(); ++i)
-                if (diag_P_W[i] != new_diag_P_W[i]) ++n_changed_W;
+            n_changed_W = static_cast<int>((diag_P_W.array() != new_diag_P_W.array()).count());
             pw_changed = (n_changed_W > 0);
         }
 

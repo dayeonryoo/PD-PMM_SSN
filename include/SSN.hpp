@@ -146,8 +146,6 @@ public:
             for (typename SpMat::InnerIterator it(A, col); it; ++it)
                 G_A_trips_.emplace_back(it.row(), col, it.value());
 
-        // Cache A^T A once (A is constant throughout the solve).
-        A_tr_A_ = A_tr * A;
     }
 
     void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
@@ -176,6 +174,19 @@ public:
     }
     static inline Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
         return (v - proj(v, lower, upper));
+    }
+    // Single pass over u: computes Clarke subgradient and distance simultaneously.
+    static void compute_subgrad_and_dist(const Vec& u, const Vec& lower, const Vec& upper,
+                                         bool include_bd, Vec& subgrad, Vec& dist) {
+        const int sz = static_cast<int>(u.size());
+        subgrad.resize(sz);
+        dist.resize(sz);
+        for (int i = 0; i < sz; ++i) {
+            const T ui = u[i], li = lower[i], hi = upper[i];
+            const T pi = std::max(li, std::min(hi, ui));
+            dist[i]    = ui - pi;
+            subgrad[i] = (include_bd ? (ui >= li && ui <= hi) : (ui > li && ui < hi)) ? T(1) : T(0);
+        }
     }
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
