@@ -957,58 +957,16 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // Triggered by active_K changes (which alter E's nonzero pattern) or G structure changes (active_W).
         bool prec_pattern_changed = false;
 
-        // Detect active-set changes.
-        // Recompute on any single change, i.e. prec_max_outliers = 0:
-        /*
-          if (!is_P_unchanged(diag_P_K, new_diag_P_K)) {
-              update_prec = true;
-              prec_pattern_changed = true;
-              ldlt_numeric_dirty_ = true;
-              diag_P_K = new_diag_P_K;
-              active_K = (diag_P_K.array() == 1);
-              if (Q_info == 0) {
-                  H_diag = mu * (ones_N - diag_P_K) + ones_N / rho;
-              } else {
-                  H_diag = Q_diag + mu * (ones_N - diag_P_K) + ones_N / rho;
-              }
-              H_diag_inv = H_diag.cwiseInverse();
-          }
-          if (!is_P_unchanged(diag_P_W, new_diag_P_W)) {
-              update_prec = true;
-              prec_pattern_changed = true;
-              ldlt_pattern_dirty_ = true;
-              ldlt_numeric_dirty_ = true;
-              diag_P_W = new_diag_P_W;
-              active_W = (diag_P_W.array() == 0);
-              inactive_W = (diag_P_W.array() == 1);
-              n_active_W = active_W.count();
-              n_inactive_W = l - n_active_W;
-              rebuild_G();
-          }
-        */
-       // Recompute only when the number of changes > prec_max_outliers:
+        // Detect active-set changes; recompute on any single change.
         bool first_ssn_iter = (diag_P_K.size() == 0);
-        int n_changed_K = 0, n_changed_W = 0;
-        bool pk_changed = first_ssn_iter;
-        bool pw_changed = first_ssn_iter;
-
-        if (!first_ssn_iter) {
-            n_changed_K = static_cast<int>((diag_P_K.array() != new_diag_P_K.array()).count());
-            pk_changed = (n_changed_K > 0);
-            n_changed_W = static_cast<int>((diag_P_W.array() != new_diag_P_W.array()).count());
-            pw_changed = (n_changed_W > 0);
-        }
-
-        // Significant change: first iteration OR total flips exceed tolerance.
-        bool significant_change = first_ssn_iter || (n_changed_K + n_changed_W > prec_max_outliers);
+        bool pk_changed = first_ssn_iter || (diag_P_K.array() != new_diag_P_K.array()).any();
+        bool pw_changed = first_ssn_iter || (diag_P_W.array() != new_diag_P_W.array()).any();
 
         if (pk_changed) {
-            if (significant_change) {
-                update_prec = true;
-                prec_pattern_changed = true; // active_K changes E's nonzero pattern → P's pattern
-            }
-            ldlt_numeric_dirty_ = true;    // H_diag changes, KKT values change
-            primal_numeric_dirty_ = true;  // H_diag changes, primal values change
+            update_prec = true;
+            prec_pattern_changed = true;
+            ldlt_numeric_dirty_ = true;
+            primal_numeric_dirty_ = true;
 
             diag_P_K = new_diag_P_K;
             active_K = (diag_P_K.array() == 1);
@@ -1023,11 +981,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         }
 
         if (pw_changed) {
-            if (significant_change) {
-                update_prec = true;
-                prec_pattern_changed = true; // G = [A; B_active_W] changes structure → P's pattern
-            }
-            ldlt_pattern_dirty_ = true;  // G changes, KKT pattern changes
+            update_prec = true;
+            prec_pattern_changed = true;
+            ldlt_pattern_dirty_ = true;
             ldlt_numeric_dirty_ = true;
             primal_pattern_dirty_ = true;
             primal_numeric_dirty_ = true;

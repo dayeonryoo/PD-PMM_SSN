@@ -27,7 +27,7 @@ int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
-    std::string name = "BOYD1";
+    std::string name = "QSHIP04L";
     T obj_val = -6.1735220e+07;
 
     std::string filename = root + name + ".SIF";
@@ -595,7 +595,7 @@ int main() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0508mm.csv";
+    std::string csv_path = root + "results/0512mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {

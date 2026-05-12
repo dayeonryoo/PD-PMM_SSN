@@ -76,9 +76,6 @@ public:
     T Krylov_tol = 1e-14;
     int Krylov_max_in_iter = 500;
 
-    // Max total active-set flips in P_K + P_W before recomputing the preconditioner.
-    int prec_max_outliers = 5;
-
     using CGSolver = Eigen::ConjugateGradient<
         SchurOperator<T>,
         Eigen::Lower | Eigen::Upper,
