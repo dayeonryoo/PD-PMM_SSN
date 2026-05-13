@@ -350,7 +350,7 @@ void run_Netlib_infeas() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0505infeas.csv";
+    std::string csv_path = root + "results/0513infeas.csv";
 
     // Write header
     if (!std::filesystem::exists(std::filesystem::path(csv_path))
@@ -422,14 +422,30 @@ void run_Netlib_infeas() {
 
 int main() {
 
-    // run_Netlib_infeas();
+    run_Netlib_infeas();
     // run_Netlib();
 
     // Filenames and objective values of Maros/Meszaros QPs
     static const std::map<std::string, double> QPs = {
-        {"STADAT3",   -3.5779453e+01},
-        {"STCQP1",     1.5514356e+05},
-        {"UBH1",       1.1160008e+00}
+        // {"BOYD1",     -6.1735220e+07},
+        // {"BOYD2",      2.1256767e+01},
+        // {"CONT-300",   1.9151232e-01},
+        // {"CVXQP1L",    1.0870480e+08},
+        // {"CVXQP1M",    1.0875116e+06},
+        // {"CVXQP2L",    8.1842458e+07},
+        // {"CVXQP3L",    1.1571110e+08},
+        // {"CVXQP3M",    1.3628287e+06},
+        // {"HUES-MOD",   3.4824690e+07},
+        // {"QCAPRI",     6.6793293e+07},
+        {"QFORPLAN",   7.4566315e+09},
+        // {"QPILOTNO",   4.7285869e+06},
+        {"QSCTAP1",    1.4158611e+03}
+        // {"QSEBA",      8.1481801e+07},
+        // {"QSHELL",     1.5726368e+12},
+        // {"STADAT1",   -2.8526864e+07},
+        // {"STADAT2",   -3.2626665e+01},
+        // {"STADAT3",   -3.5779453e+01},
+        // {"UBH1",       1.1160008e+00}
     };
 
     // static const std::map<std::string, double> QPs = {
@@ -579,13 +595,13 @@ int main() {
     // Parameters
     T tol = 1e-6;
     int max_iter = 100000000;
-    double time_limit = 180.0; // in seconds
+    double time_limit = 60.0; // in seconds
     
-    PrintWhen when = PrintWhen::EVERY10;
+    PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0512mm_4.csv";
+    std::string csv_path = root + "results/0513mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
