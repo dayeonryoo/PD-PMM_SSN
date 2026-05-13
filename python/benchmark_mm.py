@@ -39,6 +39,7 @@ Settings: tol = 1e-6, time limit = 600 s (10 min), max iterations = infinity.
 import sys
 import os
 import csv
+import time
 import argparse
 from pathlib import Path
 
@@ -291,7 +292,10 @@ QPALM_SOLVED = qpalm.Info.SOLVED   # == 1
 def run_qpalm(pd: dict, tol: float, time_limit: float) -> dict:
     """Run QPALM on a problem given as a parse_sif dict.
 
-    Returns dict with: status, obj_val, solving_time.
+    Returns dict with: status, obj_val, solving_time, iter.
+    solving_time is a Python wall-clock measurement covering Solver() setup
+    (Ruiz scaling + initial factorisation) and the ADMM solve, so it is
+    comparable to run_osqp and run_ssn timings.
     """
     Q_upper, q, C, bmin, bmax, n, m_total = pdpmm_to_qpalm(pd)
 
@@ -310,14 +314,16 @@ def run_qpalm(pd: dict, tol: float, time_limit: float) -> dict:
     settings.verbose      = 0               # silent
     settings.scaling      = 10              # default Ruiz scaling passes
 
-    solver = qpalm.Solver(data, settings)
+    t0 = time.perf_counter()
+    solver = qpalm.Solver(data, settings)   # setup: Ruiz scaling + factorisation
     solver.solve()
+    t1 = time.perf_counter()
 
     info = solver.info
     return {
         "status":       int(info.status_val),
         "obj_val":      float(info.objective),
-        "solving_time": float(info.solve_time),
+        "solving_time": t1 - t0,
         "iter":         int(info.iter),
     }
 
@@ -330,13 +336,16 @@ OSQP_SOLVED = 1   # osqp.constant("OSQP_SOLVED")
 def run_osqp(pd: dict, tol: float, time_limit: float) -> dict:
     """Run OSQP on a problem given as a parse_sif dict.
 
-    Returns dict with: status, obj_val, solving_time.
-    solve_time from info is used (excludes setup, consistent with QPALM/SSN-PMM).
+    Returns dict with: status, obj_val, solving_time, iter.
+    solving_time is a Python wall-clock measurement covering setup()
+    (scaling + initial factorisation) and the ADMM solve, so it is
+    comparable to run_qpalm and run_ssn timings.
     """
     Q_upper, q, C, bmin, bmax, *_ = pdpmm_to_qpalm(pd)
 
     prob = osqp.OSQP()
-    prob.setup(
+    t0 = time.perf_counter()
+    prob.setup(                         # setup: scaling + factorisation
         Q_upper, q, C, bmin, bmax,
         eps_abs    = tol,
         eps_rel    = tol,
@@ -346,11 +355,12 @@ def run_osqp(pd: dict, tol: float, time_limit: float) -> dict:
         scaling    = 10,
     )
     res = prob.solve()
+    t1 = time.perf_counter()
 
     return {
         "status":       int(res.info.status_val),
         "obj_val":      float(res.info.obj_val),
-        "solving_time": float(res.info.solve_time),
+        "solving_time": t1 - t0,
         "iter":         int(res.info.iter),
     }
 
@@ -554,62 +564,72 @@ def main() -> None:
             print(f"\n[{idx:3d}/{n_problems}]  {name}")
             row: dict = {"name": name}
 
-            # ---- SSN-PMM ------------------------------------------------
+            # Parse SIF once; reused by all three solvers.
+            # All solve times are Python wall-clock from after this parse step.
             try:
-                r = ssn_pmm_bind.solve_from_sif(sif_path, tol, max_iter, time_limit)
+                pd_data = ssn_pmm_bind.parse_sif(sif_path)
+            except Exception as e:
+                print(f"  parse   : ERROR — {e}")
+                row.update(
+                    ssn_status=-99,  ssn_solved=0,  ssn_time=np.inf,  ssn_iters=np.inf,  ssn_obj=np.nan,
+                    qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf, qpalm_iters=np.inf, qpalm_obj=np.nan,
+                    osqp_status=-99,  osqp_solved=0,  osqp_time=np.inf,  osqp_iters=np.inf,  osqp_obj=np.nan,
+                )
+                writer.writerow(row)
+                fh.flush()
+                continue
+
+            # ---- SSN-PMM ------------------------------------------------
+            # Wall-clock covers: dict→Eigen copy, Problem + SSN_PMM setup
+            # (Ruiz scaling + initial Cholesky of Q), and all PMM/SSN iterations.
+            try:
+                t0 = time.perf_counter()
+                r  = ssn_pmm_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
+                t1 = time.perf_counter()
                 row["ssn_status"] = r["status"]
                 row["ssn_solved"] = int(r["status"] == 0)
-                row["ssn_time"]   = r["solving_time"]
+                row["ssn_time"]   = t1 - t0
                 row["ssn_iters"]  = r["ssn_iter"]
                 row["ssn_obj"]    = r["obj_val"]
                 status_str = "OPTIMAL" if r["status"] == 0 else f"status={r['status']}"
-                print(f"  SSN-PMM : {status_str:12s}  t = {r['solving_time']:.3f} s  "
+                print(f"  SSN-PMM : {status_str:12s}  t = {t1 - t0:.3f} s  "
                       f"iters = {r['ssn_iter']}  obj = {r['obj_val']:.6g}")
             except Exception as e:
                 print(f"  SSN-PMM : ERROR — {e}")
                 row.update(ssn_status=-99, ssn_solved=0, ssn_time=np.inf, ssn_iters=np.inf, ssn_obj=np.nan)
 
-            # Parse once; reuse for QPALM and OSQP
-            try:
-                pd_data = ssn_pmm_bind.parse_sif(sif_path)
-            except Exception as e:
-                print(f"  parse   : ERROR — {e}")
-                pd_data = None
-
             # ---- QPALM --------------------------------------------------
-            if pd_data is not None:
-                try:
-                    r = run_qpalm(pd_data, tol, time_limit)
-                    row["qpalm_status"] = r["status"]
-                    row["qpalm_solved"] = int(r["status"] == QPALM_SOLVED)
-                    row["qpalm_time"]   = r["solving_time"]
-                    row["qpalm_iters"]  = r["iter"]
-                    row["qpalm_obj"]    = r["obj_val"]
-                    status_str = "OPTIMAL" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
-                    print(f"  QPALM   : {status_str:12s}  t = {r['solving_time']:.3f} s  "
-                          f"iters = {r['iter']}  obj = {r['obj_val']:.6g}")
-                except Exception as e:
-                    print(f"  QPALM   : ERROR — {e}")
-                    row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf, qpalm_iters=np.inf, qpalm_obj=np.nan)
-            else:
+            # Wall-clock covers: Solver() setup (Ruiz scaling + LDLT factorisation)
+            # and all ADMM iterations.
+            try:
+                r = run_qpalm(pd_data, tol, time_limit)
+                row["qpalm_status"] = r["status"]
+                row["qpalm_solved"] = int(r["status"] == QPALM_SOLVED)
+                row["qpalm_time"]   = r["solving_time"]
+                row["qpalm_iters"]  = r["iter"]
+                row["qpalm_obj"]    = r["obj_val"]
+                status_str = "OPTIMAL" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
+                print(f"  QPALM   : {status_str:12s}  t = {r['solving_time']:.3f} s  "
+                      f"iters = {r['iter']}  obj = {r['obj_val']:.6g}")
+            except Exception as e:
+                print(f"  QPALM   : ERROR — {e}")
                 row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf, qpalm_iters=np.inf, qpalm_obj=np.nan)
 
             # ---- OSQP ---------------------------------------------------
-            if pd_data is not None:
-                try:
-                    r = run_osqp(pd_data, tol, time_limit)
-                    row["osqp_status"] = r["status"]
-                    row["osqp_solved"] = int(r["status"] == OSQP_SOLVED)
-                    row["osqp_time"]   = r["solving_time"]
-                    row["osqp_iters"]  = r["iter"]
-                    row["osqp_obj"]    = r["obj_val"]
-                    status_str = "OPTIMAL" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
-                    print(f"  OSQP    : {status_str:12s}  t = {r['solving_time']:.3f} s  "
-                          f"iters = {r['iter']}  obj = {r['obj_val']:.6g}")
-                except Exception as e:
-                    print(f"  OSQP    : ERROR — {e}")
-                    row.update(osqp_status=-99, osqp_solved=0, osqp_time=np.inf, osqp_iters=np.inf, osqp_obj=np.nan)
-            else:
+            # Wall-clock covers: setup() (scaling + factorisation) and all
+            # ADMM iterations.
+            try:
+                r = run_osqp(pd_data, tol, time_limit)
+                row["osqp_status"] = r["status"]
+                row["osqp_solved"] = int(r["status"] == OSQP_SOLVED)
+                row["osqp_time"]   = r["solving_time"]
+                row["osqp_iters"]  = r["iter"]
+                row["osqp_obj"]    = r["obj_val"]
+                status_str = "OPTIMAL" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
+                print(f"  OSQP    : {status_str:12s}  t = {r['solving_time']:.3f} s  "
+                      f"iters = {r['iter']}  obj = {r['obj_val']:.6g}")
+            except Exception as e:
+                print(f"  OSQP    : ERROR — {e}")
                 row.update(osqp_status=-99, osqp_solved=0, osqp_time=np.inf, osqp_iters=np.inf, osqp_obj=np.nan)
 
             writer.writerow(row)
