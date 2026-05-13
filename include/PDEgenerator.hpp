@@ -217,8 +217,8 @@ static PDPMMdata<T> make_problem_from_mats(
     T alpha2,
     T u_lower,
     T u_upper,
-    T y_lower = -std::numeric_limits<T>::infinity(),
-    T y_upper = +std::numeric_limits<T>::infinity()
+    T y_lower = -T(1e20),
+    T y_upper = +T(1e20)
 ) {
     PDPMMdata<T> pb;
     using SpMat = typename Problem<T>::SpMat;
@@ -328,8 +328,8 @@ static PDPMMdata<T> make_problem_from_mats(
     // --- bounds on x: [y; u+; u-]
     pb.lx.resize(nx);
     pb.ux.resize(nx);
-    pb.lx.setConstant(-std::numeric_limits<T>::infinity());
-    pb.ux.setConstant(+std::numeric_limits<T>::infinity());
+    pb.lx.setConstant(-T(1e20));
+    pb.ux.setConstant(+T(1e20));
 
     // state bounds (default free)
     pb.lx.segment(0, np).setConstant(y_lower);

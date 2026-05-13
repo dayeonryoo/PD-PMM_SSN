@@ -26,6 +26,9 @@ public:
     // prec_pattern_changed must be true whenever G's sparsity structure or active_K changes:
     // P = G E G^T + (1/mu) I, where E_ii = 1/H_diag_i if active_K_i else 0.
     // Both G's column structure and which entries of E are nonzero determine P's sparsity.
+    // G E G^T is independent of mu (active_K entries have H_diag = 1/rho, not mu).
+    // So when only mu changes, we skip the expensive G*E*G^T product and only update
+    // the (1/mu)I diagonal in P_ before refactorizing.
     void setData(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const BoolArr& active_K, T mu, bool rebuild, bool prec_pattern_changed) {
         G_ = &G;
         G_tr_ = &G_tr;
@@ -36,6 +39,9 @@ public:
         if (!pattern_analyzed_ || prec_pattern_changed || size_changed) {
             pattern_dirty_ = true;
         }
+        if (prec_pattern_changed || size_changed) {
+            base_dirty_ = true;
+        }
         // A size change means llt_'s stored factorization has the wrong dimension;
         // rebuild regardless of whether the caller considers the change "significant".
         rebuild_ = rebuild || size_changed;
@@ -43,7 +49,9 @@ public:
 
     template <typename MatrixType>
     SchurPreconditioner& compute(const MatrixType&) {
-        if (!initialized_ || rebuild_) {
+        // Also rebuild when only mu changed: G E G^T is reused, only diagonal shifts.
+        bool mu_changed = initialized_ && (mu_ != mu_at_last_fact_);
+        if (!initialized_ || rebuild_ || mu_changed) {
             build();
             initialized_ = true;
         }
@@ -62,14 +70,15 @@ public:
     int fact_count() const { return fact_count_; }
 
 private:
-    // Build a preconditioner P = G E G^T + (1/mu) I
-    // active_K(i) is true when diag_P_K(i) = 1
+    // Build P = G E G^T + (1/mu) I.
+    // If base_dirty_: recompute P_base_ = G E G^T (expensive sparse product), then build P_.
+    // If only mu changed: update the (1/mu)I diagonal of P_ in-place (cheap), then refactorize.
     void build() {
         const SpMat& G = *G_;
         const SpMat& G_tr = *G_tr_;
         const Vec& H_diag = *H_diag_;
         const BoolArr& active_K = *active_K_;
-        
+
         const Eigen::Index s = G.rows();
         const Eigen::Index n = G.cols();
 
@@ -78,35 +87,34 @@ private:
         assert(H_diag.size() == n);
         assert(active_K.size() == n);
 
-        // Build E diagonal: E_ii = 1/H_diag(i) if active_K(i), else 0
-        std::vector<Triplet> trips;
-        trips.reserve(n);
-
-        for (Eigen::Index i = 0; i < n; ++i) {
-            if (active_K(i)) {
-                trips.emplace_back(i, i, T(1) / H_diag(i));
+        if (base_dirty_) {
+            // Rebuild G E G^T: E_ii = 1/H_diag(i) if active_K(i), else 0.
+            // active_K(i) implies diag_P_K(i)=1, so H_diag(i) = 1/rho (independent of mu).
+            std::vector<Triplet> trips;
+            trips.reserve(n);
+            for (Eigen::Index i = 0; i < n; ++i) {
+                if (active_K(i))
+                    trips.emplace_back(i, i, T(1) / H_diag(i));
             }
-        }
-        SpMat E(n, n);
-        E.setFromTriplets(trips.begin(), trips.end());
-        E.makeCompressed();
+            SpMat E(n, n);
+            E.setFromTriplets(trips.begin(), trips.end());
+            E.makeCompressed();
 
-        // Build (1/mu) I as a sparse diagonal matrix
-        // std::vector<Triplet> Itrips;
-        // Itrips.reserve(s);
-        // for (Eigen::Index i = 0; i < s; ++i) {
-        //     Itrips.emplace_back(i, i, T(1) / mu_);
-        // }
-        // SpMat Ishift(s, s);
-        // Ishift.setFromTriplets(Itrips.begin(), Itrips.end());
+            P_base_ = G * E * G_tr;
+            base_dirty_ = false;
 
-        // // Build P = G E G^T + (1/mu) I
-        // P_ = G * E * G_tr + Ishift;
-        P_ = G * E * G_tr;
-        for (Eigen::Index i = 0; i < s; ++i) {
-            P_.coeffRef(i, i) += T(1) / mu_;
+            // Build P_ = P_base_ + (1/mu) I from scratch.
+            P_ = P_base_;
+            for (Eigen::Index i = 0; i < s; ++i)
+                P_.coeffRef(i, i) += T(1) / mu_;
+            P_.makeCompressed();
+        } else {
+            // Only mu changed: shift the existing diagonal entries by the delta.
+            // P_base_ is unchanged; all diagonal entries of P_ already exist from prior build.
+            const T delta = T(1) / mu_ - T(1) / mu_at_last_fact_;
+            for (Eigen::Index i = 0; i < s; ++i)
+                P_.coeffRef(i, i) += delta;
         }
-        P_.makeCompressed();
 
         // Symbolic analysis only when P's sparsity pattern may have changed.
         if (pattern_dirty_) {
@@ -117,7 +125,7 @@ private:
         llt_.factorize(P_);
         info_ = llt_.info();
         fact_count_++;
-
+        mu_at_last_fact_ = mu_;
     }
 
     const SpMat* G_ = nullptr;
@@ -130,7 +138,10 @@ private:
     bool initialized_ = false;
     bool pattern_analyzed_ = false;
     bool pattern_dirty_ = true;
+    bool base_dirty_ = true;       // true when G E G^T must be recomputed
+    T mu_at_last_fact_ = T(-1);    // mu used in the last factorization
 
+    SpMat P_base_;                 // cached G E G^T without the (1/mu)I shift
     SpMat P_;
     Eigen::SimplicialLLT<SpMat> llt_;
     Eigen::ComputationInfo info_ = Eigen::Success;

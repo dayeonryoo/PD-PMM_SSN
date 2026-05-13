@@ -102,6 +102,13 @@ public:
     bool ldlt_pattern_dirty_ = true;
     bool ldlt_numeric_dirty_ = true;
 
+    // Cached KKT matrix K = [-H, G^T; G, (1/mu)I].
+    // When active_W changes (G's sparsity changes): rebuild K from triplets.
+    // When only H_diag or mu changes (diagonal-only update): set diagonal entries in-place,
+    // skipping the triplet build, setFromTriplets, and makeCompressed calls.
+    SpMat K_ldlt_;
+    bool K_ldlt_built_ = false;
+
     // Primal N×N direct solve: factors P = H + mu*(A^T A + B_active_W^T B_active_W).
     // Cheaper than the (N+M+n_act)×(N+M+n_act) KKT system when N < M+l.
     // A^T A is constant (cached once); only B_active_W^T B_active_W changes with active_W.

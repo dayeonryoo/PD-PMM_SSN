@@ -549,35 +549,48 @@ typename SSN<T>::Vec SSN<T>::solve_using_LDLT(const SpMat& G, const Vec& H_diag,
                   << ", M=" << M << ", N=" << N << "); forcing re-analyze\n";
         ldlt_pattern_dirty_ = true;
         ldlt_numeric_dirty_ = true;
+        K_ldlt_built_ = false;
     }
 
     if (ldlt_pattern_dirty_ || ldlt_numeric_dirty_) {
-        // Form K = [-H, G^T; G, (1/mu) I]
-        std::vector<Triplet> trip;
-        trip.reserve(N_tot + 2 * G.nonZeros());
+        if (ldlt_pattern_dirty_ || !K_ldlt_built_) {
+            // Full rebuild: G's sparsity changed (active_W changed) or first call.
+            // Assemble K = [-H, G^T; G, (1/mu) I] from triplets and cache it.
+            // All diagonal entries are always inserted so in-place updates are safe later.
+            std::vector<Triplet> trip;
+            trip.reserve(N_tot + 2 * G.nonZeros());
 
-        for (int i = 0; i < n; ++i) {
-            const T val = -H_diag(i);
-            if (val != T(0)) trip.emplace_back(i, i, val);
-        }
-        const T mu_inv = T(1) / mu;
-        for (int i = 0; i < s; ++i)
-            trip.emplace_back(n + i, n + i, mu_inv);
-        for (int col = 0; col < G.outerSize(); ++col)
-            for (typename SpMat::InnerIterator it(G, col); it; ++it) {
-                trip.emplace_back(n + it.row(), it.col(), it.value());
-                trip.emplace_back(it.col(), n + it.row(), it.value());
+            for (int i = 0; i < n; ++i)
+                trip.emplace_back(i, i, -H_diag(i));
+            const T mu_inv = T(1) / mu;
+            for (int i = 0; i < s; ++i)
+                trip.emplace_back(n + i, n + i, mu_inv);
+            for (int col = 0; col < G.outerSize(); ++col)
+                for (typename SpMat::InnerIterator it(G, col); it; ++it) {
+                    trip.emplace_back(n + it.row(), it.col(), it.value());
+                    trip.emplace_back(it.col(), n + it.row(), it.value());
+                }
+
+            K_ldlt_.resize(N_tot, N_tot);
+            K_ldlt_.setFromTriplets(trip.begin(), trip.end());
+            K_ldlt_.makeCompressed();
+            K_ldlt_built_ = true;
+
+            if (ldlt_pattern_dirty_) {
+                ldlt_.analyzePattern(K_ldlt_);
+                ldlt_pattern_dirty_ = false;
             }
-
-        SpMat K(N_tot, N_tot);
-        K.setFromTriplets(trip.begin(), trip.end());
-        K.makeCompressed();
-
-        if (ldlt_pattern_dirty_) {
-            ldlt_.analyzePattern(K);
-            ldlt_pattern_dirty_ = false;
+        } else {
+            // Pattern unchanged (active_W same): only diagonal values changed (H_diag, mu).
+            // Update top-left and bottom-right diagonal entries in-place; G blocks stay.
+            for (int i = 0; i < n; ++i)
+                K_ldlt_.coeffRef(i, i) = -H_diag(i);
+            const T mu_inv = T(1) / mu;
+            for (int i = 0; i < s; ++i)
+                K_ldlt_.coeffRef(n + i, n + i) = mu_inv;
         }
-        ldlt_.factorize(K);
+
+        ldlt_.factorize(K_ldlt_);
         if (ldlt_.info() != Eigen::Success)
             throw std::runtime_error("LDLT factorization of the augmented Lagrangian system failed.");
         ldlt_numeric_dirty_ = false;
