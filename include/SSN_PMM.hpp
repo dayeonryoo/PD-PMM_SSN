@@ -69,20 +69,22 @@ public:
     Vec D1A_diag, D1B_diag, D2_diag;
     Vec x_descaled, y1_descaled, y2_descaled, z_descaled;
     Vec x_sol, y1_sol, y2_sol, z_sol;
+
     T inf = 1e20;
+    T eps_zero = 1e-12; // for checking near-zero values without scaling issues
 
     // Constant parameters
     T tol = 1e-6;
     int max_iter = 100000000;
     int SSN_max_iter = 100000000;
-    int SSN_max_in_iter = 8; // 40
+    int SSN_max_in_iter = 10; // 40
     T eps_limit = 1e-3*tol;
     T mu_limit = 1e4; // 1e6
     T rho_limit = 2e4; // 1e6
     T eps_pinf = 5e-2 * tol;
     T eps_dinf = 5e-2 * tol;
     T gamma = 0.95;
-    bool more_rows_than_cols;
+    bool solve_KKT_sys = false; // change this in set_default()
     double time_limit = 60.0; // in seconds
     int stagnation = 0;
     int linesearch_fail = 0;
@@ -92,7 +94,7 @@ public:
     T mu = 1e1;
     T rho = 2e1;
     T eps_bcl = 1e0;
-    T SSN_tol = 1e0;
+    T SSN_tol = 1e-2;
     
     // Outputs:
     int opt;

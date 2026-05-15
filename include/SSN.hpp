@@ -42,6 +42,7 @@ public:
 
     // Useful vectors and matrices
     T inf = 1e20;
+    T eps_zero = 1e-12; // for checking near-zero values without scaling issues
     Vec ones_N, ones_M, ones_l;
     const SpMat& A_tr, B_tr, L_tr;
     Vec H_diag, H_diag_inv;
@@ -55,7 +56,7 @@ public:
     RowMajorSpMat B_rm;
     std::vector<Triplet> G_A_trips_;
 
-    bool more_rows_than_cols;
+    bool solve_KKT_sys;
     bool do_exact = true;
 
     // Outputs
@@ -67,13 +68,14 @@ public:
     int Krylov_iter = 0;
     int fact = 0;
     int Krylov_fail = 0;
+    bool Krylov_converged = true;
 
     // Backtracking linesearch parameters
     T beta = 0.4995 / 2;
     T delta = 0.995;
 
     // Conjugate gradient parameters
-    T Krylov_tol = 1e-14;
+    T Krylov_tol = 1e-12;
     int Krylov_max_in_iter = 500;
 
     using CGSolver = Eigen::ConjugateGradient<
@@ -123,7 +125,7 @@ public:
         const Vec& c_, const Vec& b_, const Vec& D1A_diag_, const Vec& D1B_diag_, const Vec& D2_diag_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_, const T obj_const_,
         int n_, int m_, int N_, int M_, int l_,
-        T SSN_tol_, int SSN_max_in_iter_, bool more_rows_than_cols_,
+        T SSN_tol_, int SSN_max_in_iter_, bool solve_KKT_sys_,
         T eps_pinf_, T eps_dinf_)
     : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
       A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
@@ -131,7 +133,7 @@ public:
       lx(lx_), ux(ux_), lw(lw_), uw(uw_), obj_const(obj_const_),
       n(n_), m(m_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
-      more_rows_than_cols(more_rows_than_cols_),
+      solve_KKT_sys(solve_KKT_sys_),
       eps_pinf(eps_pinf_), eps_dinf(eps_dinf_)
     {
         ones_N = Vec::Ones(N);
@@ -210,7 +212,6 @@ public:
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     Vec solve_using_primal_ldlt(const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
-    T exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                         const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);
     SSN_result<T> solve_SSN(const T eps);

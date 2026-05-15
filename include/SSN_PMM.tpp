@@ -455,8 +455,8 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
     }
 
     // Decide whether to solve KKT or Schur
-    more_rows_than_cols = N < M + l;
-    // more_rows_than_cols = true; // always solve KKT
+    solve_KKT_sys = N < M + l;
+    // solve_KKT_sys = true;
 
     // compute_initial_penalties();
 }
@@ -705,7 +705,7 @@ void SSN_PMM<T>::update_PMM_parameters(const Vec& res_norms, const Vec& new_res_
             rho = std::min(rho_limit, T(1.10) * rho);
             // std::cout << "Good progress\n";
         }
-        SSN_tol = std::max(eps_limit, std::min({worst_res, T(0.9) * SSN_tol, std::pow(worst_res, T(1.2))}));
+        SSN_tol = std::max(eps_limit, std::min({worst_res, T(0.8) * SSN_tol}));
 
     } else {
         // Unsuccessful SSN
@@ -801,7 +801,6 @@ bool SSN_PMM<T>::dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx)
        (B delta_x)_i >= -eps_dinf * ||delta_x||_inf for finite lower bounds on (Bx)_i,
        (B delta_x)_i <= eps_dinf  * ||delta_x||_inf for finite upper bounds on (Bx)_i.
     */
-    T eps_zero = T(1e-12);
     const T delta_x_inf = inf_norm(delta_x);
     if (delta_x_inf < eps_zero) return false;
     const T rhs = eps_dinf * delta_x_inf;
@@ -852,7 +851,7 @@ Solution<T> SSN_PMM<T>::solve() {
     SSN<T> NS(Q_info, Q_diag, L, L_tr,
             A, B, A_tr, B_tr, c, b, D1A_diag, D1B_diag, D2_diag,
             lx, ux, lw, uw, obj_const, n, m, N, M, l,
-            SSN_tol, SSN_max_in_iter, more_rows_than_cols,
+            SSN_tol, SSN_max_in_iter, solve_KKT_sys,
             eps_pinf, eps_dinf);
 
     // Print header

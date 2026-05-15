@@ -27,8 +27,7 @@ int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
-    std::string name = "STADAT3";
-    T obj_val = -6.1735220e+07;
+    std::string name = "BOYD2";
 
     std::string filename = root + name + ".SIF";
 
@@ -40,7 +39,7 @@ int main() {
 
     T tol = 1e-6;
     int max_iter = 100000000;
-    double time_limit = 600.0; // in seconds
+    double time_limit = 60.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
@@ -48,10 +47,10 @@ int main() {
     SSN_PMM<T> solver(prob);
 
     // Chosen system
-    // std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";
-    // std::cout << "N = " << solver.N << ", M = " << solver.M << "\n";
-    // if (solver.more_rows_than_cols) std::cout << "Solving KKT.\n";
-    // else std::cout << "Solving Schur.\n";
+    std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";
+    std::cout << "N = " << solver.N << ", M = " << solver.M << "\n";
+    if (solver.solve_KKT_sys) std::cout << "Solving KKT.\n";
+    else std::cout << "Solving Schur.\n";
 
     // Solve:
     auto start = std::chrono::high_resolution_clock::now();
@@ -76,16 +75,6 @@ int main() {
     }
     if (sol.opt <= 0 && sol.PMM_tol_achieved > 1e0) {
         std::cout << "Solver possibly diverged.\n"; 
-    }
-
-    // Compare with reference objective value
-    T abs_error = std::abs(sol.obj_val - obj_val);
-    T rel_error = abs_error / std::abs(obj_val);
-    T err_tol = 1e-2;
-    if (abs_error < err_tol || rel_error < err_tol) {
-        std::cout << "Correct! Absolute error = " << abs_error << ", relative error: " << rel_error << "\n";
-    } else {
-        std::cout << "Incorrect. Absolute error = " << abs_error << ", relative error: " << rel_error << "\n";
     }
 
     return 0;
@@ -246,7 +235,7 @@ void run_Netlib() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            std::string system = solver.more_rows_than_cols ? "K" : "S";
+            std::string system = solver.solve_KKT_sys ? "K" : "S";
             // std::string system = "M"; // MINRES
 
             // Solve the LP
@@ -386,7 +375,7 @@ void run_Netlib_infeas() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            std::string system = solver.more_rows_than_cols ? "K" : "S";
+            std::string system = solver.solve_KKT_sys ? "K" : "S";
 
             // Solve the LP
             auto t0 = std::chrono::steady_clock::now();
@@ -601,7 +590,7 @@ int main() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0513mm.csv";
+    std::string csv_path = root + "results/0514mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -655,8 +644,9 @@ int main() {
             else std::cout << "Incorrect. Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
 
             // Record result
-            std::string system = { solver.more_rows_than_cols? "K" : "S" };
+            std::string system = { solver.solve_KKT_sys? "K" : "S" };
             // std::string system = "M"; // MINRES
+            // std::string system = "K"; // KKT system via LDLT
             TestResult<T> result = {
                 system,
                 agree, sol.opt, diverged, name,

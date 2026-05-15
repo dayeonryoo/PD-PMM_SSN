@@ -359,11 +359,15 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         dy_ = cg.solve(rhs);
     }
 
+    // std::cout << "[CG] Iterations: " << cg.iterations() << ", Estimated error: " << cg.error() << "\n";
     Krylov_iter += cg.iterations();
-
+    
     if (cg.info() != Eigen::Success) {
         Krylov_fail++;
-        return solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
+        std::cout << "[CG] Krylov solver failed with info = " << cg.info() << ". Falling back to LDLT.\n";
+        // return solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
+        Krylov_converged = false;
+        return solve_using_LDLT(G, H_diag, r1, r2);
     }
 
     prev_dy_ = dy_;
@@ -451,7 +455,11 @@ typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_t
 
     SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
 
-    Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
+    // Precompute H_inv * r1 once: reused for rhs and dx recovery.
+    Vec r1_scaled = H_diag_inv.cwiseProduct(r1);
+    Vec rhs(s);
+    rhs.noalias() = G * r1_scaled;
+    rhs += r2;
 
     minres.setTolerance(tol);
     minres.setMaxIterations(max_iter);
@@ -475,16 +483,20 @@ typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_t
 
     if (minres.info() != Eigen::Success) {
         Krylov_fail++;
-        return solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
+        std::cout << "[MINRES] Krylov solver failed with info = " << minres.info() << ". Falling back to LDLT.\n";
+        Krylov_converged = false;
+        return solve_using_LDLT(G, H_diag, r1, r2);
     }
 
-    prev_dy_ = dy_;
-
-    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
-
+    // Recover dx = H_inv (G^T dy - r1) = H_inv * G^T * dy - r1_scaled.
+    // Write dx directly into dxdy_ to avoid a separate size-n allocation and temporaries.
     Vec dxdy_(n + s);
-    dxdy_.head(n) = dx;
     dxdy_.tail(s) = dy_;
+    dxdy_.head(n).noalias() = G_tr * dy_;
+    dxdy_.head(n).array() *= H_diag_inv.array();
+    dxdy_.head(n) -= r1_scaled;
+
+    prev_dy_ = std::move(dy_);
     return dxdy_;
 }
 
@@ -707,79 +719,6 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const 
 }
 
 template <typename T>
-T SSN<T>::exact_line_search_w_Lag(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
-    using Vec = typename SSN<T>::Vec;
-
-    std::vector<T> breakpoints; // List of breakpoints
-    T t; // Breakpoint
-
-    // Breakpoints for K
-    for (int i = 0; i < N; ++i) {
-        T temp = z(i) / mu + x_curr(i);
-        if (dx(i) != 0) {
-            t = (ux(i) - temp) / dx(i);
-            if (t > 0) breakpoints.push_back(t);
-
-            t = (lx(i) - temp) / dx(i);
-            if (t > 0) breakpoints.push_back(t);
-        }
-    }
-
-    // Breakpoints for W
-    Vec Bx = B * x_curr;
-    Vec Bdx = B * dx;
-    for (int i = 0; i < l; ++i) {
-        T ds_i = Bdx(i) + (1 - gamma) * dy2(i) / mu;
-        if (ds_i != 0) {
-            T s_i = Bx(i) + ((1 - gamma) * y2_curr(i) - y2(i)) / mu;
-
-            t = (uw(i) - s_i) / ds_i;
-            if (t > 0) breakpoints.push_back(t);
-
-            t = (lw(i) - s_i) / ds_i;
-            if (t > 0) breakpoints.push_back(t);
-        }
-    }
-
-    // Sort breakpoints in ascending order
-    std::sort(breakpoints.begin(), breakpoints.end());
-
-    // Precompute matvecs; Bx and Bdx are already available above
-    Vec Ax_curr = A * x_curr;
-    Vec Adx = A * dx;
-
-    // Find the smallest breakpoint t which yields grad(u + tdu) >= 0.
-    T t_prev = T(0);
-    Vec x_prev = x_curr;
-    Vec y2_prev = y2_curr;
-    Vec grad = compute_grad_Lagrangian(x_curr, y2_curr, Ax_curr, Bx);
-    T phi_prev = grad.head(N).dot(dx) + grad.tail(l).dot(dy2);
-    if (phi_prev >= 0) return T(0);
-
-    T t_opt = T(0); // Optimal breakpoint
-    Vec x_new, y2_new;
-    T phi_new;
-    for (T t : breakpoints) {
-        x_new = x_curr + t * dx;
-        y2_new = y2_curr + t * dy2;
-        Vec Ax_new = Ax_curr + t * Adx;
-        Vec Bx_new = Bx + t * Bdx;
-        grad = compute_grad_Lagrangian(x_new, y2_new, Ax_new, Bx_new);
-        phi_new = grad.head(N).dot(dx) + grad.tail(l).dot(dy2);
-        if (phi_new >= 0) { t_opt = t; break; }
-        else { t_prev = t; x_prev = x_new; y2_prev = y2_new; phi_prev = phi_new; }
-    }
-
-    // Compute the optimal stepsize in terms of the optimal breakpoint.
-    if (t_opt != T(0)) {    
-        T tau = t_prev - (phi_prev / (phi_new - phi_prev)) * (t_opt - t_prev);
-        return tau;
-    } else {
-        return T(0); // No crossing
-    }
-}
-
-template <typename T>
 T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                              const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx) {
     /*
@@ -796,7 +735,6 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     otherwise, set p = psi(t), t_prev = t and continue.
     */
     using Vec = typename SSN<T>::Vec;
-    T eps = 1e-10; // Numerical tolerance for checking zero
 
     // Ax_curr, Bx_curr, Adx, Bdx are all passed in to avoid redundant SpMVs
     const Vec& Ax = Ax_curr;
@@ -838,16 +776,16 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
         const T dx_i = dx(i);
         const T li = lx(i), ui = ux(i);
 
-        if (s_i < li - eps || s_i > ui + eps)
+        if (s_i < li - eps_zero || s_i > ui + eps_zero)
             m += mu * dx_i * dx_i;
 
-        if (std::abs(dx_i) < eps) continue;
+        if (std::abs(dx_i) < eps_zero) continue;
 
         const T change = mu * dx_i * dx_i;
         const T t_l = (li - s_i) / dx_i;
         const T t_u = (ui - s_i) / dx_i;
-        if (t_l > eps) breakpoints.push_back({t_l, dx_i > 0 ? -change : +change});
-        if (t_u > eps) breakpoints.push_back({t_u, dx_i > 0 ? +change : -change});
+        if (t_l > eps_zero) breakpoints.push_back({t_l, dx_i > 0 ? -change : +change});
+        if (t_u > eps_zero) breakpoints.push_back({t_u, dx_i > 0 ? +change : -change});
     }
 
     // Build W breakpoints and accumulate initial slope m in one pass
@@ -856,16 +794,16 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
         const T dv_i = dv(i);
         const T li = lw(i), ui = uw(i);
 
-        if (v_i < li - eps || v_i > ui + eps)
+        if (v_i < li - eps_zero || v_i > ui + eps_zero)
             m += mu / gamma * dv_i * dv_i;
 
-        if (std::abs(dv_i) < eps) continue;
+        if (std::abs(dv_i) < eps_zero) continue;
 
         const T change = mu / gamma * dv_i * dv_i;
         const T t_l = (li - v_i) / dv_i;
         const T t_u = (ui - v_i) / dv_i;
-        if (t_l > eps) breakpoints.push_back({t_l, dv_i > 0 ? -change : +change});
-        if (t_u > eps) breakpoints.push_back({t_u, dv_i > 0 ? +change : -change});
+        if (t_l > eps_zero) breakpoints.push_back({t_l, dv_i > 0 ? -change : +change});
+        if (t_u > eps_zero) breakpoints.push_back({t_u, dv_i > 0 ? +change : -change});
     }
 
     // Sort by t
@@ -876,7 +814,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     for (size_t i = 0; i < breakpoints.size(); ) {
         T t = breakpoints[i].t;
         T slope_change_sum = T(0);
-        while (i < breakpoints.size() && std::abs(breakpoints[i].t - t) < eps * std::max<T>(1, std::abs(t))) {
+        while (i < breakpoints.size() && std::abs(breakpoints[i].t - t) < eps_zero * std::max<T>(1, std::abs(t))) {
             slope_change_sum += breakpoints[i].slope_change;
             ++i;
         }
@@ -891,7 +829,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     p += mu * dist_K_s.dot(dx);
     p += mu / gamma * dist_W_v.dot(Bdx);
     p += (1 - gamma) / gamma * dist_W_v.dot(dy2);
-    if (p >= eps * (T(1) + std::abs(beta))) return T(0); // No crossing, linesearch failed.
+    if (p >= eps_zero * (T(1) + std::abs(beta))) return T(0); // No crossing, linesearch failed.
 
     // If psi(0) < 0, check at every breakpoint t.
     T t_prev = T(0);
@@ -911,7 +849,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
 
     // Checking the last breakpoint.
     // m should be >= 0 (sum of squares); slightly negative means floating-point cancellation.
-    if (m > -eps * (T(1) + eta)) return t_prev - p / std::max(m, eps * (T(1) + eta));
+    if (m > -eps_zero * (T(1) + eta)) return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
     return T(0); // safeguard: m truly negative
 }
 
@@ -990,6 +928,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
             } else {
                 H_diag = Q_diag + mu * (ones_N - diag_P_K) + ones_N / rho;
             }
+            H_diag = H_diag.cwiseMax(eps_zero); // safeguard for non-positive diagonal entries
             H_diag_inv = H_diag.cwiseInverse();
         }
 
@@ -1043,15 +982,22 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // Solve for dx and dy2_active_W
         auto t0_solve_lin_sys = std::chrono::steady_clock::now();
-        T current_residual = (result.tol_achieved > T(0)) ? result.tol_achieved : eps;
-        // T Krylov_tol_adaptive = std::max(T(1e-12), std::min(T(0.1), T(1e-2) * current_residual));
+        Krylov_tol= std::max(T(1e-16), T(0.5) * Krylov_tol);
         Vec dxdy_;
-        if (more_rows_than_cols) {
+        if (solve_KKT_sys) {
             dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
         } else {
             dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
+
         }
+        // if (Krylov_converged) {
+        //     dxdy_ = solve_using_minres(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
+        // } else {
+        //     dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
+        // }
         // dxdy_ = solve_using_minres(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
+
+
         auto t1_solve_lin_sys = std::chrono::steady_clock::now();
         double timer_solve_line_sys = time_diff_ms(t0_solve_lin_sys, t1_solve_lin_sys);
         // std::cout << "  Solving SSN system took " << timer_solve_line_sys << " ms.\n";
@@ -1087,38 +1033,22 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // std::cout << "  alpha = " << alpha << "\n";
 
         // ========== Update x and y2 ==========
-        if (alpha == 0) { // If linesearch fails,
-            // Option 1. Use gradient descent to update x and y2.
-            // std::cout << "GD applied: ||grad_x|| = " << grad_L.head(N).norm() << "||grad_y2|| = " << grad_L.tail(l).norm() << "\n";
-            // T stepsize = 1e-7;
-            // result.x -= stepsize * grad_L.head(N);
-            // result.y2 -= stepsize * grad_L.tail(l);
-
-            // Option 2. Terminate and discard; change from backtracking to exact and come back with smaller mu and rho.
-            result.opt = 3; // linesearch failed
-            do_exact = true;
-            break;
-
-            // Option 3. Just carry on with alpha = 1e-7
-            // result.x += 1e-7 * dx;
-            // result.y2 += 1e-7 * dy2;
+        if (alpha == 0) { // If linesearch fails, use gradient descent.
+            Vec grad_L_gd = compute_grad_Lagrangian(result.x, result.y2, Ax, Bx);
+            std::cout << "GD applied: ||grad_x|| = " << grad_L_gd.head(N).norm() << ", ||grad_y2|| = " << grad_L_gd.tail(l).norm() << "\n";
+            T stepsize = 1e-4;
+            result.x -= stepsize * grad_L_gd.head(N);
+            result.y2 -= stepsize * grad_L_gd.tail(l);
+            Ax = A * result.x;
+            Bx = B * result.x;
         } else {
-            // Newton's steps
-            delta_x = alpha * dx;
-            delta_y2 = alpha * dy2;
-
-            // Update x and y2
-            result.x += delta_x;
-            result.y2 += delta_y2;
-
-            // Go back to backtracking
-            // do_exact = false;
-
+            result.x += alpha * dx;
+            result.y2 += alpha * dy2;
+            Ax += alpha * Adx;
+            Bx += alpha * Bdx;
         }
 
         // Compute gradient of Lagrangian at current (x, y2)
-        Ax += alpha * Adx; // Update Ax for gradient computation
-        Bx += alpha * Bdx; // Update Bx for gradient computation
         Vec grad_L = compute_grad_Lagrangian(result.x, result.y2, Ax, Bx);
         result.tol_achieved = inf_norm(grad_L);
 

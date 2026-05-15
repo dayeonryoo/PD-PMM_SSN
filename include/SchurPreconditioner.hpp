@@ -60,9 +60,8 @@ public:
 
     template <typename Rhs>
     Vec solve(const Eigen::MatrixBase<Rhs>& b) const {
-        if (info_ != Eigen::Success) {
+        if (info_ != Eigen::Success)
             throw std::runtime_error("SchurPreconditioner solve called after failed factorization.");
-        }
         return llt_.solve(b);
     }
 
@@ -103,13 +102,12 @@ private:
             P_base_ = G * E * G_tr;
             base_dirty_ = false;
 
-            // Build P_ = P_base_ + (1/mu) I from scratch.
             P_ = P_base_;
             for (Eigen::Index i = 0; i < s; ++i)
                 P_.coeffRef(i, i) += T(1) / mu_;
             P_.makeCompressed();
         } else {
-            // Only mu changed: shift the existing diagonal entries by the delta.
+            // Only mu changed: shift the (1/mu)I diagonal by delta.
             // P_base_ is unchanged; all diagonal entries of P_ already exist from prior build.
             const T delta = T(1) / mu_ - T(1) / mu_at_last_fact_;
             for (Eigen::Index i = 0; i < s; ++i)
@@ -143,7 +141,7 @@ private:
 
     SpMat P_base_;                 // cached G E G^T without the (1/mu)I shift
     SpMat P_;
-    Eigen::SimplicialLLT<SpMat> llt_;
+    Eigen::SimplicialLDLT<SpMat> llt_;
     Eigen::ComputationInfo info_ = Eigen::Success;
     int fact_count_ = 0;
 };
