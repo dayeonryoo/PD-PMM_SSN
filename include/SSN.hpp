@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <unsupported/Eigen/IterativeSolvers>
@@ -56,7 +57,6 @@ public:
     RowMajorSpMat B_rm;
     std::vector<Triplet> G_A_trips_;
 
-    bool solve_KKT_sys;
     bool do_exact = true;
 
     // Outputs
@@ -77,6 +77,7 @@ public:
     // Conjugate gradient parameters
     T Krylov_tol = 1e-12;
     int Krylov_max_in_iter = 500;
+    bool ldlt_used = false;
 
     using CGSolver = Eigen::ConjugateGradient<
         SchurOperator<T>,
@@ -125,7 +126,7 @@ public:
         const Vec& c_, const Vec& b_, const Vec& D1A_diag_, const Vec& D1B_diag_, const Vec& D2_diag_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_, const T obj_const_,
         int n_, int m_, int N_, int M_, int l_,
-        T SSN_tol_, int SSN_max_in_iter_, bool solve_KKT_sys_,
+        T SSN_tol_, int SSN_max_in_iter_,
         T eps_pinf_, T eps_dinf_)
     : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
       A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
@@ -133,7 +134,6 @@ public:
       lx(lx_), ux(ux_), lw(lw_), uw(uw_), obj_const(obj_const_),
       n(n_), m(m_), N(N_), M(M_), l(l_),
       SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
-      solve_KKT_sys(solve_KKT_sys_),
       eps_pinf(eps_pinf_), eps_dinf(eps_dinf_)
     {
         ones_N = Vec::Ones(N);

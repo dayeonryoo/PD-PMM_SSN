@@ -119,7 +119,9 @@ private:
             llt_.analyzePattern(P_);
             pattern_analyzed_ = true;
             pattern_dirty_ = false;
+            // std::cout << "Symbolic factoriztion.\n";
         }
+        // std::cout << "Numeric factorization.\n";
         llt_.factorize(P_);
         info_ = llt_.info();
         fact_count_++;

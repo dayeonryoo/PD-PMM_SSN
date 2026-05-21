@@ -84,7 +84,6 @@ public:
     T eps_pinf = 5e-2 * tol;
     T eps_dinf = 5e-2 * tol;
     T gamma = 0.95;
-    bool solve_KKT_sys = false; // change this in set_default()
     double time_limit = 60.0; // in seconds
     int stagnation = 0;
     int linesearch_fail = 0;
@@ -103,6 +102,7 @@ public:
     int PMM_iter, SSN_iter;
     int Krylov_iter = 0, fact = 0, Krylov_fail = 0;
     T PMM_tol_achieved, SSN_tol_achieved;
+    bool ldlt_used = false;
 
     // Printing
     PrintWhen when = PrintWhen::NEVER;

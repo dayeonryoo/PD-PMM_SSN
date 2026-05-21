@@ -335,38 +335,46 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     const int s = G.rows();
     const int n = G.cols();
 
-    // Matrix-free Schur operator S = G H_inv G^T + (1/mu) I
-    SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
-
-    // rhs = G * H_inv * r1 + r2.
-    Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
-
-    cg.setTolerance(tol);
-    cg.setMaxIterations(max_iter);
-    cg.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec, prec_pattern_changed);
-    int prec_fact_before = cg.preconditioner().fact_count();
-    cg.compute(S);
-    fact += cg.preconditioner().fact_count() - prec_fact_before;
-
-    if (cg.preconditioner().info() != Eigen::Success) {
-        throw std::runtime_error("Preconditioner setup failed.");
-    }
-
     Vec dy_;
-    if (prev_dy_.size() == s) {
-        dy_ = cg.solveWithGuess(rhs, prev_dy_);
-    } else {
-        dy_ = cg.solve(rhs);
-    }
+    try {
+        // Matrix-free Schur operator S = G H_inv G^T + (1/mu) I
+        SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
 
-    // std::cout << "[CG] Iterations: " << cg.iterations() << ", Estimated error: " << cg.error() << "\n";
-    Krylov_iter += cg.iterations();
-    
-    if (cg.info() != Eigen::Success) {
+        // rhs = G * H_inv * r1 + r2.
+        Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
+
+        cg.setTolerance(tol);
+        cg.setMaxIterations(max_iter);
+        cg.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec, prec_pattern_changed);
+        int prec_fact_before = cg.preconditioner().fact_count();
+        cg.compute(S);
+        fact += cg.preconditioner().fact_count() - prec_fact_before;
+
+        if (cg.preconditioner().info() != Eigen::Success) {
+            throw std::runtime_error("Preconditioner setup failed.");
+        }
+
+        if (prev_dy_.size() == s) {
+            dy_ = cg.solveWithGuess(rhs, prev_dy_);
+        } else {
+            dy_ = cg.solve(rhs);
+        }
+
+        // std::cout << "[CG] Iterations: " << cg.iterations() << ", Estimated error: " << cg.error() << "\n";
+        Krylov_iter += cg.iterations();
+
+        if (cg.info() != Eigen::Success) {
+            Krylov_fail++;
+            std::cout << "[CG] Krylov solver failed with info = " << cg.info() << ". Falling back to LDLT.\n";
+            Krylov_converged = false;
+            ldlt_used = true;
+            return solve_using_LDLT(G, H_diag, r1, r2);
+        }
+    } catch (const std::bad_alloc&) {
         Krylov_fail++;
-        std::cout << "[CG] Krylov solver failed with info = " << cg.info() << ". Falling back to LDLT.\n";
-        // return solve_using_schur(G, G_tr, H_diag_inv, r1, r2);
+        std::cout << "[CG] std::bad_alloc: out of memory. Falling back to LDLT.\n";
         Krylov_converged = false;
+        ldlt_used = true;
         return solve_using_LDLT(G, H_diag, r1, r2);
     }
 
@@ -375,8 +383,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     // Recover dx = H_inv (G^T dy_ - r1)
     Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
 
-
-    Vec dxdy_(n + s); 
+    Vec dxdy_(n + s);
     dxdy_.head(n) = dx;
     dxdy_.tail(s) = dy_;
     return dxdy_;
@@ -984,18 +991,11 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         auto t0_solve_lin_sys = std::chrono::steady_clock::now();
         Krylov_tol= std::max(T(1e-16), T(0.5) * Krylov_tol);
         Vec dxdy_;
-        if (solve_KKT_sys) {
+        if (ldlt_used) {
             dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
         } else {
             dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
-
         }
-        // if (Krylov_converged) {
-        //     dxdy_ = solve_using_minres(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
-        // } else {
-        //     dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
-        // }
-        // dxdy_ = solve_using_minres(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
 
 
         auto t1_solve_lin_sys = std::chrono::steady_clock::now();

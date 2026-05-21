@@ -253,7 +253,7 @@ int main() {
             else std::cout << "\nIncorrect Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n";
 
             // Store result
-            std::string system = { solver.more_rows_than_cols? "K" : "S" };
+            std::string system = "S";
             TestResult<T> result = {
                 system, agree, sol.opt, diverged,
                 name, abs_err, rel_err,
@@ -359,7 +359,7 @@ int main() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            std::string system = solver.more_rows_than_cols ? "K" : "S";
+            std::string system = "S";
 
             // Solve the LP
             auto t0 = std::chrono::steady_clock::now();
@@ -417,8 +417,7 @@ int main() {
     // Chosen system
     std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";
     std::cout << "N = " << solver.N << ", M = " << solver.M << "\n";
-    if (solver.more_rows_than_cols) std::cout << "Solving KKT.\n";
-    else std::cout << "Solving Schur.\n";
+    std::cout << "Solving Schur (CG with LDLT fallback).\n";
 
     // Solve the LP
     auto t0 = std::chrono::steady_clock::now();

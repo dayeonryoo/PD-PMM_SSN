@@ -454,10 +454,6 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
         uw = uw_ruiz;
     }
 
-    // Decide whether to solve KKT or Schur
-    solve_KKT_sys = N < M + l;
-    // solve_KKT_sys = true;
-
     // compute_initial_penalties();
 }
 
@@ -851,7 +847,7 @@ Solution<T> SSN_PMM<T>::solve() {
     SSN<T> NS(Q_info, Q_diag, L, L_tr,
             A, B, A_tr, B_tr, c, b, D1A_diag, D1B_diag, D2_diag,
             lx, ux, lw, uw, obj_const, n, m, N, M, l,
-            SSN_tol, SSN_max_in_iter, solve_KKT_sys,
+            SSN_tol, SSN_max_in_iter,
             eps_pinf, eps_dinf);
 
     // Print header
@@ -992,6 +988,7 @@ Solution<T> SSN_PMM<T>::solve() {
     Krylov_iter = NS.Krylov_iter;
     fact = NS.fact;
     Krylov_fail = NS.Krylov_fail;
+    ldlt_used = NS.ldlt_used;
 
     print(when, what, PMM_iter, SSN_iter, Krylov_iter, fact, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail, Krylov_fail);
     return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, PMM_iter, SSN_iter, Krylov_iter, fact, PMM_tol_achieved, SSN_tol_achieved, solving_time, linesearch_fail);

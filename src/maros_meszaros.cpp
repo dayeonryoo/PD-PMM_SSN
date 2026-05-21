@@ -27,7 +27,7 @@ int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
-    std::string name = "BOYD2";
+    std::string name = "AUG2D";
 
     std::string filename = root + name + ".SIF";
 
@@ -45,12 +45,6 @@ int main() {
 
     Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
     SSN_PMM<T> solver(prob);
-
-    // Chosen system
-    std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";
-    std::cout << "N = " << solver.N << ", M = " << solver.M << "\n";
-    if (solver.solve_KKT_sys) std::cout << "Solving KKT.\n";
-    else std::cout << "Solving Schur.\n";
 
     // Solve:
     auto start = std::chrono::high_resolution_clock::now();
@@ -70,6 +64,8 @@ int main() {
         std::cout << "Lineserach failed. Solver terminated.\n";
     } else if (sol.opt < 0) {
         std::cout << "Solver detected infeasibility.\n";
+    } else  if (sol.opt == 4){
+        std::cout << "Solver hit the time limit.\n";
     } else {
         std::cout << "Solver hit the max iteration before converging.\n";
     }
@@ -235,7 +231,7 @@ void run_Netlib() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            std::string system = solver.solve_KKT_sys ? "K" : "S";
+            std::string system = "S";
             // std::string system = "M"; // MINRES
 
             // Solve the LP
@@ -375,7 +371,7 @@ void run_Netlib_infeas() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            std::string system = solver.solve_KKT_sys ? "K" : "S";
+            std::string system = "S";
 
             // Solve the LP
             auto t0 = std::chrono::steady_clock::now();
@@ -590,7 +586,7 @@ int main() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0514mm.csv";
+    std::string csv_path = root + "results/0520mm_Eigen.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -644,9 +640,8 @@ int main() {
             else std::cout << "Incorrect. Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
 
             // Record result
-            std::string system = { solver.solve_KKT_sys? "K" : "S" };
-            // std::string system = "M"; // MINRES
-            // std::string system = "K"; // KKT system via LDLT
+            std::string system = solver.ldlt_used? "L" : "S";
+
             TestResult<T> result = {
                 system,
                 agree, sol.opt, diverged, name,
