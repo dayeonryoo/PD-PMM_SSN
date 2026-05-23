@@ -67,6 +67,8 @@ public:
     T obj_val;
     int Krylov_iter = 0;
     int fact = 0;
+    int smw_count = 0;
+    int linesearch_fail = 0;
     int Krylov_fail = 0;
     bool Krylov_converged = true;
 

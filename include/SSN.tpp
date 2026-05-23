@@ -335,44 +335,86 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     const int s = G.rows();
     const int n = G.cols();
 
-    Vec dy_;
-    try {
-        // Matrix-free Schur operator S = G H_inv G^T + (1/mu) I
-        SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
+    SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
+    Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
+    cg.setTolerance(tol);
+    cg.setMaxIterations(max_iter);
 
-        // rhs = G * H_inv * r1 + r2.
-        Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
-
-        cg.setTolerance(tol);
-        cg.setMaxIterations(max_iter);
-        cg.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec, prec_pattern_changed);
+    // Set up preconditioner and call cg.compute(). force_rebuild=true skips SMW and
+    // recomputes G E G^T from scratch, regardless of what changed since the last full build.
+    auto setup_prec = [&](bool force_rebuild) {
+        cg.preconditioner().setData(G, G_tr, H_diag, active_K, active_W, B_rm, mu,
+                                    update_prec || force_rebuild, prec_pattern_changed);
+        if (force_rebuild)
+            cg.preconditioner().force_full_rebuild();
         int prec_fact_before = cg.preconditioner().fact_count();
         cg.compute(S);
-        fact += cg.preconditioner().fact_count() - prec_fact_before;
+        fact      += cg.preconditioner().fact_count() - prec_fact_before;
+        smw_count  = cg.preconditioner().smw_count();
+    };
 
+    // Run CG with the current preconditioner. Returns false and increments Krylov_fail
+    // on preconditioner failure or solver non-convergence, leaving dy_out unchanged.
+    auto attempt_solve = [&](Vec& dy_out) -> bool {
         if (cg.preconditioner().info() != Eigen::Success) {
-            throw std::runtime_error("Preconditioner setup failed.");
+            Krylov_fail++;
+            std::cout << "[CG] Preconditioner factorization failed with info = "
+                      << cg.preconditioner().info() << ".\n";
+            return false;
         }
-
-        if (prev_dy_.size() == s) {
+        Vec dy_;
+        if (prev_dy_.size() == s)
             dy_ = cg.solveWithGuess(rhs, prev_dy_);
-        } else {
+        else
             dy_ = cg.solve(rhs);
-        }
-
-        // std::cout << "[CG] Iterations: " << cg.iterations() << ", Estimated error: " << cg.error() << "\n";
         Krylov_iter += cg.iterations();
-
         if (cg.info() != Eigen::Success) {
             Krylov_fail++;
-            std::cout << "[CG] Krylov solver failed with info = " << cg.info() << ". Falling back to LDLT.\n";
+            std::cout << "[CG] Krylov solver failed with info = " << cg.info() << ".\n";
+            return false;
+        }
+        dy_out = std::move(dy_);
+        return true;
+    };
+
+    // First CG attempt. Wrap setup + solve together: bad_alloc can come from
+    // build() (P_base_ = G E G^T) or from Eigen's CG iteration internals.
+    Vec dy_;
+    bool ok = false;
+    try {
+        setup_prec(false);
+        ok = attempt_solve(dy_);
+    } catch (const std::bad_alloc&) {
+        Krylov_fail++;
+        std::cout << "[CG] std::bad_alloc. Falling back to LDLT.\n";
+        Krylov_converged = false;
+        ldlt_used = true;
+        return solve_using_LDLT(G, H_diag, r1, r2);
+    }
+
+    if (ok && cg.preconditioner().used_smw())
+        cg.preconditioner().reset_smw_fail_streak();
+
+    // If CG failed and the preconditioner used SMW (possibly stale), retry after a full rebuild.
+    // If it already used a full factorization, the preconditioner is as fresh as possible: go to LDLT.
+    if (!ok && cg.preconditioner().used_smw()) {
+        cg.preconditioner().record_smw_rebuild();
+        std::cout << "[CG] SMW preconditioner may be stale; retrying with full rebuild"
+                  << (cg.preconditioner().smw_suppressed() ? " (SMW now suppressed)" : "") << ".\n";
+        try {
+            setup_prec(true);
+            ok = attempt_solve(dy_);
+        } catch (const std::bad_alloc&) {
+            Krylov_fail++;
+            std::cout << "[CG] std::bad_alloc on retry. Falling back to LDLT.\n";
             Krylov_converged = false;
             ldlt_used = true;
             return solve_using_LDLT(G, H_diag, r1, r2);
         }
-    } catch (const std::bad_alloc&) {
-        Krylov_fail++;
-        std::cout << "[CG] std::bad_alloc: out of memory. Falling back to LDLT.\n";
+    }
+
+    if (!ok) {
+        std::cout << "[CG] Falling back to LDLT.\n";
         Krylov_converged = false;
         ldlt_used = true;
         return solve_using_LDLT(G, H_diag, r1, r2);
@@ -387,7 +429,6 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     dxdy_.head(n) = dx;
     dxdy_.tail(s) = dy_;
     return dxdy_;
-
 }
 
 template <typename T>
@@ -470,10 +511,11 @@ typename SSN<T>::Vec SSN<T>::solve_using_minres(const SpMat& G, const SpMat& G_t
 
     minres.setTolerance(tol);
     minres.setMaxIterations(max_iter);
-    minres.preconditioner().setData(G, G_tr, H_diag, active_K, mu, update_prec, prec_pattern_changed);
+    minres.preconditioner().setData(G, G_tr, H_diag, active_K, active_W, B_rm, mu, update_prec, prec_pattern_changed);
     int prec_fact_before = minres.preconditioner().fact_count();
     minres.compute(S);
-    fact += minres.preconditioner().fact_count() - prec_fact_before;
+    fact      += minres.preconditioner().fact_count() - prec_fact_before;
+    smw_count  = minres.preconditioner().smw_count();
 
     if (minres.preconditioner().info() != Eigen::Success) {
         throw std::runtime_error("Preconditioner setup failed.");
@@ -1034,8 +1076,9 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         // ========== Update x and y2 ==========
         if (alpha == 0) { // If linesearch fails, use gradient descent.
+            linesearch_fail++;
             Vec grad_L_gd = compute_grad_Lagrangian(result.x, result.y2, Ax, Bx);
-            std::cout << "GD applied: ||grad_x|| = " << grad_L_gd.head(N).norm() << ", ||grad_y2|| = " << grad_L_gd.tail(l).norm() << "\n";
+            // std::cout << "GD applied: ||grad_x|| = " << grad_L_gd.head(N).norm() << ", ||grad_y2|| = " << grad_L_gd.tail(l).norm() << "\n";
             T stepsize = 1e-4;
             result.x -= stepsize * grad_L_gd.head(N);
             result.y2 -= stepsize * grad_L_gd.tail(l);

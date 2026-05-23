@@ -938,7 +938,7 @@ Solution<T> SSN_PMM<T>::solve() {
         // Check termination criterion.
         if (PMM_tol_achieved < tol) {
             opt = 0; // Optimal solution found
-            if (when != PrintWhen::NEVER || when != PrintWhen::ALWAYS) {
+            if (when != PrintWhen::NEVER && when != PrintWhen::ALWAYS) {
                 print(PrintWhen::ALWAYS, what, PMM_iter, SSN_iter, NS.Krylov_iter, NS.fact, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail, NS.Krylov_fail);
             }
             break;
@@ -991,5 +991,5 @@ Solution<T> SSN_PMM<T>::solve() {
     ldlt_used = NS.ldlt_used;
 
     print(when, what, PMM_iter, SSN_iter, Krylov_iter, fact, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail, Krylov_fail);
-    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, PMM_iter, SSN_iter, Krylov_iter, fact, PMM_tol_achieved, SSN_tol_achieved, solving_time, linesearch_fail);
+    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, PMM_iter, SSN_iter, Krylov_iter, fact, NS.smw_count, PMM_tol_achieved, SSN_tol_achieved, solving_time, linesearch_fail, Krylov_fail);
 }

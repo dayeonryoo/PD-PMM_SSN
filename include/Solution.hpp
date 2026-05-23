@@ -36,21 +36,23 @@ public:
     int SSN_iter;    // Number of SSN iterations performed
     int Krylov_iter; // Number of Krylov iterations performed
     int fact;        // Number of factorizations performed
+    int smw_count;   // Number of SMW preconditioner applications
 
     T PMM_tol_achieved; // Tolerance achieved by PMM
     T SSN_tol_achieved; // Tolerance achieved by SSN
     
     double solving_time; // Total time in seconds taken to solve the problem
     int linesearch_fail; // Number of linesearch failures
+    int Krylov_fail;     // Number of Krylov failures
 
     Solution(int opt_, const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-             T obj_val_, int PMM_iter_, int SSN_iter_, int Krylov_iter_, int fact_,
+             T obj_val_, int PMM_iter_, int SSN_iter_, int Krylov_iter_, int fact_, int smw_count_,
              T PMM_tol_achieved_, T SSN_tol_achieved_,
-             double solving_time_, int linesearch_fail_)
+             double solving_time_, int linesearch_fail_, int Krylov_fail_)
     : opt(opt_), x(x_), y1(y1_), y2(y2_), z(z_), obj_val(obj_val_),
-      PMM_iter(PMM_iter_), SSN_iter(SSN_iter_), Krylov_iter(Krylov_iter_), fact(fact_),
+      PMM_iter(PMM_iter_), SSN_iter(SSN_iter_), Krylov_iter(Krylov_iter_), fact(fact_), smw_count(smw_count_),
       PMM_tol_achieved(PMM_tol_achieved_), SSN_tol_achieved(SSN_tol_achieved_),
-      solving_time(solving_time_), linesearch_fail(linesearch_fail_)
+      solving_time(solving_time_), linesearch_fail(linesearch_fail_), Krylov_fail(Krylov_fail_)
     {}
 
     void print_summary() const {
@@ -72,6 +74,7 @@ public:
             std::cout << "SSN tolerance achieved (SSN_tol_achieved): " << SSN_tol_achieved << std::endl;
         }
         std::cout << "Number of linesearch failures (linesearch_fail): " << linesearch_fail << std::endl;
+        std::cout << "Number of Krylov failures (Krylov_fail): " << Krylov_fail << std::endl;
         std::cout << "Total solving time (solving_time): " << solving_time << " seconds\n";
     }
 
