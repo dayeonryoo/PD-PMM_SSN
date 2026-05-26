@@ -49,6 +49,7 @@ template <typename T>
 class SSN_PMM {
 public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using ResVec = Eigen::Matrix<T, 4, 1>;
     using SpMat = Eigen::SparseMatrix<T>;
 
     // Inputs:
@@ -79,8 +80,8 @@ public:
     int SSN_max_iter = 100000000;
     int SSN_max_in_iter = 10; // 40
     T eps_limit = 1e-3*tol;
-    T mu_limit = 1e4; // 1e6
-    T rho_limit = 2e4; // 1e6
+    T mu_limit = 1e6;
+    T rho_limit = 1e2;
     T eps_pinf = 5e-2 * tol;
     T eps_dinf = 5e-2 * tol;
     T gamma = 0.95;
@@ -90,6 +91,7 @@ public:
     
     // Updated parameters
     T mu0 = 1e0;
+    T rho0 = 1e0;
     T mu = 1e1;
     T rho = 2e1;
     T eps_bcl = 1e0;
@@ -143,14 +145,12 @@ public:
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
     }
-    Vec compute_residual_norms();
-    Vec compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx);
+    ResVec compute_residual_norms();
+    ResVec compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx);
     T objective_value(const Vec& x, const Vec& Qx);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
-    void update_PMM_parameters(const Vec& res_norms, const Vec& new_res_norms, int SSN_opt, T SSN_tol_achieved);
+    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int SSN_opt, T SSN_tol_achieved);
     T compute_p(const Vec& x);
-    void update_with_bcl(const Vec& y2_hat, T compl_W, T new_compl_W, int PMM_iter);
-    bool qpalm_termination();
     bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
     bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     Solution<T> solve();

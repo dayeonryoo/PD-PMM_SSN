@@ -27,7 +27,7 @@ int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
-    std::string name = "AUG2D";
+    std::string name = "Q25FV47";
 
     std::string filename = root + name + ".SIF";
 
@@ -646,13 +646,13 @@ int main() {
     // Parameters
     T tol = 1e-6;
     int max_iter = 100000000;
-    double time_limit = 60.0; // in seconds
+    double time_limit = 10.0; // in seconds
     
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0522mm_smw.csv";
+    std::string csv_path = root + "results/0525mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -679,7 +679,7 @@ int main() {
 
             // Solve the QP
             Solution<T> sol = solver.solve();
-            sol.print_summary();
+            // sol.print_summary();
             
             // Check convergence
             bool diverged = false;

@@ -7,17 +7,17 @@
 #include <cassert>
 
 template <typename T>
-T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new) {
+T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new) {
     using Vec = typename SSN<T>::Vec;
 
     // Evalueate dist_K(z/mu + x_new)
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
 
-    // Evaluate dist_W(B*x_new - (y2 - y2_new/2)/mu)
-    Vec dist_W = compute_dist_box(B * x_new + ((1 - gamma) * y2_new - y2) / mu, lw, uw);
+    // Evaluate dist_W(Bx_new + ((1-gamma)*y2_new - y2)/mu)
+    Vec dist_W = compute_dist_box(Bx_new + ((1 - gamma) * y2_new - y2) / mu, lw, uw);
 
     // Evaluate primal residual A x_new - b
-    Vec res_p = A * x_new - b;
+    Vec res_p = Ax_new - b;
 
     // Compute Lagrangian
     T L;
@@ -340,8 +340,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     cg.setTolerance(tol);
     cg.setMaxIterations(max_iter);
 
-    // Set up preconditioner and call cg.compute(). force_rebuild=true skips SMW and
-    // recomputes G E G^T from scratch, regardless of what changed since the last full build.
+    // Set up preconditioner and call cg.compute(). 
+    // force_rebuild=true skips SMW and recomputes G E G^T from scratch.
     auto setup_prec = [&](bool force_rebuild) {
         cg.preconditioner().setData(G, G_tr, H_diag, active_K, active_W, B_rm, mu,
                                     update_prec || force_rebuild, prec_pattern_changed);
@@ -429,67 +429,6 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     dxdy_.head(n) = dx;
     dxdy_.tail(s) = dy_;
     return dxdy_;
-}
-
-template <typename T>
-typename SSN<T>::Vec SSN<T>::solve_using_cg_primal(const SpMat& G, const SpMat& G_tr, const Vec& H_diag,
-                                                    const Vec& r1, const Vec& r2,
-                                                    T mu, T tol, int max_iter) {
-    using Vec = typename SSN<T>::Vec;
-
-    const int s = G.rows();
-    const int n = G.cols();
-
-    // Diagonal preconditioner: diag(H + mu G^T G)^{-1}.
-    // diag(G^T G)_i = ||column i of G||^2, computed in O(nnz(G)) without forming G^T G.
-    Vec prec_inv = H_diag;
-    for (int col = 0; col < G.outerSize(); ++col) {
-        T sq = T(0);
-        for (typename SpMat::InnerIterator it(G, col); it; ++it)
-            sq += it.value() * it.value();
-        prec_inv(col) += mu * sq;
-    }
-    prec_inv = prec_inv.cwiseInverse();
-
-    // RHS: mu G^T r2 - r1  (derived by eliminating dy from the Newton system)
-    Vec rhs = mu * (G_tr * r2) - r1;
-
-    // Matrix-free preconditioned CG for (H + mu G^T G) dx = rhs.
-    // Each mat-vec: (H + mu G^T G) v = H.*v + mu * G^T (G v)  — no explicit G^T G formed.
-    auto matvec = [&](const Vec& v) -> Vec {
-        return H_diag.cwiseProduct(v) + mu * (G_tr * (G * v));
-    };
-
-    Vec x = (prev_dx_primal_.size() == n) ? prev_dx_primal_ : Vec::Zero(n);
-    Vec r = rhs - matvec(x);
-    Vec z = prec_inv.cwiseProduct(r);
-    Vec p = z;
-    T rz = r.dot(z);
-    const T tol_sq = tol * tol * rhs.squaredNorm();
-
-    for (int iter = 0; iter < max_iter; ++iter) {
-        if (r.squaredNorm() <= tol_sq) break;
-        Vec Ap = matvec(p);
-        T pAp = p.dot(Ap);
-        if (std::abs(pAp) < T(1e-30) * std::abs(rz)) break;
-        T alpha = rz / pAp;
-        x += alpha * p;
-        r -= alpha * Ap;
-        z = prec_inv.cwiseProduct(r);
-        T rz_new = r.dot(z);
-        T beta = rz_new / rz;
-        p = z + beta * p;
-        rz = rz_new;
-    }
-    prev_dx_primal_ = x;
-
-    // Recover dy = mu (r2 - G dx)
-    Vec dy = mu * (r2 - G * x);
-
-    Vec dxdy(n + s);
-    dxdy.head(n) = x;
-    dxdy.tail(s) = dy;
-    return dxdy;
 }
 
 template <typename T>
@@ -665,104 +604,29 @@ typename SSN<T>::Vec SSN<T>::solve_using_LDLT(const SpMat& G, const Vec& H_diag,
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::solve_using_primal_ldlt(const Vec& H_diag, const Vec& r1, const Vec& r2) {
-    // Solves the SSN system via the N×N primal normal equations:
-    //   (H + mu G^T G) dx = mu G^T r2 - r1
-    //   dy = mu (r2 - G dx)
-    // where G = [A; B_active_W], G^T G = A^T A + B_active_W^T B_active_W.
-    // A^T A is cached; only B_active_W^T B_active_W needs to be recomputed on active_W changes.
-    using Vec = typename SSN<T>::Vec;
-    using SpMat = typename SSN<T>::SpMat;
-
-    const int s = M + n_active_W;
-
-    // Compute A^T A lazily on first use (A is const, so only once per SSN lifetime).
-    if (A_tr_A_.rows() == 0)
-        A_tr_A_ = A_tr * A;
-
-    if (primal_pattern_dirty_ || primal_numeric_dirty_) {
-        SpMat P = A_tr_A_;
-        if (n_active_W > 0) {
-            SpMat BaTBa = B_active_W.transpose() * B_active_W;
-            P += BaTBa;
-        }
-        // Add mu-scaled G^T G and diagonal H
-        P *= mu;
-        for (int i = 0; i < N; ++i)
-            P.coeffRef(i, i) += H_diag(i);
-        P.makeCompressed();
-
-        if (primal_pattern_dirty_) {
-            primal_llt_.analyzePattern(P);
-            primal_pattern_dirty_ = false;
-        }
-        primal_llt_.factorize(P);
-        if (primal_llt_.info() != Eigen::Success)
-            throw std::runtime_error("Primal LLT factorization failed.");
-        primal_numeric_dirty_ = false;
-        fact++;
-    }
-
-    // rhs = mu G^T r2 - r1 = mu (A^T r2_A + B_active_W^T r2_B) - r1
-    Vec r2_A = r2.head(M);
-    Vec r2_B = r2.tail(n_active_W);
-    Vec rhs = mu * (A_tr * r2_A) - r1;
-    if (n_active_W > 0)
-        rhs += mu * (B_active_W.transpose() * r2_B);
-
-    Vec dx = primal_llt_.solve(rhs);
-    if (primal_llt_.info() != Eigen::Success)
-        throw std::runtime_error("Primal LLT solve failed.");
-
-    // Recover dy = mu (r2 - G dx)
-    Vec dy(s);
-    dy.head(M) = mu * (r2_A - A * dx);
-    if (n_active_W > 0)
-        dy.tail(n_active_W) = mu * (r2_B - B_active_W * dx);
-
-    Vec dxdy(N + s);
-    dxdy.head(N) = dx;
-    dxdy.tail(s) = dy;
-    return dxdy;
-}
-
-template <typename T>
-T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2) {
+T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr,
+                                    const Vec& dx, const Vec& dy2,
+                                    const Vec& Ax_curr, const Vec& Bx_curr,
+                                    const Vec& Adx, const Vec& Bdx) {
     using Vec = typename SSN<T>::Vec;
 
-    // Increase m until alpha = delta^m breaks the Armijo-Goldstein condition
     T alpha = delta;
     int m = 1;
 
-    // Evaluate Lagrangian and its gradient at current u = [x; y]
-    T L = compute_Lagrangian(x_curr, y2_curr);
-    Vec Ax_curr = A * x_curr;
-    Vec Bx_curr = B * x_curr;
+    // Lagrangian and descent slope at current point — no SpMVs, use pre-computed Ax/Bx
+    T L = compute_Lagrangian(x_curr, y2_curr, Ax_curr, Bx_curr);
     Vec grad_L = compute_grad_Lagrangian(x_curr, y2_curr, Ax_curr, Bx_curr);
-
     T grad_desc = grad_L.head(N).dot(dx) + grad_L.tail(l).dot(dy2);
 
-    Vec Adx = A * dx;
-    Vec Bdx = B * dx;
-
-    // Iterate until finding the largest step size satisfying the Armijo-Goldstein condition
+    // Armijo backtracking: reduce alpha until sufficient decrease is achieved
     while (true) {
-
-        // Evaluate Lagrangian at u_new = u + alpha * du
-        Vec x_new = x_curr + alpha * dx;
-        Vec y2_new = y2_curr + alpha * dy2;
-        T L_new = compute_Lagrangian(x_new, y2_new);
-
+        Vec Ax_new = Ax_curr + alpha * Adx;
+        Vec Bx_new = Bx_curr + alpha * Bdx;
+        T L_new = compute_Lagrangian(x_curr + alpha * dx, y2_curr + alpha * dy2, Ax_new, Bx_new);
         if (L_new <= L + beta * alpha * grad_desc) break;
-
         m += 10;
         alpha = pow(delta, m);
-        
-        if (alpha < 1e-2) { // Lower bound on alpha
-            // std::cout << "  SSN: Backtracking linesearch failed.\n";
-            alpha = T(0);
-            break;
-        }
+        if (alpha < T(1e-5)) { alpha = T(0); break; }
     }
     return alpha;
 }
@@ -903,26 +767,24 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
 }
 
 template <typename T>
-SSN_result<T> SSN<T>::solve_SSN(const T eps) {
+void SSN<T>::solve_SSN(const T eps) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
     using BoolArr = typename SSN<T>::BoolArr;
     using Triplet = typename SSN<T>::Triplet;
 
     // Intialize iteration counter and set starting points
-    SSN_result<T> result;
-    result.x = x;
-    result.y2 = y2;
-    result.iter = 0;
-    result.opt = -1;
-    result.tol_achieved = T(0);
+    Vec x_cur = x;
+    Vec y2_cur = y2;
+    int _iter = 0, _opt = -1;
+    T _tol = T(0);
 
     // Useful matvecs
-    Vec Ax = A * result.x;
-    Vec Bx = B * result.x;
+    Vec Ax = A * x_cur;
+    Vec Bx = B * x_cur;
 
     // SSN main loop
-    while (result.iter < SSN_max_in_iter) {
+    while (_iter < SSN_max_in_iter) {
         // ----------------------------------------------
         // Structure:
         // Let M(u), with u = (x,y_2), be the proximal augmented Lagrangian
@@ -942,8 +804,8 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // ========== Preporation for Cholesky decomposition ==========
         auto t0_chol_prep = std::chrono::steady_clock::now();
 
-        Vec u = z / mu + result.x;
-        Vec v = Bx + ((1 - gamma) * result.y2 - y2) / mu;
+        Vec u = z / mu + x_cur;
+        Vec v = Bx + ((1 - gamma) * y2_cur - y2) / mu;
 
         // Single pass each: Clarke subgradient and distance for K and W
         Vec new_diag_P_K, dist_K_u;
@@ -1003,7 +865,7 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         // Compute dy2 in inactive_W:
         // dy2_inactive_W = - (mu / gamma) * dist_W(v)(inactive_W) - y2(inactive_W)
         Vec y2_active_W, y2_inactive_W;
-        split_by_mask(result.y2, active_W, y2_active_W, y2_inactive_W);
+        split_by_mask(y2_cur, active_W, y2_active_W, y2_inactive_W);
 
         Vec dist_W_v_active_W, dist_W_v_inactive_W;
         split_by_mask(dist_W_v, active_W, dist_W_v_active_W, dist_W_v_inactive_W);
@@ -1014,12 +876,12 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         Vec r1;
         if (Q_info == 0) {
             r1 = c + mu * dist_K_u
-                 - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W
-                 + (result.x - x) / rho;
+                 - B_tr * y2_cur - B_inactive_W.transpose() * dy2_inactive_W
+                 + (x_cur - x) / rho;
         } else {
-            r1 = c + Q_diag.cwiseProduct(result.x) + mu * dist_K_u
-                 - B_tr * result.y2 - B_inactive_W.transpose() * dy2_inactive_W
-                 + (result.x - x) / rho;
+            r1 = c + Q_diag.cwiseProduct(x_cur) + mu * dist_K_u
+                 - B_tr * y2_cur - B_inactive_W.transpose() * dy2_inactive_W
+                 + (x_cur - x) / rho;
         }
         Vec r2(M + n_active_W);
         r2.head(M) = y1 / mu - Ax + b;
@@ -1033,12 +895,17 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
         auto t0_solve_lin_sys = std::chrono::steady_clock::now();
         Krylov_tol= std::max(T(1e-16), T(0.5) * Krylov_tol);
         Vec dxdy_;
-        if (ldlt_used) {
-            dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
-        } else {
-            dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
+        try {
+            if (ldlt_used) {
+                dxdy_ = solve_using_LDLT(G, H_diag, r1, r2);
+            } else {
+                dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, Krylov_tol, Krylov_max_in_iter, update_prec, prec_pattern_changed);
+            }
+        } catch (const std::runtime_error& e) {
+            std::cout << "[SSN] LDLT failed: " << e.what() << ". Setting _opt = 3 and exiting SSN loop.\n";
+            _opt = 3;
+            break;
         }
-
 
         auto t1_solve_lin_sys = std::chrono::steady_clock::now();
         double timer_solve_line_sys = time_diff_ms(t0_solve_lin_sys, t1_solve_lin_sys);
@@ -1053,63 +920,63 @@ SSN_result<T> SSN<T>::solve_SSN(const T eps) {
 
         Vec dy2 = retrive_row_order(dy2_active_W, dy2_inactive_W, active_W);
 
-        // ========== Backtracking/exact linesearch ==========
+        // ========== Exact linesearch ==========
         auto t0_alpha = std::chrono::steady_clock::now();
         Vec Adx = A * dx;
         Vec Bdx = B * dx;
-        T alpha;
-        // alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
-        alpha = exact_line_search(result.x, result.y2, dx, dy2, Ax, Bx, Adx, Bdx);
-        /*
-        if (do_exact) {
-            // std::cout << "  Exact linesearch applied.\n";
-            alpha = exact_line_search(result.x, result.y2, dx, dy2);
-        } else {
-            // std::cout << "  Backtracking linesearch applied.\n";
-            alpha = backtracking_line_search(result.x, result.y2, dx, dy2);
-        }
-        */
+        // T alpha = backtracking_line_search(x_cur, y2_cur, dx, dy2, Ax, Bx, Adx, Bdx);
+        T alpha = exact_line_search(x_cur, y2_cur, dx, dy2, Ax, Bx, Adx, Bdx);
         auto t1_alpha = std::chrono::steady_clock::now();
         double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
         // std::cout << "  Linesearch took " << timer_alpha << " ms.\n";
         // std::cout << "  alpha = " << alpha << "\n";
 
         // ========== Update x and y2 ==========
-        if (alpha == 0) { // If linesearch fails, use gradient descent.
+        if (alpha == 0) { // linesearch failed.
             linesearch_fail++;
-            Vec grad_L_gd = compute_grad_Lagrangian(result.x, result.y2, Ax, Bx);
-            // std::cout << "GD applied: ||grad_x|| = " << grad_L_gd.head(N).norm() << ", ||grad_y2|| = " << grad_L_gd.tail(l).norm() << "\n";
-            T stepsize = 1e-4;
-            result.x -= stepsize * grad_L_gd.head(N);
-            result.y2 -= stepsize * grad_L_gd.tail(l);
-            Ax = A * result.x;
-            Bx = B * result.x;
+            _opt = 3;
+            break;
+            /* GD
+            Vec grad_L_gd = compute_grad_Lagrangian(x_cur, y2_cur, Ax, Bx);
+            T x_grad_norm = grad_L_gd.head(N).norm();
+            T y2_grad_norm = grad_L_gd.tail(l).norm();
+            T x_step = (x_grad_norm > eps_zero) ? (T(1e-2) / x_grad_norm) : T(1e-4);
+            T y2_step = (y2_grad_norm > eps_zero) ? (T(1e-2) / y2_grad_norm) : T(1e-4);
+            x_cur -= x_step * grad_L_gd.head(N);
+            y2_cur -= y2_step * grad_L_gd.tail(l);
+            Ax = A * x_cur;
+            Bx = B * x_cur;
+            */
         } else {
-            result.x += alpha * dx;
-            result.y2 += alpha * dy2;
+            x_cur += alpha * dx;
+            y2_cur += alpha * dy2;
             Ax += alpha * Adx;
             Bx += alpha * Bdx;
         }
 
         // Compute gradient of Lagrangian at current (x, y2)
-        Vec grad_L = compute_grad_Lagrangian(result.x, result.y2, Ax, Bx);
-        result.tol_achieved = inf_norm(grad_L);
+        Vec grad_L = compute_grad_Lagrangian(x_cur, y2_cur, Ax, Bx);
+        _tol = inf_norm(grad_L);
 
-        result.iter++;
+        _iter++;
         auto t1_ssn = std::chrono::steady_clock::now();
         double timer_ssn = time_diff_ms(t0_ssn, t1_ssn);
         // std::cout << "  SSN iteration took " << timer_ssn << " ms.\n";
-        
+
         // Check termination criterion
-        if (result.tol_achieved < eps) {
-            result.opt = 0; // Optimality achieved
+        if (_tol < eps) {
+            _opt = 0; // Optimality achieved
             break;
         }
     }
 
-    if (result.opt == -1) {
-        result.opt = 2; // Maximum number of SSN inner iterations reached without convergence
+    if (_opt == -1) {
+        _opt = 2; // Maximum number of SSN inner iterations reached without convergence
     }
 
-    return result;
+    x = x_cur;
+    y2 = y2_cur;
+    opt = _opt;
+    iter = _iter;
+    tol_achieved = _tol;
 }

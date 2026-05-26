@@ -9,16 +9,6 @@
 
 
 template <typename T>
-struct SSN_result {
-    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
-    Vec x;
-    Vec y2;
-    int opt;
-    int iter;
-    T tol_achieved;
-};
-
-template <typename T>
 class SSN {
 public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
@@ -57,13 +47,11 @@ public:
     RowMajorSpMat B_rm;
     std::vector<Triplet> G_A_trips_;
 
-    bool do_exact = true;
-
     // Outputs
-    int SSN_in_iter;
+    int opt;
+    int iter;
+    T tol_achieved;
     int SSN_iter;
-    T SSN_tol_achieved;
-    int SSN_opt;
     T obj_val;
     int Krylov_iter = 0;
     int fact = 0;
@@ -196,7 +184,7 @@ public:
             subgrad[i] = (include_bd ? (ui >= li && ui <= hi) : (ui > li && ui < hi)) ? T(1) : T(0);
         }
     }
-    T compute_Lagrangian(const Vec& x_new, const Vec& y2_new);
+    T compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
     Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
     bool is_P_unchanged(const Vec& diag_P, const Vec& new_diag_P);
@@ -208,15 +196,14 @@ public:
     SpMat stack_rows(const SpMat& A, const SpMat& B);
     bool form_schur(const SpMat& G);
     Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed);
-    Vec solve_using_cg_primal(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter);
     Vec solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
-    Vec solve_using_primal_ldlt(const Vec& H_diag, const Vec& r1, const Vec& r2);
-    T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2);
+    T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
+                               const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                         const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);
-    SSN_result<T> solve_SSN(const T eps);
+    void solve_SSN(const T eps);
 
 };
 

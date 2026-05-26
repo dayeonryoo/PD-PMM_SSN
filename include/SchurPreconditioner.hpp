@@ -87,10 +87,10 @@ public:
         for (int i = 0; i < static_cast<int>(retained_old_rows_.size()); ++i)
             r_pad_(retained_old_rows_[i]) = b(retained_new_rows_[i]);
 
-        // Step 4: u_base = P_old^-1 r_pad
+        // u_base = P_old^-1 r_pad
         u_base_ = llt_.solve(r_pad_);
 
-        // Step 5: Lambda = g_all - V_all^T u_base, computed structurally without building V_all.
+        // Lambda = g_all - V_all^T u_base, computed structurally without building V_all.
         //   E_-^T u_base  (h scalar gathers)
         for (int k = 0; k < h_; ++k)
             Lambda_all_(k) = -u_base_(deleted_old_rows_[k]);
@@ -111,11 +111,11 @@ public:
         lambda_work_ = S_lambda_lu_.solve(Lambda_all_);
         Lambda_all_  = lambda_work_;
 
-        // Step 6: z_base = u_base - Y_all * Lambda_all
+        // z_base = u_base - Y_all * Lambda_all
         z_base_  = u_base_;
         z_base_.noalias() -= Y_all_ * Lambda_all_;
 
-        // Step 7: assemble z_new. A rows: block copy. Retained W: scatter. Added W: from Lambda.
+        // Assemble z_new. A rows: block copy. Retained W: scatter. Added W: from Lambda.
         z_new_.head(M_rows_) = z_base_.head(M_rows_);
         for (int i = 0; i < static_cast<int>(retained_old_rows_.size()); ++i)
             z_new_(retained_new_rows_[i]) = z_base_(retained_old_rows_[i]);
