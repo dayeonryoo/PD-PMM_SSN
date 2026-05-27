@@ -735,7 +735,8 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
     T worst_ratio = (new_res_norms.array() / (res_norms.array().abs() + 1e-12)).maxCoeff();
 
     bool ssn_valid = (SSN_opt == 0 || SSN_opt == 2); // 0: converged, 2: max iter reached but still made progress
-    bool stagnating = (worst_ratio > T(0.9)); 
+    // bool ssn_valid = SSN_opt != 3 && SSN_tol_achieved <= T(10) * SSN_tol; // valid if achieved tolerance is not too far from target
+    bool stagnating = (worst_ratio > T(0.8)); 
 
     if (ssn_valid) {
         if (!stagnating) {
@@ -746,9 +747,9 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
             // STAGNATION: increase penalties to force feasibility
             stagnation++;
 
-            T penalty_multiplier = T(2.0);
-            if (stagnation >= 5) penalty_multiplier = T(5.0);
-            else if (stagnation >= 3) penalty_multiplier = T(3.0);
+            T penalty_multiplier = T(2);
+            if (stagnation >= 5) penalty_multiplier = T(5);
+            else if (stagnation >= 3) penalty_multiplier = T(3);
 
             mu = std::min(mu_limit, penalty_multiplier * mu);
             rho = std::min(rho_limit, penalty_multiplier * rho);
@@ -767,11 +768,11 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
         stagnation++; 
         
         // Back off the penalties slightly to improve matrix conditioning for CG.
-        mu = std::max(mu0, T(0.8) * mu);
-        rho = std::max(rho0, T(0.8) * rho);
+        mu = std::max(mu0, T(0.5) * mu);
+        rho = std::max(rho0, T(0.5) * rho);
         
         // Loosen the inner tolerance so the next PMM step can at least proceed.
-        SSN_tol = std::min(worst_res, T(2.0) * SSN_tol);
+        SSN_tol = std::min(worst_res, T(10.0) * SSN_tol);
     }
 }
 
@@ -945,7 +946,7 @@ Solution<T> SSN_PMM<T>::solve() {
         Vec Adx = Ax - Ax_old;
         Vec Bdx = Bx - Bx_old;
 
-        if (SSN_tol_achieved <= 1e4) {
+        if (SSN_tol_achieved <= T(1e4)) {
             // Accept full update: y2, y1, z.
             y2 = NS.y2;
 

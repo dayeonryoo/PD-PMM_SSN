@@ -134,11 +134,18 @@ public:
     void force_full_rebuild() { skip_smw_ = true; base_dirty_ = true; }
 
     // Called by the solver when SMW was used but CG failed (Tier-2 rebuild triggered).
-    // After kMaxSmwFailStreak consecutive failures, try_build_smw() suppresses SMW.
-    void record_smw_rebuild() { smw_fail_streak_++; }
+    // Suppresses SMW after kMaxSmwFailStreak consecutive failures, or if the cumulative
+    // failure rate exceeds kMaxSmwFailRate once kMinSmwAttempts have been made.
+    void record_smw_rebuild() { smw_fail_streak_++; smw_fail_total_++; }
     // Called by the solver when CG succeeds on the first attempt with SMW active.
     void reset_smw_fail_streak() { smw_fail_streak_ = 0; }
-    bool smw_suppressed() const { return smw_fail_streak_ >= kMaxSmwFailStreak; }
+    bool smw_suppressed() const {
+        if (smw_fail_streak_ >= kMaxSmwFailStreak) return true;
+        if (smw_count_ >= kMinSmwAttempts &&
+            smw_fail_total_ >= static_cast<int>(kMaxSmwFailRate * smw_count_))
+            return true;
+        return false;
+    }
 
 private:
     void snapshot_state() {
@@ -422,12 +429,15 @@ private:
     // ---- Factorization data (full rebuild path) ----
     SpMat P_base_;
     SpMat P_;
-    Eigen::SimplicialLDLT<SpMat> llt_;
+    Eigen::SimplicialLLT<SpMat> llt_;
     Eigen::ComputationInfo info_ = Eigen::Success;
     int fact_count_      = 0;
     int smw_count_       = 0;
     int smw_fail_streak_ = 0;
-    static constexpr int kMaxSmwFailStreak = 5;
+    int smw_fail_total_  = 0;
+    static constexpr int   kMaxSmwFailStreak = 5;
+    static constexpr int   kMinSmwAttempts   = 5;
+    static constexpr double kMaxSmwFailRate  = 0.5;
 
     // ---- Snapshots from last FULL factorization ----
     SpMat   G_old_;
@@ -450,8 +460,8 @@ private:
     // Y_all_:  s_old × rank dense (all correction directions, needed for step 6 mat-vec).
     Mat V_plus_;
     Mat Y_all_;
-    // Eigen::FullPivLU<Mat> S_lambda_lu_;
-    Eigen::PartialPivLU<Mat> S_lambda_lu_;
+    Eigen::FullPivLU<Mat> S_lambda_lu_;
+    // Eigen::PartialPivLU<Mat> S_lambda_lu_;
 
     // Pre-allocated hot-loop vectors (mutable for const solve()).
     // r_pad_ is zeroed once at setup; deleted positions never written during Krylov.

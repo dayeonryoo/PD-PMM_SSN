@@ -81,7 +81,7 @@ public:
     int SSN_max_in_iter = 10; // 40
     T eps_limit = 1e-3*tol;
     T mu_limit = 1e6;
-    T rho_limit = 1e2;
+    T rho_limit = 1e4;
     T eps_pinf = 5e-2 * tol;
     T eps_dinf = 5e-2 * tol;
     T gamma = 0.95;
@@ -93,7 +93,7 @@ public:
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e1;
-    T rho = 2e1;
+    T rho = 1e1;
     T eps_bcl = 1e0;
     T SSN_tol = 1e-2;
     
