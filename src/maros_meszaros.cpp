@@ -652,7 +652,7 @@ int main() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0529mm.csv";
+    std::string csv_path = root + "results/0601mm_refact.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {

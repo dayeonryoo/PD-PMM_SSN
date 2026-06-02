@@ -202,7 +202,7 @@ private:
         const int rank = h + p + q;
 
         // const int threshold = std::min(150, std::max(1, static_cast<int>(0.1 * s_old)));
-        const int threshold = 10;
+        const int threshold = 0;
         if (rank == 0 || rank > threshold) return false;
 
         h_ = h; p_ = p; q_ = q; s_old_ = s_old;
