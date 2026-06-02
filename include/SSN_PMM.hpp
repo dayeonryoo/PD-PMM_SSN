@@ -78,9 +78,9 @@ public:
     T tol = 1e-6;
     int max_iter = 100000000;
     int SSN_max_iter = 100000000;
-    int SSN_max_in_iter = 10; // 40
+    int SSN_max_in_iter = 20;
     T eps_limit = 1e-3*tol;
-    T mu_limit = 1e6;
+    T mu_limit = 1e5;
     T rho_limit = 1e4;
     T eps_pinf = 5e-2 * tol;
     T eps_dinf = 5e-2 * tol;

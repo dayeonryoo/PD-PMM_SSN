@@ -47,21 +47,16 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     // Evaluate Dist_W (B*x_new + (y2_new/2 - y2)/mu)
     Vec dist_W = compute_dist_box(Bx_new + ((1 - gamma) * y2_new - y2) / mu, lw, uw);
 
-    // Primal residual: A x_new - b
     Vec res_p = Ax_new - b;
+    Vec A_tr_y = - A_tr_y1_ + mu * A_tr * res_p + mu * dist_K + (mu / gamma) * B_tr * dist_W;
 
     // Compute gradient of Lagrangian
     Vec grad_L_x;
     if (Q_info == 0) {
-        grad_L_x = c - A_tr_y1_ + mu * A_tr * res_p
-                    + mu * dist_K
-                    + (mu / gamma) * B_tr * dist_W
-                    + (x_new - x) / rho;
+        grad_L_x = c + A_tr_y + (x_new - x) / rho;
     } else {
-        grad_L_x = c + Q_diag.cwiseProduct(x_new) - A_tr_y1_ + mu * A_tr * res_p
-                    + mu * dist_K
-                    + (mu / gamma) * B_tr * dist_W
-                    + (x_new - x) / rho;
+        Vec Qx = Q_diag.cwiseProduct(x_new);
+        grad_L_x = c + Qx + A_tr_y + (x_new - x) / rho;
     }
     Vec grad_L_y2 = ((1 - gamma) / gamma) * dist_W + ((1 - gamma) / mu) * y2_new;
 
@@ -777,7 +772,6 @@ void SSN<T>::solve_SSN(const T eps) {
     Vec x_cur = x;
     Vec y2_cur = y2;
     int _iter = 0, _opt = -1;
-    T _tol = T(0);
 
     // Useful matvecs
     Vec Ax = A * x_cur;
@@ -956,7 +950,8 @@ void SSN<T>::solve_SSN(const T eps) {
 
         // Compute gradient of Lagrangian at current (x, y2)
         Vec grad_L = compute_grad_Lagrangian(x_cur, y2_cur, Ax, Bx);
-        _tol = inf_norm(grad_L);
+        tol_achieved = inf_norm(grad_L);
+        
 
         _iter++;
         auto t1_ssn = std::chrono::steady_clock::now();
@@ -964,7 +959,7 @@ void SSN<T>::solve_SSN(const T eps) {
         // std::cout << "  SSN iteration took " << timer_ssn << " ms.\n";
 
         // Check termination criterion
-        if (_tol < eps) {
+        if (tol_achieved < eps) {
             _opt = 0; // Optimality achieved
             break;
         }
@@ -978,5 +973,4 @@ void SSN<T>::solve_SSN(const T eps) {
     y2 = y2_cur;
     opt = _opt;
     iter = _iter;
-    tol_achieved = _tol;
 }

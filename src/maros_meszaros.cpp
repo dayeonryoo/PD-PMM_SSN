@@ -27,7 +27,7 @@ int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
-    std::string name = "QSHIP12S";
+    std::string name = "DUAL2";
 
     std::string filename = root + name + ".SIF";
 
@@ -38,7 +38,7 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-6;
-    int max_iter = 100000000;
+    int max_iter = 100;
     double time_limit = 10.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
@@ -645,14 +645,14 @@ int main() {
 
     // Parameters
     T tol = 1e-6;
-    int max_iter = 100000000;
+    int max_iter = 100000;
     double time_limit = 10.0; // in seconds
     
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0527mm.csv";
+    std::string csv_path = root + "results/0529mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {

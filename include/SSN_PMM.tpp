@@ -736,20 +736,21 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
 
     bool ssn_valid = (SSN_opt == 0 || SSN_opt == 2); // 0: converged, 2: max iter reached but still made progress
     // bool ssn_valid = SSN_opt != 3 && SSN_tol_achieved <= T(10) * SSN_tol; // valid if achieved tolerance is not too far from target
-    bool stagnating = (worst_ratio > T(0.8)); 
+    bool stagnating = (worst_ratio > T(0.9)); 
 
     if (ssn_valid) {
         if (!stagnating) {
             // GOOD PROGRESS: constant mu and rho, tighten SSN_tol.
             stagnation = 0;
-            SSN_tol = std::max(eps_limit, std::min(worst_res * T(0.1), T(0.5) * SSN_tol));
+            SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, T(0.35)));
+            // SSN_tol = std::max(eps_limit, std::min(worst_res * T(0.1), T(0.5) * SSN_tol));
         } else {
             // STAGNATION: increase penalties to force feasibility
             stagnation++;
 
-            T penalty_multiplier = T(2);
-            if (stagnation >= 5) penalty_multiplier = T(5);
-            else if (stagnation >= 3) penalty_multiplier = T(3);
+            T penalty_multiplier = T(3);
+            if (stagnation >= 5) penalty_multiplier = T(10);
+            else if (stagnation >= 3) penalty_multiplier = T(5);
 
             mu = std::min(mu_limit, penalty_multiplier * mu);
             rho = std::min(rho_limit, penalty_multiplier * rho);
@@ -759,7 +760,8 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
                 SSN_tol = std::min(worst_res, T(10.0) * SSN_tol);
             } else {
                 // Otherwise, tighten the inner tolerance.
-                SSN_tol = std::max(eps_limit, std::min(worst_res * T(0.1), T(0.5) * SSN_tol));
+                SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, T(0.35)));
+                // SSN_tol = std::max(eps_limit, std::min(worst_res * T(0.1), T(0.5) * SSN_tol));
             }
         }
     } else {
@@ -768,8 +770,8 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
         stagnation++; 
         
         // Back off the penalties slightly to improve matrix conditioning for CG.
-        mu = std::max(mu0, T(0.5) * mu);
-        rho = std::max(rho0, T(0.5) * rho);
+        mu = std::max(mu0, T(0.8) * mu);
+        rho = std::max(rho0, T(0.8) * rho);
         
         // Loosen the inner tolerance so the next PMM step can at least proceed.
         SSN_tol = std::min(worst_res, T(10.0) * SSN_tol);
