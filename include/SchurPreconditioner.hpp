@@ -202,7 +202,7 @@ private:
         const int rank = h + p + q;
 
         // const int threshold = std::min(150, std::max(1, static_cast<int>(0.1 * s_old)));
-        const int threshold = 0;
+        const int threshold = 10;
         if (rank == 0 || rank > threshold) return false;
 
         h_ = h; p_ = p; q_ = q; s_old_ = s_old;
@@ -238,9 +238,7 @@ private:
         // Block 2: -C^-1 (diagonal p×p); C_jj = E_new[idx] - E_old[idx]
         for (int j = 0; j < p; ++j) {
             const int idx = delta_K_idx_[j];
-            const T e_old = active_K_old_(idx) ? T(1) / H_diag_old_(idx) : T(0);
-            const T e_new = (*active_K_)(idx)  ? T(1) / (*H_diag_)(idx)  : T(0);
-            M_sub(h + j, h + j) = -T(1) / (e_new - e_old);
+            M_sub(h + j, h + j) = (*active_K_)(idx) ? -(*H_diag_)(idx) : H_diag_old_(idx);
         }
 
         // Block 3: W_+ = B_+ E_new B_+^T + (1/mu) I  (q×q).
