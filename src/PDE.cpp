@@ -66,7 +66,7 @@ int main() {
     std::chrono::duration<T> elapsed1 = end1 - start1;
     std::cout << "\nPMM solver took " << elapsed1.count() << " s.\n";
 
-    print_feasibility(data1, sol1.x, tol);
+    // print_feasibility(data1, sol1.x, tol);
 
     // ====== Convection-diffusion ======
     PDPMMdata<T> data2 = pdegen::make_convdiff_L1L2_control_default<T>();
@@ -80,6 +80,6 @@ int main() {
     std::chrono::duration<T> elapsed2 = end2 - start2;
     std::cout << "\nPMM solver took " << elapsed2.count() << " s.\n";
 
-    print_feasibility(data2, sol2.x, tol);
+    // print_feasibility(data2, sol2.x, tol);
 
 }

@@ -41,6 +41,8 @@ import os
 import csv
 import time
 import argparse
+import threading
+import multiprocessing as mp
 from pathlib import Path
 
 import numpy as np
@@ -75,6 +77,48 @@ try:
     import osqp
 except ModuleNotFoundError:
     sys.exit("Cannot find osqp. Install it with: pip install osqp")
+
+try:
+    import psutil
+    _HAVE_PSUTIL = True
+except ModuleNotFoundError:
+    _HAVE_PSUTIL = False
+    print("Warning: psutil not found — RAM tracking disabled. Install with: pip install psutil")
+
+
+class _PeakRSS:
+    """Polls process RSS in a background thread to capture peak memory usage."""
+    def __init__(self, interval: float = 0.05):
+        self._enabled = _HAVE_PSUTIL
+        if self._enabled:
+            self._proc = psutil.Process()
+            self._interval = interval
+            self._peak = self._proc.memory_info().rss
+            self._stop = threading.Event()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self):
+        if self._enabled:
+            self._thread.start()
+        return self
+
+    def __exit__(self, *_):
+        if self._enabled:
+            self._stop.set()
+            self._thread.join()
+
+    def _run(self):
+        while not self._stop.wait(self._interval):
+            rss = self._proc.memory_info().rss
+            if rss > self._peak:
+                self._peak = rss
+
+    @property
+    def peak_mb(self) -> float:
+        if not self._enabled:
+            return float("nan")
+        return self._peak / (1024 * 1024)
+
 
 # ---------------------------------------------------------------------------
 # Maros-Meszaros problem list  (name → reference optimal objective)
@@ -510,6 +554,62 @@ def plot_performance_profile_iters(csv_path: Path, out_prefix: Path,
 
 
 # ---------------------------------------------------------------------------
+# Subprocess worker functions (each spawned in a fresh process for clean RSS)
+# ---------------------------------------------------------------------------
+
+def _worker_ssn_mm(sif_path, tol, time_limit, max_iter, conn):
+    result = {}
+    with _PeakRSS() as mem:
+        try:
+            pd_data = ssn_pmm_bind.parse_sif(sif_path)
+            t0 = time.perf_counter()
+            r  = ssn_pmm_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
+            t1 = time.perf_counter()
+            r["solving_time"] = t1 - t0
+            result["res"] = r
+        except Exception as e:
+            result["error"] = str(e)
+        result["ram"] = mem.peak_mb
+    conn.send(result)
+    conn.close()
+
+
+def _worker_qpalm_mm(sif_path, tol, time_limit, conn):
+    result = {}
+    with _PeakRSS() as mem:
+        try:
+            result["res"] = run_qpalm(ssn_pmm_bind.parse_sif(sif_path), tol, time_limit)
+        except Exception as e:
+            result["error"] = str(e)
+        result["ram"] = mem.peak_mb
+    conn.send(result)
+    conn.close()
+
+
+def _worker_osqp_mm(sif_path, tol, time_limit, conn):
+    result = {}
+    with _PeakRSS() as mem:
+        try:
+            result["res"] = run_osqp(ssn_pmm_bind.parse_sif(sif_path), tol, time_limit)
+        except Exception as e:
+            result["error"] = str(e)
+        result["ram"] = mem.peak_mb
+    conn.send(result)
+    conn.close()
+
+
+def _run_isolated(target_func, args: tuple) -> dict:
+    """Spawn a fresh process, run target_func(*args, conn), return the sent dict."""
+    parent_conn, child_conn = mp.Pipe(duplex=False)
+    p = mp.Process(target=target_func, args=(*args, child_conn))
+    p.start()
+    child_conn.close()
+    out = parent_conn.recv()
+    p.join()
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Main benchmark loop
 # ---------------------------------------------------------------------------
 
@@ -529,6 +629,7 @@ def main() -> None:
     parser.add_argument(
         "--name", default="", help="Prefix for output filenames (e.g. '0508' → '0508_comparison_mm.csv')"
     )
+    mp.set_start_method("spawn", force=True)
     args = parser.parse_args()
 
     root      = Path(args.root).resolve()
@@ -544,9 +645,9 @@ def main() -> None:
     csv_path = result_dir / f"{prefix}comparison_mm.csv"
     fieldnames = [
         "name",
-        "ssn_solved",   "ssn_time",   "ssn_iters",   "ssn_status",   "ssn_obj",
-        "qpalm_solved", "qpalm_time", "qpalm_iters", "qpalm_status", "qpalm_obj",
-        "osqp_solved",  "osqp_time",  "osqp_iters",  "osqp_status",  "osqp_obj",
+        "ssn_solved",   "ssn_time",   "ssn_iters",   "ssn_status",   "ssn_obj",   "ssn_peak_ram_mb",
+        "qpalm_solved", "qpalm_time", "qpalm_iters", "qpalm_status", "qpalm_obj", "qpalm_peak_ram_mb",
+        "osqp_solved",  "osqp_time",  "osqp_iters",  "osqp_status",  "osqp_obj",  "osqp_peak_ram_mb",
     ]
 
     n_problems = len(QPS)
@@ -564,73 +665,62 @@ def main() -> None:
             print(f"\n[{idx:3d}/{n_problems}]  {name}")
             row: dict = {"name": name}
 
-            # Parse SIF once; reused by all three solvers.
-            # All solve times are Python wall-clock from after this parse step.
-            try:
-                pd_data = ssn_pmm_bind.parse_sif(sif_path)
-            except Exception as e:
-                print(f"  parse   : ERROR — {e}")
-                row.update(
-                    ssn_status=-99,  ssn_solved=0,  ssn_time=np.inf,  ssn_iters=np.inf,  ssn_obj=np.nan,
-                    qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf, qpalm_iters=np.inf, qpalm_obj=np.nan,
-                    osqp_status=-99,  osqp_solved=0,  osqp_time=np.inf,  osqp_iters=np.inf,  osqp_obj=np.nan,
-                )
-                writer.writerow(row)
-                fh.flush()
-                continue
-
             # ---- SSN-PMM ------------------------------------------------
-            # Wall-clock covers: dict→Eigen copy, Problem + SSN_PMM setup
-            # (Ruiz scaling + initial Cholesky of Q), and all PMM/SSN iterations.
-            try:
-                t0 = time.perf_counter()
-                r  = ssn_pmm_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
-                t1 = time.perf_counter()
-                row["ssn_status"] = r["status"]
-                row["ssn_solved"] = int(r["status"] == 0)
-                row["ssn_time"]   = t1 - t0
-                row["ssn_iters"]  = r["ssn_iter"]
-                row["ssn_obj"]    = r["obj_val"]
+            ssn_out = _run_isolated(_worker_ssn_mm, (sif_path, tol, time_limit, max_iter))
+            if "error" in ssn_out:
+                print(f"  SSN-PMM : ERROR — {ssn_out['error']}")
+                row.update(ssn_status=-99, ssn_solved=0, ssn_time=np.inf, ssn_iters=np.inf,
+                           ssn_obj=np.nan, ssn_peak_ram_mb=ssn_out.get("ram", float("nan")))
+            else:
+                r = ssn_out["res"]
+                row["ssn_status"]      = r["status"]
+                row["ssn_solved"]      = int(r["status"] == 0)
+                row["ssn_time"]        = r["solving_time"]
+                row["ssn_iters"]       = r["ssn_iter"]
+                row["ssn_obj"]         = r["obj_val"]
+                row["ssn_peak_ram_mb"] = ssn_out["ram"]
                 status_str = "OPTIMAL" if r["status"] == 0 else f"status={r['status']}"
-                print(f"  SSN-PMM : {status_str:12s}  t = {t1 - t0:.3f} s  "
-                      f"iters = {r['ssn_iter']}  obj = {r['obj_val']:.6g}")
-            except Exception as e:
-                print(f"  SSN-PMM : ERROR — {e}")
-                row.update(ssn_status=-99, ssn_solved=0, ssn_time=np.inf, ssn_iters=np.inf, ssn_obj=np.nan)
+                print(f"  SSN-PMM : {status_str:12s}  t = {r['solving_time']:.3f} s  "
+                      f"iters = {r['ssn_iter']}  obj = {r['obj_val']:.6g}  "
+                      f"RAM = {ssn_out['ram']:.0f} MB")
 
             # ---- QPALM --------------------------------------------------
-            # Wall-clock covers: Solver() setup (Ruiz scaling + LDLT factorisation)
-            # and all ADMM iterations.
-            try:
-                r = run_qpalm(pd_data, tol, time_limit)
-                row["qpalm_status"] = r["status"]
-                row["qpalm_solved"] = int(r["status"] == QPALM_SOLVED)
-                row["qpalm_time"]   = r["solving_time"]
-                row["qpalm_iters"]  = r["iter"]
-                row["qpalm_obj"]    = r["obj_val"]
+            qpalm_out = _run_isolated(_worker_qpalm_mm, (sif_path, tol, time_limit))
+            if "error" in qpalm_out:
+                print(f"  QPALM   : ERROR — {qpalm_out['error']}")
+                row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf, qpalm_iters=np.inf,
+                           qpalm_obj=np.nan, qpalm_peak_ram_mb=qpalm_out.get("ram", float("nan")))
+            else:
+                r = qpalm_out["res"]
+                row["qpalm_status"]      = r["status"]
+                row["qpalm_solved"]      = int(r["status"] == QPALM_SOLVED)
+                row["qpalm_time"]        = r["solving_time"]
+                row["qpalm_iters"]       = r["iter"]
+                row["qpalm_obj"]         = r["obj_val"]
+                row["qpalm_peak_ram_mb"] = qpalm_out["ram"]
                 status_str = "OPTIMAL" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
                 print(f"  QPALM   : {status_str:12s}  t = {r['solving_time']:.3f} s  "
-                      f"iters = {r['iter']}  obj = {r['obj_val']:.6g}")
-            except Exception as e:
-                print(f"  QPALM   : ERROR — {e}")
-                row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf, qpalm_iters=np.inf, qpalm_obj=np.nan)
+                      f"iters = {r['iter']}  obj = {r['obj_val']:.6g}  "
+                      f"RAM = {qpalm_out['ram']:.0f} MB")
 
             # ---- OSQP ---------------------------------------------------
-            # Wall-clock covers: setup() (scaling + factorisation) and all
-            # ADMM iterations.
-            try:
-                r = run_osqp(pd_data, tol, time_limit)
-                row["osqp_status"] = r["status"]
-                row["osqp_solved"] = int(r["status"] == OSQP_SOLVED)
-                row["osqp_time"]   = r["solving_time"]
-                row["osqp_iters"]  = r["iter"]
-                row["osqp_obj"]    = r["obj_val"]
+            osqp_out = _run_isolated(_worker_osqp_mm, (sif_path, tol, time_limit))
+            if "error" in osqp_out:
+                print(f"  OSQP    : ERROR — {osqp_out['error']}")
+                row.update(osqp_status=-99, osqp_solved=0, osqp_time=np.inf, osqp_iters=np.inf,
+                           osqp_obj=np.nan, osqp_peak_ram_mb=osqp_out.get("ram", float("nan")))
+            else:
+                r = osqp_out["res"]
+                row["osqp_status"]      = r["status"]
+                row["osqp_solved"]      = int(r["status"] == OSQP_SOLVED)
+                row["osqp_time"]        = r["solving_time"]
+                row["osqp_iters"]       = r["iter"]
+                row["osqp_obj"]         = r["obj_val"]
+                row["osqp_peak_ram_mb"] = osqp_out["ram"]
                 status_str = "OPTIMAL" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
                 print(f"  OSQP    : {status_str:12s}  t = {r['solving_time']:.3f} s  "
-                      f"iters = {r['iter']}  obj = {r['obj_val']:.6g}")
-            except Exception as e:
-                print(f"  OSQP    : ERROR — {e}")
-                row.update(osqp_status=-99, osqp_solved=0, osqp_time=np.inf, osqp_iters=np.inf, osqp_obj=np.nan)
+                      f"iters = {r['iter']}  obj = {r['obj_val']:.6g}  "
+                      f"RAM = {osqp_out['ram']:.0f} MB")
 
             writer.writerow(row)
             fh.flush()

@@ -8,6 +8,7 @@
 #include "SSN_PMM.hpp"
 #include "Problem.hpp"
 #include "MpsParser.hpp"
+#include "PDEgenerator.hpp"
 
 namespace py = pybind11;
 using T      = double;
@@ -209,6 +210,67 @@ py::dict solve_from_data(const py::dict& pd_dict,
 }
 
 // -----------------------------------------------------------------------
+// Helper: PDPMMdata<T> → Python dict (same format as parse_sif output)
+// -----------------------------------------------------------------------
+static py::dict pdpmm_to_dict(const PDPMMdata<T>& pd) {
+    py::dict out;
+    out["n"] = pd.n;
+    out["m"] = pd.m;
+    out["l"] = pd.l;
+
+    for (auto& [M, key] : std::vector<std::pair<const SpMat*, std::string>>{
+            {&pd.Q, "Q"}, {&pd.A, "A"}, {&pd.B, "B"}}) {
+        py::dict d = eigen_sparse_to_dict(*M, key);
+        for (auto item : d) out[item.first] = item.second;
+    }
+
+    out["c"]         = eigen_vec_to_array(pd.c);
+    out["b"]         = eigen_vec_to_array(pd.b);
+    out["lx"]        = eigen_vec_to_array(pd.lx);
+    out["ux"]        = eigen_vec_to_array(pd.ux);
+    out["lw"]        = eigen_vec_to_array(pd.lw);
+    out["uw"]        = eigen_vec_to_array(pd.uw);
+    out["obj_const"] = (double)pd.obj_const;
+    return out;
+}
+
+// -----------------------------------------------------------------------
+// generate_pde_problem: build a PDE-constrained QP from the C++ generators.
+//
+// choice = "poisson"  – Poisson control with L1/L2 regularisation
+// choice = "convdiff" – Convection-diffusion control with L1/L2 regularisation
+//
+// Returns the same dict format as parse_sif(), so it can be passed directly
+// to solve_from_data() and pdpmm_to_qpalm() in benchmark_pde.py.
+// -----------------------------------------------------------------------
+py::dict generate_pde_problem(const std::string& choice) {
+    if (choice == "poisson")
+        return pdpmm_to_dict(pdegen::make_poisson_L1L2_control_default<T>());
+    if (choice == "convdiff")
+        return pdpmm_to_dict(pdegen::make_convdiff_L1L2_control_default<T>());
+    throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
+}
+
+// -----------------------------------------------------------------------
+// generate_pde_problem_params: parametric Poisson problem generator.
+//
+// choice  = "poisson"
+// nc      = grid exponent (grid size = 2^nc + 1 per direction)
+// alpha1  = L1 regularisation weight
+// alpha2  = L2 regularisation weight (0 is valid)
+// -----------------------------------------------------------------------
+py::dict generate_pde_problem_params(const std::string& choice,
+                                      int nc, double alpha1, double alpha2) {
+    if (choice == "poisson")
+        return pdpmm_to_dict(
+            pdegen::make_poisson_L1L2_control<T>(nc, (T)alpha1, (T)alpha2));
+    if (choice == "convdiff")
+        return pdpmm_to_dict(
+            pdegen::make_convdiff_L1L2_control<T>(nc, (T)alpha1, (T)alpha2));
+    throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
+}
+
+// -----------------------------------------------------------------------
 // Module
 // -----------------------------------------------------------------------
 PYBIND11_MODULE(ssn_pmm_bind, m) {
@@ -232,6 +294,25 @@ Returns a dict with keys: status, obj_val, solving_time, pmm_iter, ssn_iter, kry
 status == 0  → optimal solution found
 status <  0  → infeasibility detected
 status >  0  → iteration / time limit reached)");
+
+    m.def("generate_pde_problem", &generate_pde_problem,
+          py::arg("choice"),
+          R"(Generate a PDE-constrained QP using the built-in C++ problem generators.
+
+choice = 'poisson'  – Poisson control with L1/L2 regularisation and control bounds
+choice = 'convdiff' – Convection-diffusion control with L1/L2 regularisation and control bounds
+
+Returns the same dict format as parse_sif(), so the result can be passed
+directly to solve_from_data() and used with pdpmm_to_qpalm().)");
+
+    m.def("generate_pde_problem_params", &generate_pde_problem_params,
+          py::arg("choice"), py::arg("nc"), py::arg("alpha1"), py::arg("alpha2"),
+          R"(Generate a parametric PDE-constrained QP with explicit parameters.
+
+choice = 'poisson'  or  'convdiff'
+nc     = grid exponent (grid size = 2^nc + 1 per direction; n_display = 2*(2^nc+1)^2)
+alpha1 = L1 regularisation weight
+alpha2 = L2 regularisation weight (0 is valid))");
 
     m.def("solve_from_data", &solve_from_data,
           py::arg("pd"),

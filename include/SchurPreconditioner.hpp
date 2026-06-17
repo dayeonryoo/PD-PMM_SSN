@@ -28,11 +28,11 @@ public:
     SchurPreconditioner(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const BoolArr& active_K, T mu)
         : G_(&G), G_tr_(&G_tr), H_diag_(&H_diag), active_K_(&active_K), mu_(mu) {}
 
-    // prec_pattern_changed must be true whenever G's sparsity structure or active_K changes:
+    // prec_pattern_changed=true whenever G's sparsity structure or active_K changes:
     // P = G E G^T + (1/mu) I, where E_ii = 1/H_diag_i if active_K_i else 0.
     // Both G's column structure and which entries of E are nonzero determine P's sparsity.
     // G E G^T is independent of mu (active_K entries have H_diag = 1/rho, not mu).
-    // So when only mu changes, we skip the expensive G*E*G^T product and only update
+    // So when only mu changes, we skip the G*E*G^T product and only update
     // the (1/mu)I diagonal in P_ before refactorizing.
     //
     // active_W: full boolean mask of active W constraints (size l); used for SMW rank detection.
@@ -48,21 +48,26 @@ public:
         active_W_ = &active_W;
         B_rm_     = &B_rm;
         mu_       = mu;
+
+        // Detect if the size of G, the sparsity of G, or the active_K mask has changed since the last factorization.
         bool size_changed = (s_current_ != static_cast<int>(G.rows()));
         if (!pattern_analyzed_ || prec_pattern_changed || size_changed)
             pattern_dirty_ = true;
+
+        // Detect if the sparsity pattern of G has changed since the last factorization.
         if (prec_pattern_changed || size_changed)
             base_dirty_ = true;
+
+        // Detect if the numerical values of G or H_diag have changed since the last factorization.
         rebuild_ = rebuild || size_changed;
-        // M_rows_ = number of equality-constraint (A) rows = G.rows() - n_active_W.
-        // A is constant, so this is computed once on the first call.
+
+        // M_rows_ = number of equality-constraint (A) rows = G.rows() - n_active_W; constant.
         if (M_rows_ < 0 && static_cast<int>(G.rows()) > 0)
             M_rows_ = static_cast<int>(G.rows()) - static_cast<int>(active_W.count());
     }
 
     template <typename MatrixType>
     SchurPreconditioner& compute(const MatrixType&) {
-        // Also rebuild when only mu changed: G E G^T is reused, only diagonal shifts.
         bool mu_changed = initialized_ && (mu_ != mu_at_last_fact_);
         if (!initialized_ || rebuild_ || mu_changed) {
             build();
@@ -133,7 +138,7 @@ public:
     // Force the next build() to skip SMW and fully recompute G E G^T from scratch.
     void force_full_rebuild() { skip_smw_ = true; base_dirty_ = true; }
 
-    // Called by the solver when SMW was used but CG failed (Tier-2 rebuild triggered).
+    // Called by the solver when SMW was used but CG failed.
     // Suppresses SMW after kMaxSmwFailStreak consecutive failures, or if the cumulative
     // failure rate exceeds kMaxSmwFailRate once kMinSmwAttempts have been made.
     void record_smw_rebuild() { smw_fail_streak_++; smw_fail_total_++; }
@@ -156,8 +161,6 @@ private:
     }
 
     // SMW Setup Phase. Returns true and arms use_smw_ iff 0 < h+p+q <= threshold.
-    // Snapshots are NOT updated on success so that the cumulative rank against P_old
-    // is measured correctly across consecutive SMW iterations.
     bool try_build_smw() {
         if (skip_smw_) { skip_smw_ = false; return false; }
         if (smw_fail_streak_ >= kMaxSmwFailStreak) return false;
@@ -200,17 +203,14 @@ private:
         const int q = static_cast<int>(added_new_rows_.size());
         const int p = static_cast<int>(delta_K_idx_.size());
         const int rank = h + p + q;
-
-        // const int threshold = std::min(150, std::max(1, static_cast<int>(0.1 * s_old)));
-        const int threshold = 10;
+        const int threshold = 5;
         if (rank == 0 || rank > threshold) return false;
 
         h_ = h; p_ = p; q_ = q; s_old_ = s_old;
 
         // ---- Build V_plus_ (s_old × q) via sparse column accumulation ----
-        // For each added W constraint j: V_plus_[:,j] = sum_{i in B_j, active_K[i]}
-        //   (b_ji / H_diag[i]) * G_old_[:,i].
-        // Reuse a single N-length scratch vector, touching only nnz(b_j) entries.
+        // For each added W constraint j: 
+        //   V_plus_[:,j] = sum_{i in B_j, active_K[i]} (b_ji / H_diag[i]) * G_old_[:,i].
         V_plus_.setZero(s_old, q);
         {
             Vec e_new_b = Vec::Zero(N);
@@ -268,7 +268,6 @@ private:
         }
 
         // ---- Compute Y_all_ = P_old^-1 V_all (s_old × rank), column by column ----
-        // Avoids materializing the full dense V_all_ (s_old × rank) matrix.
         // E_- solves: toggle one entry at a time (no full setZero).
         // U solves: toggle G_old_ column nonzeros.
         // V_+ solves: dense block multi-RHS.
@@ -299,7 +298,6 @@ private:
         }
 
         // ---- Capacitance matrix S_Lambda = M_sub - V_all^T Y_all, structured ----
-        // Avoids materializing V_all_ entirely.
         Mat S_Lambda = M_sub;
 
         // Rows 0..h-1: -(E_-)^T Y_all_ = -Y_all_.row(del_k)  (row extractions, O(h*rank))
@@ -328,24 +326,21 @@ private:
         s_current_ = s_new;
         use_smw_   = true;
         smw_count_++;
-        // std::cout << "Using SMW update for P: h=" << h << ", p=" << p << ", q=" << q << ", rank=" << rank << "\n";
         return true;
     }
 
     // Build P = G E G^T + (1/mu) I.
     // Tries SMW first; falls back to full rebuild if SMW is inapplicable.
-    // If base_dirty_: recompute P_base_ = G E G^T (expensive sparse product), then build P_.
-    // If only mu changed: update the (1/mu)I diagonal of P_ in-place (cheap), then refactorize.
+    // If base_dirty_: recompute P_base_ = G E G^T, then build P_.
+    // If only mu changed: update the (1/mu)I diagonal of P_ in-place, then refactorize.
     void build() {
         use_smw_ = false;
 
-        // Fast path: reuse cached llt_ via low-rank SMW correction.
-        // Snapshots reflect the last full factorization and are NOT updated on SMW success,
-        // so cumulative rank is computed correctly across consecutive SSN iterations.
+        // Case 1. Reuse cached llt_ via low-rank SMW correction.
         if (initialized_ && info_ == Eigen::Success && try_build_smw())
             return;
 
-        // Slow path: full rebuild of P and numeric factorization.
+        // Case 2. Full rebuild of P and numeric factorization.
         const SpMat& G       = *G_;
         const SpMat& G_tr    = *G_tr_;
         const Vec&   H_diag  = *H_diag_;
@@ -361,7 +356,6 @@ private:
 
         if (base_dirty_) {
             // Rebuild G E G^T: E_ii = 1/H_diag(i) if active_K(i), else 0.
-            // active_K(i) implies diag_P_K(i)=1, so H_diag(i) = 1/rho (independent of mu).
             std::vector<Triplet> trips;
             trips.reserve(n);
             for (Eigen::Index i = 0; i < n; ++i)
@@ -371,34 +365,30 @@ private:
             E.setFromTriplets(trips.begin(), trips.end());
             E.makeCompressed();
 
-            P_base_ = G * E * G_tr;
+            P_ = G * E * G_tr;
             base_dirty_ = false;
 
-            P_ = P_base_;
             for (Eigen::Index i = 0; i < s; ++i)
                 P_.coeffRef(i, i) += T(1) / mu_;
             P_.makeCompressed();
         } else {
             // Only mu changed: shift the (1/mu)I diagonal by delta.
-            // P_base_ is unchanged; all diagonal entries of P_ already exist from prior build.
             const T delta = T(1) / mu_ - T(1) / mu_at_last_fact_;
             for (Eigen::Index i = 0; i < s; ++i)
                 P_.coeffRef(i, i) += delta;
         }
 
-        // Symbolic analysis only when P's sparsity pattern may have changed.
+        // Symbolic analysis only when P's sparsity pattern has changed.
         if (pattern_dirty_) {
             llt_.analyzePattern(P_);
             pattern_analyzed_ = true;
             pattern_dirty_ = false;
-            // std::cout << "Symbolic analysis done for P with nnz = " << P_.nonZeros() << "\n";
         }
         llt_.factorize(P_);
         info_ = llt_.info();
         fact_count_++;
         mu_at_last_fact_ = mu_;
         s_current_ = static_cast<int>(G.rows());
-        // std::cout << "Numeric factorization done for P with nnz = " << P_.nonZeros() << ", info = " << info_ << "\n";
 
         // Snapshot for next SMW attempt: tracks the last fully-factorized state.
         snapshot_state();
@@ -425,7 +415,6 @@ private:
     int  M_rows_           = -1;
 
     // ---- Factorization data (full rebuild path) ----
-    SpMat P_base_;
     SpMat P_;
     Eigen::SimplicialLLT<SpMat> llt_;
     Eigen::ComputationInfo info_ = Eigen::Success;

@@ -22,12 +22,12 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 // ----------------------- Solving individual problem -----------------------
-/*
+
 int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
-    std::string name = "DUAL2";
+    std::string name = "QCAPRI";
 
     std::string filename = root + name + ".SIF";
 
@@ -38,8 +38,8 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-6;
-    int max_iter = 100;
-    double time_limit = 10.0; // in seconds
+    int max_iter = 100000;
+    double time_limit = 1800.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
@@ -75,7 +75,7 @@ int main() {
 
     return 0;
 }
-*/
+
 
 // ----------------------- Running Netlib problems -----------------------
 void run_Netlib() {
@@ -404,7 +404,7 @@ void run_Netlib_infeas() {
 }
 
 // ----------------------- Solving a set of problems -----------------------
-
+/*
 int main() {
 
     // run_Netlib_infeas();
@@ -645,17 +645,18 @@ int main() {
 
     // Parameters
     T tol = 1e-6;
-    int max_iter = 100000;
-    double time_limit = 10.0; // in seconds
+    int max_iter = 100000000;
+    double time_limit = 3600.0; // in seconds
     
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0601mm_refact.csv";
+    std::string csv_path = root + "results/0615mm_5.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
+
         // Build full path and check if file exists
         std::string filename = root + "data/maros_meszaros/" + name + ".SIF";
         if (!std::filesystem::exists(filename)) {
@@ -735,3 +736,4 @@ int main() {
 
     return 0;
 }
+*/

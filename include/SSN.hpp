@@ -17,6 +17,8 @@ public:
     using BoolArr = Eigen::Array<bool, Eigen::Dynamic, 1>;
     using Triplet = Eigen::Triplet<T>;
 
+    struct Breakpoint { T t; T slope_change; };
+
     // Inputs
     const int Q_info;
     const Vec& Q_diag;
@@ -42,22 +44,16 @@ public:
     int n_active_W, n_inactive_W;
     SpMat B_active_W, B_inactive_W, G, G_tr;
 
-    // Row-major B for O(nnz_row) active-row access when rebuilding G.
+    // B_rm: Row-major B for O(nnz_row) active-row access when rebuilding G.
     // G_A_trips_: A's contribution to G (rows 0..M-1), computed once (A is const).
     RowMajorSpMat B_rm;
     std::vector<Triplet> G_A_trips_;
 
     // Outputs
-    int opt;
-    int iter;
-    T tol_achieved;
-    int SSN_iter;
-    T obj_val;
-    int Krylov_iter = 0;
-    int fact = 0;
-    int smw_count = 0;
-    int linesearch_fail = 0;
-    int Krylov_fail = 0;
+    int opt, iter, SSN_iter;
+    T tol_achieved, obj_val;
+    int Krylov_iter = 0, fact = 0, smw_count = 0;
+    int linesearch_fail = 0, Krylov_fail = 0;
     bool Krylov_converged = true;
 
     // Backtracking linesearch parameters
@@ -87,10 +83,25 @@ public:
     Vec prev_dx_primal_;
     Vec A_tr_y1_; // cached A^T y1, recomputed once per PMM iteration in update_SSN_system
 
+    // Pre-allocated scratch vectors for solve_SSN / exact_line_search hot loops.
+    Vec Ax_ssn_, Bx_ssn_;                     // size M, l (running SpMV products in SSN)
+    Vec x_cur_, y2_cur_;                      // size N, l (SSN working iterates)
+    Vec u_, v_;                               // size N, l
+    Vec new_diag_P_K_, dist_K_u_;             // size N
+    Vec new_diag_P_W_, dist_W_v_;             // size l
+    Vec y2_active_W_, y2_inactive_W_;         // size n_active_W, n_inactive_W
+    Vec dist_W_v_active_, dist_W_v_inactive_; // size n_active_W, n_inactive_W
+    Vec dy2_inactive_W_;                              // size n_inactive_W
+    Vec r1_, r2_;                             // size N, M+n_active_W
+    Vec dxdy_;                                        // size N+M+n_active_W
+    Vec dy2_;                                         // size l
+    Vec Adx_, Bdx_;                           // size M, l
+    Vec grad_L_;                                      // size N+l
+    std::vector<Breakpoint> breakpoints_;             // reused across exact_line_search calls
+
     // Stored LDLT factorization for the KKT system [-H, G^T; G, (1/mu)I].
     // ldlt_pattern_dirty_: true when K's dimension changed (n_active_W changed), requires analyzePattern.
     // ldlt_numeric_dirty_: true when K's values changed (H_diag or G rows swapped), requires factorize.
-    // Separating these avoids re-running the expensive AMD reordering when only row values swap.
     Eigen::SimplicialLDLT<SpMat> ldlt_;
     bool ldlt_pattern_dirty_ = true;
     bool ldlt_numeric_dirty_ = true;
@@ -102,22 +113,12 @@ public:
     SpMat K_ldlt_;
     bool K_ldlt_built_ = false;
 
-    // Primal N×N direct solve: factors P = H + mu*(A^T A + B_active_W^T B_active_W).
-    // Cheaper than the (N+M+n_act)×(N+M+n_act) KKT system when N < M+l.
-    // A^T A is constant (cached once); only B_active_W^T B_active_W changes with active_W.
-    // Pattern dirty only when B_active_W structure changes; numeric dirty when H_diag or mu changes.
-    Eigen::SimplicialLLT<SpMat> primal_llt_;
-    SpMat A_tr_A_;           // cached A^T A (never changes)
-    bool primal_pattern_dirty_ = true;
-    bool primal_numeric_dirty_ = true;
-
     SSN(const int Q_info_, const Vec& Q_diag_, const SpMat& L_, const SpMat& L_tr_,
         const SpMat& A_, const SpMat& B_, const SpMat& A_tr_, const SpMat& B_tr_,
         const Vec& c_, const Vec& b_, const Vec& D1A_diag_, const Vec& D1B_diag_, const Vec& D2_diag_,
         const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_, const T obj_const_,
         int n_, int m_, int N_, int M_, int l_,
-        T SSN_tol_, int SSN_max_in_iter_,
-        T eps_pinf_, T eps_dinf_)
+        T SSN_tol_, int SSN_max_in_iter_, T eps_pinf_, T eps_dinf_)
     : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
       A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
       c(c_), b(b_), D1A_diag(D1A_diag_), D1B_diag(D1B_diag_), D2_diag(D2_diag_),
@@ -158,10 +159,8 @@ public:
         delta_y1 = delta_y1_;
         delta_z = delta_z_;
         ldlt_numeric_dirty_ = true;    // mu, rho may have changed
-        primal_numeric_dirty_ = true;  // mu, rho may have changed
         A_tr_y1_ = A_tr * y1; // y1 is fixed for the entire SSN run; cache A^T y1 once
     }
-
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
     }
@@ -171,7 +170,6 @@ public:
     static inline Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
         return (v - proj(v, lower, upper));
     }
-    // Single pass over u: computes Clarke subgradient and distance simultaneously.
     static void compute_subgrad_and_dist(const Vec& u, const Vec& lower, const Vec& upper,
                                          bool include_bd, Vec& subgrad, Vec& dist) {
         const int sz = static_cast<int>(u.size());
@@ -189,10 +187,9 @@ public:
     Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
     bool is_P_unchanged(const Vec& diag_P, const Vec& new_diag_P);
     void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
-    void build_B_active_inactive(const SpMat& B, const BoolArr& mask, SpMat& B_active, SpMat& B_inactive);
     void rebuild_G();
     SpMat scale_columns(const SpMat& M, const Vec& d);
-    Vec retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask);
+    void retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
     bool form_schur(const SpMat& G);
     Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed);
@@ -202,7 +199,8 @@ public:
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                                const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
-                        const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);
+                        const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx,
+                        const Vec& dist_K_u, const Vec& dist_W_v);
     void solve_SSN(const T eps);
 
 };
