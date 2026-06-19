@@ -4,13 +4,13 @@ Benchmark SSN-PMM vs QPALM vs OSQP on PDE-constrained QP problems.
 Four named tables are produced:
 
   poisson_vary_n    Poisson control: varying grid size n and L1 reg alpha1
-                    (alpha2 = 1e-2 fixed)
+                    (alpha2 = 1e-4 fixed)
 
   poisson_vary_a2   Poisson control: varying L2 reg alpha2
                     ((n, alpha1) = (1.32e5, 1e-4) fixed)
 
   convdiff_vary_n   Conv-diff control: varying grid size n and L1 reg alpha1
-                    (alpha2 = 1e-2 fixed)
+                    (alpha2 = 1e-4 fixed)
 
   convdiff_vary_a2  Conv-diff control: varying L2 reg alpha2
                     ((n, alpha1) = (1.32e5, 1e-4) fixed)
@@ -128,17 +128,17 @@ class _PeakRSS:
 # Sweep parameters
 # ---------------------------------------------------------------------------
 
-POISSON_VARY_N_NC     = [6, 7, 8, 9, 10]
-POISSON_VARY_N_ALPHA1 = [1e-2, 1e-4, 1e-6]
-POISSON_VARY_N_ALPHA2 = 1e-2
+POISSON_VARY_N_NC     = [10]
+POISSON_VARY_N_ALPHA1 = [1e-4]
+POISSON_VARY_N_ALPHA2 = 1e-4
 
 POISSON_VARY_A2_NC     = 7
 POISSON_VARY_A2_ALPHA1 = 1e-4
 POISSON_VARY_A2_ALPHA2 = [1e-1, 1e-2, 1e-4, 1e-6, 0.0]
 
-CONVDIFF_VARY_N_NC     = [6, 7, 8, 9, 10]
-CONVDIFF_VARY_N_ALPHA1 = [1e-2, 1e-4, 1e-6]
-CONVDIFF_VARY_N_ALPHA2 = 1e-2
+CONVDIFF_VARY_N_NC     = [6, 7, 8, 9, 10, 11]
+CONVDIFF_VARY_N_ALPHA1 = [1e-4]
+CONVDIFF_VARY_N_ALPHA2 = 1e-4
 
 CONVDIFF_VARY_A2_NC     = 8
 CONVDIFF_VARY_A2_ALPHA1 = 1e-4
@@ -155,7 +155,7 @@ OSQP_SOLVED  = 1
 # ---------------------------------------------------------------------------
 
 def _n_display(nc: int) -> int:
-    """Paper's 'n' = 2*(2^nc+1)^2 (state + control, before u+/u- split)."""
+    """n = 2*(2^nc+1)^2 (state + control, before u+/u- split)."""
     n1d = (1 << nc) + 1
     return 2 * n1d * n1d
 
@@ -176,7 +176,7 @@ def _fmt_alpha(a: float) -> str:
 def _fmt_ssn(r: dict) -> str:
     if r.get("ssn_status") != 0:
         return "FAIL"
-    return f"{r['pmm_iter']}({r['ssn_iter']}){{{r['krylov_iter']}}}"
+    return f"{r['pmm_iter']}({r['ssn_iter']})[{r['pmm_tol_achieved']:.2e}]"
 
 
 def _fmt_qpalm(r: dict) -> str:
@@ -290,6 +290,7 @@ def run_qpalm(pd: dict, tol: float, time_limit: float) -> dict:
         "obj_val":      float(info.objective),
         "solving_time": t1 - t0,
         "iter":         int(info.iter),
+        "tol_achieved": max(float(info.pri_res_norm), float(info.dua_res_norm)),
     }
 
 
@@ -315,6 +316,7 @@ def run_osqp(pd: dict, tol: float, time_limit: float) -> dict:
         "obj_val":      float(res.info.obj_val),
         "solving_time": t1 - t0,
         "iter":         int(res.info.iter),
+        "tol_achieved": max(float(res.info.prim_res), float(res.info.dual_res)),
     }
 
 
@@ -382,7 +384,7 @@ def _run_isolated(target_func, args: tuple) -> dict:
 # ---------------------------------------------------------------------------
 
 def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
-            tol: float, time_limit: float, max_iter: int) -> dict:
+            tol: float, time_limit: float, max_iter: int, solvers: set) -> dict:
     """Solve one problem with all three solvers in isolated subprocesses."""
     n_disp = _n_display(nc)
     a2_str = f"{alpha2:.0e}" if alpha2 > 0 else "0"
@@ -393,65 +395,74 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
               "alpha1": alpha1, "alpha2": alpha2}
 
     # --- SSN-PMM ---
-    ssn_out = _run_isolated(_worker_ssn,
-                            (problem, nc, alpha1, alpha2, tol, time_limit, max_iter))
-    if "n_vars" in ssn_out:
-        print(f"  n_vars={ssn_out['n_vars']}")
-    if "error" in ssn_out:
-        print(f"    SSN-PMM  ERROR — {ssn_out['error']}")
-        result.update(ssn_status=-99, ssn_solved=0, ssn_time=float("inf"),
-                      pmm_iter=-1, ssn_iter=-1, krylov_iter=-1, ssn_obj=float("nan"),
-                      ssn_peak_ram_mb=ssn_out.get("ram", float("nan")))
-    else:
-        r = ssn_out["res"]
-        result.update(
-            ssn_status=r["status"], ssn_solved=int(r["status"] == 0),
-            ssn_time=r["solving_time"],
-            pmm_iter=r["pmm_iter"], ssn_iter=r["ssn_iter"], krylov_iter=r["krylov_iter"],
-            ssn_obj=r["obj_val"], ssn_peak_ram_mb=ssn_out["ram"],
-        )
-        ok = "OK" if r["status"] == 0 else f"status={r['status']}"
-        print(f"    SSN-PMM  {ok:8s}  t={r['solving_time']:.2f}s  "
-              f"{r['pmm_iter']}({r['ssn_iter']}){{{r['krylov_iter']}}}  "
-              f"RAM={ssn_out['ram']:.0f}MB")
+    if "ssn-pmm" in solvers:
+        ssn_out = _run_isolated(_worker_ssn,
+                                (problem, nc, alpha1, alpha2, tol, time_limit, max_iter))
+        if "n_vars" in ssn_out:
+            print(f"  n_vars={ssn_out['n_vars']}")
+        if "error" in ssn_out:
+            print(f"    SSN-PMM  ERROR — {ssn_out['error']}")
+            result.update(ssn_status=-99, ssn_solved=0, ssn_time=float("inf"),
+                          pmm_iter=-1, ssn_iter=-1, pmm_tol_achieved=float("nan"),
+                          ssn_obj=float("nan"),
+                          ssn_peak_ram_mb=ssn_out.get("ram", float("nan")))
+        else:
+            r = ssn_out["res"]
+            result.update(
+                ssn_status=r["status"], ssn_solved=int(r["status"] == 0),
+                ssn_time=r["solving_time"],
+                pmm_iter=r["pmm_iter"], ssn_iter=r["ssn_iter"],
+                pmm_tol_achieved=r["pmm_tol_achieved"],
+                ssn_obj=r["obj_val"], ssn_peak_ram_mb=ssn_out["ram"],
+            )
+            ok = "OK" if r["status"] == 0 else f"status={r['status']}"
+            print(f"    SSN-PMM  {ok:8s}  t={r['solving_time']:.2f}s  "
+                  f"{r['pmm_iter']}({r['ssn_iter']})[tol={r['pmm_tol_achieved']:.2e}]  "
+                  f"RAM={ssn_out['ram']:.0f}MB")
 
     # --- QPALM ---
-    qpalm_out = _run_isolated(_worker_qpalm,
-                              (problem, nc, alpha1, alpha2, tol, time_limit))
-    if "error" in qpalm_out:
-        print(f"    QPALM    ERROR — {qpalm_out['error']}")
-        result.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=float("inf"),
-                      qpalm_iter=-1, qpalm_obj=float("nan"),
-                      qpalm_peak_ram_mb=qpalm_out.get("ram", float("nan")))
-    else:
-        r = qpalm_out["res"]
-        result.update(
-            qpalm_status=r["status"], qpalm_solved=int(r["status"] == QPALM_SOLVED),
-            qpalm_time=r["solving_time"], qpalm_iter=r["iter"], qpalm_obj=r["obj_val"],
-            qpalm_peak_ram_mb=qpalm_out["ram"],
-        )
-        ok = "OK" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
-        print(f"    QPALM    {ok:8s}  t={r['solving_time']:.2f}s  iter={r['iter']}  "
-              f"RAM={qpalm_out['ram']:.0f}MB")
+    if "qpalm" in solvers:
+        qpalm_out = _run_isolated(_worker_qpalm,
+                                  (problem, nc, alpha1, alpha2, tol, time_limit))
+        if "error" in qpalm_out:
+            print(f"    QPALM    ERROR — {qpalm_out['error']}")
+            result.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=float("inf"),
+                          qpalm_iter=-1, qpalm_obj=float("nan"),
+                          qpalm_tol_achieved=float("nan"),
+                          qpalm_peak_ram_mb=qpalm_out.get("ram", float("nan")))
+        else:
+            r = qpalm_out["res"]
+            result.update(
+                qpalm_status=r["status"], qpalm_solved=int(r["status"] == QPALM_SOLVED),
+                qpalm_time=r["solving_time"], qpalm_iter=r["iter"], qpalm_obj=r["obj_val"],
+                qpalm_tol_achieved=r["tol_achieved"],
+                qpalm_peak_ram_mb=qpalm_out["ram"],
+            )
+            ok = "OK" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
+            print(f"    QPALM    {ok:8s}  t={r['solving_time']:.2f}s  iter={r['iter']}  "
+                  f"tol={r['tol_achieved']:.2e}  RAM={qpalm_out['ram']:.0f}MB")
 
     # --- OSQP ---
-    osqp_out = _run_isolated(_worker_osqp,
-                             (problem, nc, alpha1, alpha2, tol, time_limit))
-    if "error" in osqp_out:
-        print(f"    OSQP     ERROR — {osqp_out['error']}")
-        result.update(osqp_status=-99, osqp_solved=0, osqp_time=float("inf"),
-                      osqp_iter=-1, osqp_obj=float("nan"),
-                      osqp_peak_ram_mb=osqp_out.get("ram", float("nan")))
-    else:
-        r = osqp_out["res"]
-        result.update(
-            osqp_status=r["status"], osqp_solved=int(r["status"] == OSQP_SOLVED),
-            osqp_time=r["solving_time"], osqp_iter=r["iter"], osqp_obj=r["obj_val"],
-            osqp_peak_ram_mb=osqp_out["ram"],
-        )
-        ok = "OK" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
-        print(f"    OSQP     {ok:8s}  t={r['solving_time']:.2f}s  iter={r['iter']}  "
-              f"RAM={osqp_out['ram']:.0f}MB")
+    if "osqp" in solvers:
+        osqp_out = _run_isolated(_worker_osqp,
+                                 (problem, nc, alpha1, alpha2, tol, time_limit))
+        if "error" in osqp_out:
+            print(f"    OSQP     ERROR — {osqp_out['error']}")
+            result.update(osqp_status=-99, osqp_solved=0, osqp_time=float("inf"),
+                          osqp_iter=-1, osqp_obj=float("nan"),
+                          osqp_tol_achieved=float("nan"),
+                          osqp_peak_ram_mb=osqp_out.get("ram", float("nan")))
+        else:
+            r = osqp_out["res"]
+            result.update(
+                osqp_status=r["status"], osqp_solved=int(r["status"] == OSQP_SOLVED),
+                osqp_time=r["solving_time"], osqp_iter=r["iter"], osqp_obj=r["obj_val"],
+                osqp_tol_achieved=r["tol_achieved"],
+                osqp_peak_ram_mb=osqp_out["ram"],
+            )
+            ok = "OK" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
+            print(f"    OSQP     {ok:8s}  t={r['solving_time']:.2f}s  iter={r['iter']}  "
+                  f"tol={r['tol_achieved']:.2e}  RAM={osqp_out['ram']:.0f}MB")
 
     return result
 
@@ -468,7 +479,7 @@ _W_RAM  =  9
 
 _HDR_VARY_N = (
     f"{'n':>{_W_ID}}  {'α₁':<{_W_A1}}  "
-    f"{'PMM(SSN){Krylov}':<{_W_ITER}}  "
+    f"{'PMM(SSN)[tol]':<{_W_ITER}}  "
     f"{'QPALM iter':<{_W_ITER}}  "
     f"{'OSQP iter':<{_W_ITER}}  "
     f"{'PMM(s)':>{_W_T}}  {'QPALM(s)':>{_W_T}}  {'OSQP(s)':>{_W_T}}  "
@@ -477,7 +488,7 @@ _HDR_VARY_N = (
 
 _HDR_VARY_A2 = (
     f"{'α₂':<{_W_A1}}  "
-    f"{'PMM(SSN){Krylov}':<{_W_ITER}}  "
+    f"{'PMM(SSN)[tol]':<{_W_ITER}}  "
     f"{'QPALM iter':<{_W_ITER}}  "
     f"{'OSQP iter':<{_W_ITER}}  "
     f"{'PMM(s)':>{_W_T}}  {'QPALM(s)':>{_W_T}}  {'OSQP(s)':>{_W_T}}  "
@@ -530,9 +541,9 @@ def _print_vary_a2_table(rows: list[dict], title: str) -> None:
 
 CSV_FIELDS = [
     "problem", "nc", "n_display", "alpha1", "alpha2",
-    "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter", "krylov_iter", "ssn_time", "ssn_obj", "ssn_peak_ram_mb",
-    "qpalm_status", "qpalm_solved", "qpalm_iter", "qpalm_time", "qpalm_obj", "qpalm_peak_ram_mb",
-    "osqp_status",  "osqp_solved",  "osqp_iter",  "osqp_time",  "osqp_obj",  "osqp_peak_ram_mb",
+    "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter", "pmm_tol_achieved", "ssn_time", "ssn_obj", "ssn_peak_ram_mb",
+    "qpalm_status", "qpalm_solved", "qpalm_iter", "qpalm_tol_achieved", "qpalm_time", "qpalm_obj", "qpalm_peak_ram_mb",
+    "osqp_status",  "osqp_solved",  "osqp_iter",  "osqp_tol_achieved",  "osqp_time",  "osqp_obj",  "osqp_peak_ram_mb",
 ]
 
 
@@ -550,7 +561,7 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 
 def _run_vary_n(problem: str, nc_list: list[int], alpha1_list: list[float],
                 alpha2: float, tol: float, time_limit: float,
-                max_iter: int, result_dir: Path) -> list[dict]:
+                max_iter: int, result_dir: Path, solvers: set) -> list[dict]:
     rows = []
     n_total = len(nc_list) * len(alpha1_list)
     done = 0
@@ -559,20 +570,20 @@ def _run_vary_n(problem: str, nc_list: list[int], alpha1_list: list[float],
         for alpha1 in alpha1_list:
             done += 1
             print(f"\n[{label}  {done}/{n_total}]")
-            rows.append(run_one(problem, nc, alpha1, alpha2, tol, time_limit, max_iter))
+            rows.append(run_one(problem, nc, alpha1, alpha2, tol, time_limit, max_iter, solvers))
     _write_csv(result_dir / f"{label}.csv", rows)
     return rows
 
 
 def _run_vary_a2(problem: str, nc: int, alpha1: float, alpha2_list: list[float],
                  tol: float, time_limit: float, max_iter: int,
-                 result_dir: Path) -> list[dict]:
+                 result_dir: Path, solvers: set) -> list[dict]:
     rows = []
     n_total = len(alpha2_list)
     label = f"{problem}_vary_a2"
     for done, alpha2 in enumerate(alpha2_list, 1):
         print(f"\n[{label}  {done}/{n_total}]")
-        rows.append(run_one(problem, nc, alpha1, alpha2, tol, time_limit, max_iter))
+        rows.append(run_one(problem, nc, alpha1, alpha2, tol, time_limit, max_iter, solvers))
     _write_csv(result_dir / f"{label}.csv", rows)
     return rows
 
@@ -594,6 +605,9 @@ def main() -> None:
                         choices=ALL_TABLES, metavar="TABLE",
                         help=f"Which tables to run (default: all). "
                              f"Choices: {' '.join(ALL_TABLES)}")
+    parser.add_argument("--solver",     nargs="+",  default=["ssn-pmm", "qpalm", "osqp"],
+                        choices=["ssn-pmm", "qpalm", "osqp"], metavar="SOLVER",
+                        help="Solvers to run (default: all three). Choices: ssn-pmm qpalm osqp")
     args = parser.parse_args()
 
     root       = Path(args.root).resolve()
@@ -604,19 +618,20 @@ def main() -> None:
     time_limit = args.time_limit
     max_iter   = 10_000_000_000
     tables     = set(args.table)
+    solvers    = set(args.solver)
 
     # ---- poisson_vary_n ----------------------------------------------------
     if "poisson_vary_n" in tables:
         nc_list = args.nc or POISSON_VARY_N_NC
         rows = _run_vary_n("poisson", nc_list, POISSON_VARY_N_ALPHA1,
-                           POISSON_VARY_N_ALPHA2, tol, time_limit, max_iter, result_dir)
+                           POISSON_VARY_N_ALPHA2, tol, time_limit, max_iter, result_dir, solvers)
         _print_vary_n_table(rows,
             "Poisson control: varying n and α₁  (α₂ = 1e-2)")
 
     # ---- poisson_vary_a2 ---------------------------------------------------
     if "poisson_vary_a2" in tables:
         rows = _run_vary_a2("poisson", POISSON_VARY_A2_NC, POISSON_VARY_A2_ALPHA1,
-                            POISSON_VARY_A2_ALPHA2, tol, time_limit, max_iter, result_dir)
+                            POISSON_VARY_A2_ALPHA2, tol, time_limit, max_iter, result_dir, solvers)
         n_str = _fmt_n(_n_display(POISSON_VARY_A2_NC))
         _print_vary_a2_table(rows,
             f"Poisson control: varying α₂  (n={n_str}, α₁=1e-4)")
@@ -625,14 +640,14 @@ def main() -> None:
     if "convdiff_vary_n" in tables:
         nc_list = args.nc or CONVDIFF_VARY_N_NC
         rows = _run_vary_n("convdiff", nc_list, CONVDIFF_VARY_N_ALPHA1,
-                           CONVDIFF_VARY_N_ALPHA2, tol, time_limit, max_iter, result_dir)
+                           CONVDIFF_VARY_N_ALPHA2, tol, time_limit, max_iter, result_dir, solvers)
         _print_vary_n_table(rows,
             "Conv-diff control: varying n and α₁  (α₂ = 1e-2)")
 
     # ---- convdiff_vary_a2 --------------------------------------------------
     if "convdiff_vary_a2" in tables:
         rows = _run_vary_a2("convdiff", CONVDIFF_VARY_A2_NC, CONVDIFF_VARY_A2_ALPHA1,
-                            CONVDIFF_VARY_A2_ALPHA2, tol, time_limit, max_iter, result_dir)
+                            CONVDIFF_VARY_A2_ALPHA2, tol, time_limit, max_iter, result_dir, solvers)
         n_str = _fmt_n(_n_display(CONVDIFF_VARY_A2_NC))
         _print_vary_a2_table(rows,
             f"Conv-diff control: varying α₂  (n={n_str}, α₁=1e-4)")

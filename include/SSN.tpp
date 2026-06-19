@@ -680,6 +680,9 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
         if (t_u > eps_zero) breakpoints.push_back({t_u, dv_i > 0 ? +change : -change});
     }
 
+    // Trivial case
+    if (breakpoints.empty()) return T(1);
+
     // Sort breakpoints by t in ascending order.
     std::sort(breakpoints.begin(), breakpoints.end(), [](const Breakpoint& a, const Breakpoint& b){ return a.t < b.t; });
 
