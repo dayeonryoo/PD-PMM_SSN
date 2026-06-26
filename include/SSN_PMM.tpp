@@ -4,6 +4,7 @@
 #include <functional>
 #include <stdexcept>
 #include <chrono>
+#include <limits>
 #include "SSN.hpp"
 
 template <typename T>
@@ -122,7 +123,8 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
 
     const int max_ruiz_iter = 10;
     const T ruiz_tol = 1e-3;
-    const T eps = std::numeric_limits<T>::epsilon();
+    // Prevent sqrt of near-zero row/column max; limits max scale amplification to 1/sqrt(eps_machine).
+    const T eps = std::sqrt(std::numeric_limits<T>::epsilon());
 
     A_ruiz = problem.A;
     B_ruiz = problem.B;
@@ -280,8 +282,9 @@ void SSN_PMM<T>::set_L_from_LLT(const SpMat& Q) {
     }
 
     SpMat Q_full = is_full ? Q : SpMat(Q.template selfadjointView<Eigen::Lower>());
+    const T delta = std::sqrt(std::numeric_limits<T>::epsilon());
     for (int i = 0; i < Q_full.rows(); ++i) {
-        Q_full.coeffRef(i, i) += T(1e-10); // regularization for numerical stability
+        Q_full.coeffRef(i, i) += delta; // Regularization for numerical stability.
     }
     Q_full.makeCompressed();
 
@@ -294,11 +297,10 @@ void SSN_PMM<T>::set_L_from_LLT(const SpMat& Q) {
     }
 
     const Vec D = ldlt.vectorD();
-    for (int i = 0; i < D.size(); ++i) {
-        if (D(i) < -1e-2) {
-            std::cout << "D(" << i << "): " << D(i) << "\n";
-            throw std::invalid_argument("Q is not PSD.");
-        }
+    T min_D = D.minCoeff();
+    if (min_D < -delta) {
+        std::cerr << "[warn] Q has negative LDLT diagonal entry " << min_D
+                  << "; treating as PSD (clamping to 0).\n";
     }
 
     const int n = Q.rows();
@@ -707,15 +709,19 @@ void SSN_PMM<T>::printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const
 }
 
 template <typename T>
-void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int SSN_opt, T SSN_tol_achieved) {
+void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg) {
 
     T worst_res = new_res_norms.maxCoeff();
-    T worst_ratio = (new_res_norms.array() / (res_norms.array().abs() + 1e-12)).maxCoeff();
+    T worst_ratio = (new_res_norms.array() / (res_norms.array().abs() + T(100) * std::numeric_limits<T>::epsilon())).maxCoeff();
 
-    bool ssn_valid = (SSN_opt == 0);
-    bool stagnating = (worst_ratio > T(0.9)); 
+    bool ssn_valid = (ssn_opt == 0 || (ssn_opt == 2 && ssn_tol_arg < worst_res));
+    bool stagnating = (worst_ratio > T(0.9));
 
-    if (ssn_valid) {
+    if (ssn_opt == 0) {
+        mu = std::min(mu_limit, T(1.7) * mu);
+        rho = std::min(rho_limit, T(1.7) * rho);
+        ssn_tol = std::max(eps_limit, ssn_tol / std::pow(mu, T(0.3)));
+        /*
         if (!stagnating) {
             // GOOD PROGRESS: constant mu and rho, tighten SSN_tol.
             stagnation = 0;
@@ -733,12 +739,18 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
 
             // If highly stagnated, momentarily relax the inner tolerance to break the deadlock
             if (stagnation >= 5) {
-                SSN_tol = std::min({worst_res, T(10.0) * SSN_tol, T(1e-2)});
+                ssn_tol = std::min({worst_res, T(10.0) * ssn_tol, T(1e-2)});
             } else {
                 // Otherwise, tighten the inner tolerance.
                 SSN_tol = std::max(eps_limit, SSN_tol / std::pow(mu, T(0.35)));
             }
         }
+        */
+    } else if (ssn_opt == 2 && ssn_tol_arg < worst_res) {
+        // Max SSN iterations reached, but the inner tolerance was achieved and the PMM step made progress.
+        // mu = std::min(mu_limit, T(1.05) * mu);
+        // rho = std::min(rho_limit, T(1.05) * rho);
+        // Keep the inner tolerance the same
     } else {
         // SSN FAILED
         // The subproblem was too ill-conditioned or the tolerance was too tight.
@@ -749,7 +761,7 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
         rho = std::max(rho0, T(0.8) * rho);
         
         // Loosen the inner tolerance so the next PMM step can at least proceed.
-        SSN_tol = std::min({worst_res, T(10.0) * SSN_tol, T(1e-2)});
+        ssn_tol = std::min({worst_res, T(10.0) * ssn_tol, T(1e-2)});
     }
 }
 
@@ -771,7 +783,7 @@ bool SSN_PMM<T>::primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec
     T cert_inf = std::max({M > 0 ? inf_norm(cert_y1) : T(0),
                            l  > 0 ? inf_norm(cert_y2) : T(0),
                            inf_norm(cert_z)});
-    if (cert_inf < T(1e-12)) return false;
+    if (cert_inf < T(100) * std::numeric_limits<T>::epsilon()) return false;
 
     // Condition 2
     T lhs2 = T(0);
@@ -847,9 +859,9 @@ Solution<T> SSN_PMM<T>::solve() {
     
     // Initialize variables
     opt = -1;
-    PMM_iter = 0;
-    SSN_iter = 0;
-    SSN_tol_achieved = T(0);
+    pmm_iter = 0;
+    ssn_iter = 0;
+    ssn_tol_achieved = T(0);
 
     Vec delta_y1 = Vec::Zero(M);
     Vec delta_z = Vec::Zero(N);
@@ -865,14 +877,14 @@ Solution<T> SSN_PMM<T>::solve() {
     SSN<T> NS(Q_info, Q_diag, L, L_tr,
             A, B, A_tr, B_tr, c, b, D1A_diag, D1B_diag, D2_diag,
             lx, ux, lw, uw, obj_const, n, m, N, M, l,
-            SSN_tol, SSN_max_in_iter,
+            ssn_tol, ssn_max_in_iter,
             eps_pinf, eps_dinf);
 
     // Print header
     print_header(when, what);
 
     // SSN-PMM main loop
-    while (PMM_iter < max_iter) {
+    while (pmm_iter < max_iter) {
         // ----------------------------------------------
         // Structure:
         // Until (primal infeasibility, dual infeasibility, complementarity) < tol, do:
@@ -889,17 +901,17 @@ Solution<T> SSN_PMM<T>::solve() {
         // Call semismooth Newton method
         x_old_scratch_  = x;
         y2_old_scratch_ = y2;
-        NS.update_SSN_system(x, y1, y2, z, delta_y1, delta_z, mu, rho, gamma, SSN_iter);
-        NS.solve_SSN(SSN_tol);
+        NS.update_ssn_system(x, y1, y2, z, delta_y1, delta_z, mu, rho, gamma, ssn_iter);
+        NS.solve_ssn(ssn_tol);
 
-        SSN_iter += NS.iter;
-        SSN_tol_achieved = NS.tol_achieved;
+        ssn_iter += NS.iter;
+        ssn_tol_achieved = NS.tol_achieved;
         linesearch_fail += NS.linesearch_fail;
         if (NS.linesearch_fail > 0) consecutive_linesearch_fail++;
         else                        consecutive_linesearch_fail = 0;
 
         // If SSN was not "successful", discard the recent SSN and revert to solution from previous PMM iter.
-        if (SSN_iter >= SSN_max_iter) { // Max total SSN iteration is reached
+        if (ssn_iter >= ssn_max_iter) { // Max total SSN iteration is reached
             opt = 2;
             break;
         }
@@ -914,7 +926,7 @@ Solution<T> SSN_PMM<T>::solve() {
         Adx_scratch_.noalias() = Ax_scratch_ - Ax_old_scratch_;
         Bdx_scratch_.noalias() = Bx_scratch_ - Bx_old_scratch_;
 
-        if (SSN_tol_achieved <= T(1e4)) {
+        if (ssn_tol_achieved <= T(1e3) * pmm_tol_achieved) {
             // Accept full update: y2, y1, z.
             y2 = NS.y2;
 
@@ -936,27 +948,27 @@ Solution<T> SSN_PMM<T>::solve() {
 
         // Update PMM parameters based on the progress of residual norms and SSN solve quality.
         ResVec new_res_norms = compute_residual_norms_inf(Ax_scratch_, Bx_scratch_, Qx_scratch_);
-        PMM_tol_achieved = new_res_norms.maxCoeff();
-        update_PMM_parameters(res_norms, new_res_norms, NS.opt, SSN_tol_achieved);
+        pmm_tol_achieved = new_res_norms.maxCoeff();
+        update_PMM_parameters(res_norms, new_res_norms, NS.opt, ssn_tol_achieved);
         res_norms = new_res_norms; // for next iteration
-        PMM_tol_achieved = res_norms.maxCoeff();
+        pmm_tol_achieved = res_norms.maxCoeff();
 
         // Ruiz-descale and shrink to the original dimension (n, m, l) for printing.
         printable_sol(x, y1, y2, z); // (Modifies x_sol, y1_sol, y2_sol, z_sol.)
         obj_val = objective_value(x, Qx_scratch_);
 
         // Check termination criterion.
-        if (PMM_tol_achieved < tol) {
+        if (pmm_tol_achieved < tol) {
             opt = 0; // Optimal solution found
             if (when != PrintWhen::NEVER && when != PrintWhen::ALWAYS) {
-                print(PrintWhen::ALWAYS, what, PMM_iter, SSN_iter, NS.Krylov_iter, NS.fact, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail, NS.Krylov_fail);
+                print(PrintWhen::ALWAYS, what, pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, res_norms, ssn_tol_achieved, mu, rho, eps_bcl, ssn_tol, linesearch_fail, NS.krylov_fail);
             }
             break;
         }
 
         // Print current iteration info.
-        print(when, what, PMM_iter, SSN_iter, NS.Krylov_iter, NS.fact, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail, NS.Krylov_fail);
-        PMM_iter++;
+        print(when, what, pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, res_norms, ssn_tol_achieved, mu, rho, eps_bcl, ssn_tol, linesearch_fail, NS.krylov_fail);
+        pmm_iter++;
 
         // Carry Ax, Bx forward via O(1) pointer swap — no allocation.
         Ax_old_scratch_.swap(Ax_scratch_);
@@ -984,8 +996,8 @@ Solution<T> SSN_PMM<T>::solve() {
     if (opt == -2 || opt == -3) {
         obj_val = 1e20;
         res_norms = ResVec::Constant(1e20);
-        PMM_tol_achieved = 1e20;
-        SSN_tol_achieved = 1e20;
+        pmm_tol_achieved = 1e20;
+        ssn_tol_achieved = 1e20;
         x_sol = Vec::Zero(n);
         y1_sol = Vec::Zero(m);
         y2_sol = Vec::Zero(l);
@@ -995,11 +1007,11 @@ Solution<T> SSN_PMM<T>::solve() {
     auto solving_end = std::chrono::steady_clock::now();
     double solving_time = time_diff_ms(solving_start, solving_end) * 1e-3; // in seconds
 
-    Krylov_iter = NS.Krylov_iter;
+    krylov_iter = NS.krylov_iter;
     fact = NS.fact;
-    Krylov_fail = NS.Krylov_fail;
+    krylov_fail = NS.krylov_fail;
     ldlt_used = NS.ldlt_used;
 
-    print(when, what, PMM_iter, SSN_iter, Krylov_iter, fact, obj_val, res_norms, SSN_tol_achieved, mu, rho, eps_bcl, SSN_tol, linesearch_fail, Krylov_fail);
-    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, PMM_iter, SSN_iter, Krylov_iter, fact, NS.smw_count, PMM_tol_achieved, SSN_tol_achieved, solving_time, linesearch_fail, Krylov_fail);
+    print(when, what, pmm_iter, ssn_iter, krylov_iter, fact, obj_val, res_norms, ssn_tol_achieved, mu, rho, eps_bcl, ssn_tol, linesearch_fail, krylov_fail);
+    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, pmm_iter, ssn_iter, krylov_iter, fact, NS.smw_count, pmm_tol_achieved, ssn_tol_achieved, solving_time, linesearch_fail, krylov_fail);
 }

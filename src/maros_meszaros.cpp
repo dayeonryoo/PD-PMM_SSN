@@ -6,6 +6,7 @@
 #include <map>
 #include <chrono>
 #include <ctime>
+#include <thread>
 
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
@@ -27,8 +28,7 @@ int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
-    std::string name = "QCAPRI";
-
+    std::string name = "HS21";
     std::string filename = root + name + ".SIF";
 
     std::cout << "==================== Solving " + name << " ====================\n";
@@ -38,10 +38,10 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-6;
-    int max_iter = 100000;
-    double time_limit = 1800.0; // in seconds
+    int max_iter = 10000000;
+    double time_limit = 1000.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
-    PrintWhat what = PrintWhat::TUNING;
+    PrintWhat what = PrintWhat::MINIMAL;
 
     Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
     SSN_PMM<T> solver(prob);
@@ -69,8 +69,8 @@ int main() {
     } else {
         std::cout << "Solver hit the max iteration before converging.\n";
     }
-    if (sol.opt <= 0 && sol.PMM_tol_achieved > 1e0) {
-        std::cout << "Solver possibly diverged.\n"; 
+    if (sol.opt <= 0 && sol.pmm_tol_achieved > 1e0) {
+        std::cout << "Solver possibly diverged.\n";
     }
 
     return 0;
@@ -247,9 +247,9 @@ void run_Netlib() {
             } else {
                 std::cout << "Solver hit the max iteration before converging.\n";
             }
-            if (sol.PMM_tol_achieved > 1e0) {
+            if (sol.pmm_tol_achieved > 1e0) {
                 diverged = true;
-                std::cout << "Solver possibly diverged.\n"; 
+                std::cout << "Solver possibly diverged.\n";
             }
 
             // Compare
@@ -267,9 +267,9 @@ void run_Netlib() {
                 system,
                 agree, sol.opt, diverged, name,
                 abs_err, rel_err, sol.obj_val,
-                sol.PMM_iter, sol.SSN_iter, sol.Krylov_iter, sol.fact, sol.smw_count,
-                sol.PMM_tol_achieved, sol.SSN_tol_achieved,
-                sol.solving_time, sol.linesearch_fail
+                sol.pmm_iter, sol.ssn_iter, sol.krylov_iter, sol.fact, sol.smw_count,
+                sol.pmm_tol_achieved, sol.ssn_tol_achieved,
+                sol.run_time, sol.linesearch_fail
             };
             append_csv_result(csv_path, result);
 
@@ -341,7 +341,7 @@ void run_Netlib_infeas() {
     if (!std::filesystem::exists(std::filesystem::path(csv_path))
         || std::filesystem::is_empty(std::filesystem::path(csv_path))) {
         std::ofstream csv(csv_path);
-        csv << "System,infeas_detected,opt_status,name,PMM_iter,SSN_iter,Krylov_iter,fact,PMM_res,SSN_res,solving_time_sec,linesearch_fail\n";
+        csv << "System,infeas_detected,opt_status,name,pmm_iter,ssn_iter,krylov_iter,fact,pmm_res,ssn_res,solving_time_sec,linesearch_fail\n";
     } else if (!std::filesystem::is_empty(std::filesystem::path(csv_path))) {
         std::ofstream csv(csv_path, std::ios::out | std::ios::app);
         csv << "\n";
@@ -384,10 +384,10 @@ void run_Netlib_infeas() {
             bool infeas_detected = (sol.opt == -2 || sol.opt == -3);
             std::ofstream csv(csv_path, std::ios::out | std::ios::app);
             csv << system << "," << infeas_detected << "," << sol.opt << ","
-                << name << "," << sol.PMM_iter << "," << sol.SSN_iter << ","
-                << sol.Krylov_iter << "," << sol.fact << ","
-                << sol.PMM_tol_achieved << "," << sol.SSN_tol_achieved << ","
-                << sol.solving_time << "," << sol.linesearch_fail << "\n";
+                << name << "," << sol.pmm_iter << "," << sol.ssn_iter << ","
+                << sol.krylov_iter << "," << sol.fact << ","
+                << sol.pmm_tol_achieved << "," << sol.ssn_tol_achieved << ","
+                << sol.run_time << "," << sol.linesearch_fail << "\n";
             csv.close();
 
         } catch (const std::exception& e) {
@@ -411,94 +411,6 @@ int main() {
     // run_Netlib();
 
     // Filenames and objective values of Maros/Meszaros QPs
-    // static const std::map<std::string, double> QPs = {
-    //     {"DUALC1",     6.1552508e+03},
-    //     {"DUALC2",     3.5513077e+03},
-    //     {"DUALC5",     4.2723233e+02},
-    //     {"DUALC8",     1.8309359e+04},
-    //     {"EXDATA",    -1.4184343e+02},
-    //     {"HS118",      6.6482045e+02},
-    //     {"HS21",      -9.9960000e+01},
-    //     {"HS268",      5.7310705e-07},
-    //     {"HS35",       1.1111111e-01},
-    //     {"HS35MOD",    2.5000000e-01},
-    //     {"HS76",      -4.6818182e+00},
-    //     {"KSIP",       5.7579794e-01},
-    //     {"LASER",      2.4096014e+06},
-    //     {"LISWET1",    3.6122402e+01},
-    //     {"LISWET10",   4.9485785e+01},
-    //     {"LISWET11",   4.9523957e+01},
-    //     {"LISWET12",   1.7369274e+03},
-    //     {"LISWET2",    2.4998076e+01},
-    //     {"LISWET3",    2.5001220e+01},
-    //     {"LISWET4",    2.5000112e+01},
-    //     {"LISWET5",    2.5034253e+01},
-    //     {"LISWET6",    2.4995748e+01},
-    //     {"LISWET7",    4.9884089e+02},
-    //     {"LISWET8",    7.1447006e+03},
-    //     {"LISWET9",    1.9632513e+03},
-    //     {"MOSARQP1",  -9.5287544e+02},
-    //     {"MOSARQP2",  -1.5974821e+03},
-    //     {"POWELL20",   5.2089583e+10},
-    //     {"PRIMAL1",   -3.5012965e-02},
-    //     {"PRIMAL2",   -3.3733676e-02},
-    //     {"PRIMAL3",   -1.3575584e-01},
-    //     {"PRIMAL4",   -7.4609083e-01},
-    //     {"PRIMALC1",  -6.1552508e+03},
-    //     {"PRIMALC2",  -3.5513077e+03},
-    //     {"PRIMALC5",  -4.2723233e+02},
-    //     {"PRIMALC8",  -1.8309430e+04},
-    //     {"Q25FV47",    1.3744448e+07},
-    //     {"QADLITTL",   4.8031886e+05},
-    //     {"QAFIRO",    -1.5907818e+00},
-    //     {"QBEACONF",   1.6471206e+05},
-    //     {"QBORE3D",    3.1002008e+03},
-    //     {"QBRANDY",    2.8375115e+04},
-    //     {"QCAPRI",     6.6793293e+07},
-    //     {"QE226",      2.1265343e+02},
-    //     {"QETAMACR",   8.6760370e+04},
-    //     {"QFFFFF80",   8.7314747e+05},
-    //     {"QFORPLAN",   7.4566315e+09},
-    //     {"QGFRDXPN",   1.0079059e+11},
-    //     {"QISRAEL",    2.5347838e+07},
-    //     {"QPCBLEND",  -7.8425409e-03},
-    //     {"QPCBOEI1",   1.1503914e+07},
-    //     {"QPCBOEI2",   8.1719623e+06},
-    //     {"QPCSTAIR",   6.2043875e+06},
-    //     {"QPILOTNO",   4.7285869e+06},
-    //     {"QPTEST",     4.3718750e+00},
-    //     {"QRECIPE",   -2.6661600e+02},
-    //     {"QSC205",    -5.8139518e-03}, 
-    //     {"QSCAGR25",   2.0173794e+08}, 
-    //     {"QSCAGR7",    2.6865949e+07}, 
-    //     {"QSCFXM1",    1.6882692e+07},
-    //     {"QSCFXM2",    2.7776162e+07}, 
-    //     {"QSCFXM3",    3.0816355e+07},
-    //     {"QSCORPIO",   1.8805096e+03},
-    //     {"QSCRS8",     9.0456001e+02},
-    //     {"QSCTAP1",    1.4158611e+03},
-    //     {"QSCTAP2",    1.7350265e+03},
-    //     {"QSCTAP3",    1.4387547e+03}, 
-    //     {"QSEBA",      8.1481801e+07},
-    //     {"QSHARE1B",   7.2007832e+05},
-    //     {"QSHARE2B",   1.1703692e+04},
-    //     {"QSHELL",     1.5726368e+12},
-    //     {"QSHIP04L",   2.4200155e+06},
-    //     {"QSHIP04S",   2.4249937e+06},
-    //     {"QSHIP08L",   2.3760406e+06},
-    //     {"QSHIP08S",   2.3857289e+06},
-    //     {"QSHIP12L",   3.0188766e+06},
-    //     {"QSHIP12S",   3.0569623e+06},
-    //     {"QSIERRA",    2.3750458e+07},
-    //     {"QSTAIR",     7.9854528e+06},
-    //     {"QSTANDAT",   6.4118384e+03},
-    //     {"S268",       5.7310705e-07},
-    //     {"STADAT1",   -2.8526864e+07},
-    //     {"STADAT2",   -3.2626665e+01},
-    //     {"STADAT3",   -3.5779453e+01},
-    //     {"YAO",        1.9770426e+02}
-    // };
-
     static const std::map<std::string, double> QPs = {
         {"AUG2D",      1.6874118e+06},
         {"AUG2DC",     1.8183681e+06},
@@ -645,14 +557,16 @@ int main() {
 
     // Parameters
     T tol = 1e-6;
-    int max_iter = 100000000;
-    double time_limit = 3600.0; // in seconds
-    
+    int max_iter = 10000000;
+    double time_limit = 100.0; // in seconds
+
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
+    int cooldown_sec = 2;      // seconds to sleep between problems (prevents CPU throttling)
+
     // Solver result
-    std::string csv_path = root + "results/0615mm_5.csv";
+    std::string csv_path = root + "results/0626mm_01.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -684,19 +598,19 @@ int main() {
             
             // Check convergence
             bool diverged = false;
-            if (sol.opt == 0) {
-                std::cout << "Solver converged!\n";
-            } else if (sol.opt == 3) {
-                std::cout << "Lineserach failed. Solver terminated.\n";
-            } else if (sol.opt == 4) {
-                std::cout << "Solver terminated by time limit.\n";
-            } else if (sol.opt == 1 || sol.opt == 2) {
-                std::cout << "Solver hit the max iteration before converging.\n";
-            }
-            if (sol.PMM_tol_achieved > 1e0) {
-                diverged = true;
-                std::cout << "Solver possibly diverged.\n"; 
-            }
+            // if (sol.opt == 0) {
+            //     std::cout << "Solver converged!\n";
+            // } else if (sol.opt == 3) {
+            //     std::cout << "Lineserach failed. Solver terminated.\n";
+            // } else if (sol.opt == 4) {
+            //     std::cout << "Solver terminated by time limit.\n";
+            // } else if (sol.opt == 1 || sol.opt == 2) {
+            //     std::cout << "Solver hit the max iteration before converging.\n";
+            // }
+            // if (sol.pmm_tol_achieved > 1e0) {
+            //     diverged = true;
+            //     std::cout << "Solver possibly diverged.\n"; 
+            // }
 
             // Compare
             T abs_err = std::abs(sol.obj_val - ref_obj_val);
@@ -705,8 +619,8 @@ int main() {
             bool abs_agree = abs_err < err_tol;
             bool rel_agree = rel_err < err_tol;
             bool agree = abs_agree || rel_agree;
-            if (agree) std::cout << "CORRECT! Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
-            else std::cout << "Incorrect. Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
+            // if (agree) std::cout << "CORRECT! Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
+            // else std::cout << "Incorrect. Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
 
             // Record result
             std::string system = solver.ldlt_used? "L" : "S";
@@ -715,9 +629,9 @@ int main() {
                 system,
                 agree, sol.opt, diverged, name,
                 abs_err, rel_err,
-                sol.obj_val, sol.PMM_iter, sol.SSN_iter, sol.Krylov_iter, sol.fact, sol.smw_count,
-                sol.PMM_tol_achieved, sol.SSN_tol_achieved,
-                sol.solving_time, sol.linesearch_fail, sol.Krylov_fail
+                sol.obj_val, sol.pmm_iter, sol.ssn_iter, sol.krylov_iter, sol.fact, sol.smw_count,
+                sol.pmm_tol_achieved, sol.ssn_tol_achieved,
+                sol.run_time, sol.linesearch_fail, sol.krylov_fail
             };
             append_csv_result(csv_path, result);
 
@@ -732,6 +646,8 @@ int main() {
             };
             append_csv_result(csv_path, result);
         }
+
+        std::this_thread::sleep_for(std::chrono::seconds(cooldown_sec));
     }
 
     return 0;

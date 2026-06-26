@@ -1,4 +1,5 @@
 #pragma once
+#include <limits>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include "Problem.hpp"
@@ -47,16 +48,16 @@
 //    .y2      -> Lagrangian multipliers corresponding to Bx = w
 //    .z       -> Lagrangian multipliers corresponding to box constraints on x
 //    .obj_val -> Optimal objective value
-//    .PMM_iter    -> number of PMM iterations performed to terminate
-//    .SSN_iter    -> number of SSN iterations performed to terminate
-//    .Krylov_iter -> number of Krylov iterations performed to terminate
+//    .pmm_iter    -> number of PMM iterations performed to terminate
+//    .ssn_iter    -> number of SSN iterations performed to terminate
+//    .krylov_iter -> number of Krylov iterations performed to terminate
 //    .fact        -> number of factorizations performed to terminate
 //    .smw_count   -> number of SMW preconditioner applications performed to terminate
-//    .PMM_tol_achieved -> tolerance achieved by PMM
-//    .SSN_tol_achieved -> tolerance achieved by SSN
+//    .pmm_tol_achieved -> tolerance achieved by PMM
+//    .ssn_tol_achieved -> tolerance achieved by SSN
 //    .solving_time     -> total time in seconds taken to solve the problem
 //    .linesearch_fail  -> number of linesearch failures
-//    .Krylov_fail      -> number of Krylov failures
+//    .krylov_fail      -> number of Krylov failures
 // --------------------------------------------------------------
 
 template <typename T>
@@ -91,16 +92,16 @@ public:
     Vec x_old_scratch_, y2_old_scratch_;            // previous iterates for infeasibility check
 
     T inf = 1e20;
-    T eps_zero = 1e-12; // for checking near-zero values without scaling issues
+    T eps_zero = T(100) * std::numeric_limits<T>::epsilon(); // ~2.2e-14 for double
 
     // Constant parameters
     T tol = 1e-6;
     int max_iter = 100000000;
-    int SSN_max_iter = 100000000;
-    int SSN_max_in_iter = 20;
+    int ssn_max_iter = 100000000;
+    int ssn_max_in_iter = 20;
     T eps_limit = 1e-3*tol;
-    T mu_limit = 1e5;
-    T rho_limit = 1e4;
+    T mu_limit = 1e6;
+    T rho_limit = 1e6;
     T eps_pinf = 5e-2 * tol;
     T eps_dinf = 5e-2 * tol;
     T gamma = 0.95;
@@ -115,15 +116,15 @@ public:
     T mu = 1e1;
     T rho = 1e1;
     T eps_bcl = 1e0;
-    T SSN_tol = 1e-2;
+    T ssn_tol = 1e-2;
     
     // Outputs:
     int opt;
     Vec x, y1, y2, z;
     T obj_val;
-    int PMM_iter, SSN_iter;
-    int Krylov_iter = 0, fact = 0, Krylov_fail = 0;
-    T PMM_tol_achieved, SSN_tol_achieved;
+    int pmm_iter, ssn_iter;
+    int krylov_iter = 0, fact = 0, krylov_fail = 0;
+    T pmm_tol_achieved, ssn_tol_achieved;
     bool ldlt_used = false;
 
     // Printing
@@ -169,7 +170,7 @@ public:
     ResVec compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx);
     T objective_value(const Vec& x, const Vec& Qx);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
-    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int SSN_opt, T SSN_tol_achieved);
+    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg);
     bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
     bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     Solution<T> solve();

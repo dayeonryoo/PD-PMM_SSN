@@ -32,27 +32,27 @@ public:
     Vec z;           // Lagrangian multipliers for box constraints on x
     T obj_val;       // Optimal objective value
 
-    int PMM_iter;    // Number of PMM iterations performed
-    int SSN_iter;    // Number of SSN iterations performed
-    int Krylov_iter; // Number of Krylov iterations performed
+    int pmm_iter;    // Number of PMM iterations performed
+    int ssn_iter;    // Number of SSN iterations performed
+    int krylov_iter; // Number of Krylov iterations performed
     int fact;        // Number of factorizations performed
     int smw_count;   // Number of SMW preconditioner applications
 
-    T PMM_tol_achieved; // Tolerance achieved by PMM
-    T SSN_tol_achieved; // Tolerance achieved by SSN
-    
-    double solving_time; // Total time in seconds taken to solve the problem
-    int linesearch_fail; // Number of linesearch failures
-    int Krylov_fail;     // Number of Krylov failures
+    T pmm_tol_achieved; // Tolerance achieved by PMM
+    T ssn_tol_achieved; // Tolerance achieved by SSN
 
-    Solution(int opt_, const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-             T obj_val_, int PMM_iter_, int SSN_iter_, int Krylov_iter_, int fact_, int smw_count_,
-             T PMM_tol_achieved_, T SSN_tol_achieved_,
-             double solving_time_, int linesearch_fail_, int Krylov_fail_)
-    : opt(opt_), x(x_), y1(y1_), y2(y2_), z(z_), obj_val(obj_val_),
-      PMM_iter(PMM_iter_), SSN_iter(SSN_iter_), Krylov_iter(Krylov_iter_), fact(fact_), smw_count(smw_count_),
-      PMM_tol_achieved(PMM_tol_achieved_), SSN_tol_achieved(SSN_tol_achieved_),
-      solving_time(solving_time_), linesearch_fail(linesearch_fail_), Krylov_fail(Krylov_fail_)
+    double run_time;     // Total time in seconds taken to solve the problem
+    int linesearch_fail; // Number of linesearch failures
+    int krylov_fail;     // Number of Krylov failures
+
+    Solution(int opt, const Vec& x, const Vec& y1, const Vec& y2, const Vec& z,
+             T obj_val, int pmm_iter, int ssn_iter, int krylov_iter, int fact, int smw_count,
+             T pmm_tol_achieved, T ssn_tol_achieved,
+             double run_time, int linesearch_fail, int krylov_fail)
+    : opt(opt), x(x), y1(y1), y2(y2), z(z), obj_val(obj_val),
+      pmm_iter(pmm_iter), ssn_iter(ssn_iter), krylov_iter(krylov_iter), fact(fact), smw_count(smw_count),
+      pmm_tol_achieved(pmm_tol_achieved), ssn_tol_achieved(ssn_tol_achieved),
+      run_time(run_time), linesearch_fail(linesearch_fail), krylov_fail(krylov_fail)
     {}
 
     void print_summary() const {
@@ -66,16 +66,16 @@ public:
             std::cout << "Problem is dual infeasible.\n";
         } else {
             std::cout << "Optimal objective value (obj_val): " << obj_val << std::endl;
-            std::cout << "Number of PMM iterations (PMM_iter): " << PMM_iter << std::endl;
-            std::cout << "Number of SSN iterations (SSN_iter): " << SSN_iter << std::endl;
-            std::cout << "Number of Krylov iterations (Krylov_iter): " << Krylov_iter << std::endl;
+            std::cout << "Number of PMM iterations (pmm_iter): " << pmm_iter << std::endl;
+            std::cout << "Number of SSN iterations (ssn_iter): " << ssn_iter << std::endl;
+            std::cout << "Number of Krylov iterations (krylov_iter): " << krylov_iter << std::endl;
             std::cout << "Number of factorizations (fact): " << fact << std::endl;
-            std::cout << "PMM tolerance achieved (PMM_tol_achieved): " << PMM_tol_achieved << std::endl;
-            std::cout << "SSN tolerance achieved (SSN_tol_achieved): " << SSN_tol_achieved << std::endl;
+            std::cout << "PMM tolerance achieved (pmm_tol_achieved): " << pmm_tol_achieved << std::endl;
+            std::cout << "SSN tolerance achieved (ssn_tol_achieved): " << ssn_tol_achieved << std::endl;
         }
         std::cout << "Number of linesearch failures (linesearch_fail): " << linesearch_fail << std::endl;
-        std::cout << "Number of Krylov failures (Krylov_fail): " << Krylov_fail << std::endl;
-        std::cout << "Total solving time (solving_time): " << solving_time << " seconds\n";
+        std::cout << "Number of Krylov failures (krylov_fail): " << krylov_fail << std::endl;
+        std::cout << "Total run time (run_time): " << run_time << " seconds\n";
     }
 
 };

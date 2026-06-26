@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <limits>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <unsupported/Eigen/IterativeSolvers>
@@ -29,13 +30,16 @@ public:
     const int n, m, N, M, l;
     Vec x, y1, y2, z;
     Vec delta_x, delta_y1, delta_y2, delta_z;
-    int SSN_max_in_iter;
-    T mu, rho, gamma, SSN_tol;
+    int ssn_max_in_iter;
+    T mu, rho, gamma, ssn_tol;
     T eps_pinf, eps_dinf;
 
     // Useful vectors and matrices
     T inf = 1e20;
-    T eps_zero = 1e-12; // for checking near-zero values without scaling issues
+    // eps_zero: relative tolerance for boundary/slope checks.
+    // eps_direction: threshold for skipping near-zero Newton step components.
+    T eps_zero      = T(100)  * std::numeric_limits<T>::epsilon();
+    T eps_direction = std::sqrt(std::numeric_limits<T>::epsilon());
     Vec ones_N, ones_M, ones_l;
     const SpMat& A_tr, B_tr, L_tr;
     Vec H_diag, H_diag_inv;
@@ -50,20 +54,22 @@ public:
     std::vector<Triplet> G_A_trips_;
 
     // Outputs
-    int opt, iter, SSN_iter;
+    int opt, iter, ssn_iter;
     T tol_achieved, obj_val;
-    int Krylov_iter = 0, fact = 0, smw_count = 0;
-    int linesearch_fail = 0, Krylov_fail = 0;
-    bool Krylov_converged = true;
+    int krylov_iter = 0, fact = 0, smw_count = 0;
+    int linesearch_fail = 0, krylov_fail = 0;
+    bool krylov_converged = true;
 
     // Backtracking linesearch parameters
     T beta = 0.4995 / 2;
     T delta = 0.995;
 
     // Conjugate gradient parameters
-    T Krylov_tol = 1e-12;
-    int Krylov_max_in_iter = 500;
-    bool ldlt_used = false;
+    T krylov_tol = 1e-14;
+    int krylov_max_in_iter = 500;
+    bool sys_chosen = false; // Choose how to factorize a preconditioner
+    bool use_ldlt = false; // Factorize a preconditioner via LDLT
+    bool ldlt_used = false; // PCG on normal eqn failed so LDLT on KKT system was used at least once
 
     using CGSolver = Eigen::ConjugateGradient<
         SchurOperator<T>,
@@ -81,9 +87,9 @@ public:
 
     Vec prev_dy_;
     Vec prev_dx_primal_;
-    Vec A_tr_y1_; // cached A^T y1, recomputed once per PMM iteration in update_SSN_system
+    Vec A_tr_y1_; // cached A^T y1, recomputed once per PMM iteration in update_ssn_system
 
-    // Pre-allocated scratch vectors for solve_SSN / exact_line_search hot loops.
+    // Pre-allocated scratch vectors for solve_ssn / exact_line_search hot loops.
     Vec Ax_ssn_, Bx_ssn_;                     // size M, l (running SpMV products in SSN)
     Vec x_cur_, y2_cur_;                      // size N, l (SSN working iterates)
     Vec u_, v_;                               // size N, l
@@ -113,24 +119,24 @@ public:
     SpMat K_ldlt_;
     bool K_ldlt_built_ = false;
 
-    SSN(const int Q_info_, const Vec& Q_diag_, const SpMat& L_, const SpMat& L_tr_,
-        const SpMat& A_, const SpMat& B_, const SpMat& A_tr_, const SpMat& B_tr_,
-        const Vec& c_, const Vec& b_, const Vec& D1A_diag_, const Vec& D1B_diag_, const Vec& D2_diag_,
-        const Vec& lx_, const Vec& ux_, const Vec& lw_, const Vec& uw_, const T obj_const_,
-        int n_, int m_, int N_, int M_, int l_,
-        T SSN_tol_, int SSN_max_in_iter_, T eps_pinf_, T eps_dinf_)
-    : Q_info(Q_info_), Q_diag(Q_diag_), L(L_), L_tr(L_tr_),
-      A(A_), B(B_), A_tr(A_tr_), B_tr(B_tr_),
-      c(c_), b(b_), D1A_diag(D1A_diag_), D1B_diag(D1B_diag_), D2_diag(D2_diag_),
-      lx(lx_), ux(ux_), lw(lw_), uw(uw_), obj_const(obj_const_),
-      n(n_), m(m_), N(N_), M(M_), l(l_),
-      SSN_tol(SSN_tol_), SSN_max_in_iter(SSN_max_in_iter_),
-      eps_pinf(eps_pinf_), eps_dinf(eps_dinf_)
+    SSN(const int Q_info, const Vec& Q_diag, const SpMat& L, const SpMat& L_tr,
+        const SpMat& A, const SpMat& B, const SpMat& A_tr, const SpMat& B_tr,
+        const Vec& c, const Vec& b, const Vec& D1A_diag, const Vec& D1B_diag, const Vec& D2_diag,
+        const Vec& lx, const Vec& ux, const Vec& lw, const Vec& uw, const T obj_const,
+        int n, int m, int N, int M, int l,
+        T ssn_tol, int ssn_max_in_iter, T eps_pinf, T eps_dinf)
+    : Q_info(Q_info), Q_diag(Q_diag), L(L), L_tr(L_tr),
+      A(A), B(B), A_tr(A_tr), B_tr(B_tr),
+      c(c), b(b), D1A_diag(D1A_diag), D1B_diag(D1B_diag), D2_diag(D2_diag),
+      lx(lx), ux(ux), lw(lw), uw(uw), obj_const(obj_const),
+      n(n), m(m), N(N), M(M), l(l),
+      ssn_tol(ssn_tol), ssn_max_in_iter(ssn_max_in_iter),
+      eps_pinf(eps_pinf), eps_dinf(eps_dinf)
     {
         ones_N = Vec::Ones(N);
         ones_M = Vec::Ones(M);
         ones_l = Vec::Ones(l);
-        SSN_iter = 0;
+        ssn_iter = 0;
         delta_x = Vec::Zero(N);
         delta_y2 = Vec::Zero(l);
 
@@ -145,21 +151,22 @@ public:
 
     }
 
-    void update_SSN_system(const Vec& x_, const Vec& y1_, const Vec& y2_, const Vec& z_,
-                           const Vec& delta_y1_, const Vec& delta_z_,
-                           T mu_, T rho_, T gamma_, int SSN_iter_) {
-        x = x_;
-        y1 = y1_;
-        y2 = y2_;
-        z = z_;
-        mu = mu_;
-        rho = rho_;
-        gamma = gamma_;
-        SSN_iter = SSN_iter_;
-        delta_y1 = delta_y1_;
-        delta_z = delta_z_;
+    void update_ssn_system(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z,
+                           const Vec& delta_y1, const Vec& delta_z,
+                           T mu, T rho, T gamma, int ssn_iter) {
+        this->x = x;
+        this->y1 = y1;
+        this->y2 = y2;
+        this->z = z;
+        this->mu = mu;
+        this->rho = rho;
+        this->gamma = gamma;
+        this->ssn_iter = ssn_iter;
+        this->delta_y1 = delta_y1;
+        this->delta_z = delta_z;
         ldlt_numeric_dirty_ = true;    // mu, rho may have changed
         A_tr_y1_ = A_tr * y1; // y1 is fixed for the entire SSN run; cache A^T y1 once
+        if (ssn_iter > 10) sys_chosen = true; // Enough SSN iters to fix the factorization method for a preconditioner
     }
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
@@ -184,24 +191,24 @@ public:
     }
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
-    Vec Clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
+    Vec clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
     bool is_P_unchanged(const Vec& diag_P, const Vec& new_diag_P);
     void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
     void rebuild_G();
     SpMat scale_columns(const SpMat& M, const Vec& d);
-    void retrive_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);
+    void retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
-    bool form_schur(const SpMat& G);
-    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed);
+    bool choose_ldlt(const SpMat& G);
+    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool use_ldlt);
     Vec solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
-    Vec solve_using_LDLT(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
+    Vec solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                                const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                         const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx,
                         const Vec& dist_K_u, const Vec& dist_W_v);
-    void solve_SSN(const T eps);
+    void solve_ssn(const T eps);
 
 };
 

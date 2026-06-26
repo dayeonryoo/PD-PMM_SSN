@@ -102,7 +102,7 @@ py::dict parse_sif(const std::string& filename) {
 // Returns dict:
 //   status            – opt field (0 = optimal, <0 = infeasible, >0 = limit hit)
 //   obj_val           – primal objective value
-//   solving_time      – wall-clock solving time in seconds
+//   run_time          – wall-clock solving time in seconds
 //   pmm_iter          – PMM outer iterations
 //   ssn_iter          – total SSN inner iterations
 //   pmm_tol_achieved  – tolerance achieved by PMM at termination
@@ -123,10 +123,10 @@ py::dict solve_from_sif(const std::string& filename,
     py::dict out;
     out["status"]           = sol.opt;
     out["obj_val"]          = (double)sol.obj_val;
-    out["solving_time"]     = sol.solving_time;
-    out["pmm_iter"]         = sol.PMM_iter;
-    out["ssn_iter"]         = sol.SSN_iter;
-    out["pmm_tol_achieved"] = (double)sol.PMM_tol_achieved;
+    out["run_time"]         = sol.run_time;
+    out["pmm_iter"]         = sol.pmm_iter;
+    out["ssn_iter"]         = sol.ssn_iter;
+    out["pmm_tol_achieved"] = (double)sol.pmm_tol_achieved;
     return out;
 }
 
@@ -203,9 +203,10 @@ py::dict solve_from_data(const py::dict& pd_dict,
     py::dict out;
     out["status"]           = sol.opt;
     out["obj_val"]          = (double)sol.obj_val;
-    out["pmm_iter"]         = sol.PMM_iter;
-    out["ssn_iter"]         = sol.SSN_iter;
-    out["pmm_tol_achieved"] = (double)sol.PMM_tol_achieved;
+    out["run_time"]         = sol.run_time;
+    out["pmm_iter"]         = sol.pmm_iter;
+    out["ssn_iter"]         = sol.ssn_iter;
+    out["pmm_tol_achieved"] = (double)sol.pmm_tol_achieved;
     return out;
 }
 
@@ -290,7 +291,7 @@ The sparse matrices are in CSC format (data / indices / indptr / shape).)");
           py::arg("time_limit") = 600.0,
           R"(Parse a SIF/MPS file and solve it with the SSN-PMM solver.
 
-Returns a dict with keys: status, obj_val, solving_time, pmm_iter, ssn_iter, pmm_tol_achieved.
+Returns a dict with keys: status, obj_val, run_time, pmm_iter, ssn_iter, pmm_tol_achieved.
 status == 0  → optimal solution found
 status <  0  → infeasibility detected
 status >  0  → iteration / time limit reached)");

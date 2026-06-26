@@ -87,13 +87,14 @@ except ModuleNotFoundError:
 
 
 class _PeakRSS:
-    """Polls process RSS in a background thread to capture peak memory usage."""
+    """Polls process RSS in a background thread to capture average memory usage."""
     def __init__(self, interval: float = 0.05):
         self._enabled = _HAVE_PSUTIL
         if self._enabled:
             self._proc = psutil.Process()
             self._interval = interval
-            self._peak = self._proc.memory_info().rss
+            self._total = 0.0
+            self._count = 0
             self._stop = threading.Event()
             self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -106,18 +107,20 @@ class _PeakRSS:
         if self._enabled:
             self._stop.set()
             self._thread.join()
+            if self._count == 0:
+                self._total = self._proc.memory_info().rss
+                self._count = 1
 
     def _run(self):
         while not self._stop.wait(self._interval):
-            rss = self._proc.memory_info().rss
-            if rss > self._peak:
-                self._peak = rss
+            self._total += self._proc.memory_info().rss
+            self._count += 1
 
     @property
-    def peak_mb(self) -> float:
-        if not self._enabled:
+    def avg_mb(self) -> float:
+        if not self._enabled or self._count == 0:
             return float("nan")
-        return self._peak / (1024 * 1024)
+        return (self._total / self._count) / (1024 * 1024)
 
 
 # ---------------------------------------------------------------------------
@@ -336,10 +339,7 @@ QPALM_SOLVED = qpalm.Info.SOLVED   # == 1
 def run_qpalm(pd: dict, tol: float, time_limit: float) -> dict:
     """Run QPALM on a problem given as a parse_sif dict.
 
-    Returns dict with: status, obj_val, solving_time, iter.
-    solving_time is a Python wall-clock measurement covering Solver() setup
-    (Ruiz scaling + initial factorisation) and the ADMM solve, so it is
-    comparable to run_osqp and run_ssn timings.
+    Returns dict with: status, obj_val, run_time, outter_iter, inner_iter.
     """
     Q_upper, q, C, bmin, bmax, n, m_total = pdpmm_to_qpalm(pd)
 
@@ -358,17 +358,16 @@ def run_qpalm(pd: dict, tol: float, time_limit: float) -> dict:
     settings.verbose      = 0               # silent
     settings.scaling      = 10              # default Ruiz scaling passes
 
-    t0 = time.perf_counter()
     solver = qpalm.Solver(data, settings)   # setup: Ruiz scaling + factorisation
     solver.solve()
-    t1 = time.perf_counter()
 
     info = solver.info
     return {
         "status":       int(info.status_val),
         "obj_val":      float(info.objective),
-        "solving_time": t1 - t0,
-        "iter":         int(info.iter),
+        "run_time":     float(info.run_time),
+        "outer_iter":   int(info.iter_out),
+        "inner_iter":   int(info.iter),
         "tol_achieved": max(float(info.pri_res_norm), float(info.dua_res_norm)),
     }
 
@@ -381,15 +380,11 @@ OSQP_SOLVED = 1   # osqp.constant("OSQP_SOLVED")
 def run_osqp(pd: dict, tol: float, time_limit: float) -> dict:
     """Run OSQP on a problem given as a parse_sif dict.
 
-    Returns dict with: status, obj_val, solving_time, iter.
-    solving_time is a Python wall-clock measurement covering setup()
-    (scaling + initial factorisation) and the ADMM solve, so it is
-    comparable to run_qpalm and run_ssn timings.
+    Returns dict with: status, obj_val, run_time, outer_iter, inner_iter=0.
     """
     Q_upper, q, C, bmin, bmax, *_ = pdpmm_to_qpalm(pd)
 
     prob = osqp.OSQP()
-    t0 = time.perf_counter()
     prob.setup(                         # setup: scaling + factorisation
         Q_upper, q, C, bmin, bmax,
         eps_abs    = tol,
@@ -400,14 +395,15 @@ def run_osqp(pd: dict, tol: float, time_limit: float) -> dict:
         scaling    = 10,
     )
     res = prob.solve()
-    t1 = time.perf_counter()
 
+    info = res.info
     return {
-        "status":       int(res.info.status_val),
-        "obj_val":      float(res.info.obj_val),
-        "solving_time": t1 - t0,
-        "iter":         int(res.info.iter),
-        "tol_achieved": max(float(res.info.prim_res), float(res.info.dual_res)),
+        "status":       int(info.status_val),
+        "obj_val":      float(info.obj_val),
+        "run_time":     float(info.run_time),
+        "outer_iter":   int(info.iter),
+        "inner_iter":   int(0),
+        "tol_achieved": max(float(info.prim_res), float(info.dual_res)),
     }
 
 
@@ -559,47 +555,108 @@ def plot_performance_profile_iters(csv_path: Path, out_prefix: Path,
     plt.close(fig)
 
 
+def plot_performance_profile_inner_iters(csv_path: Path, out_prefix: Path,
+                                         tol: float = 1e-6, time_limit: float = 600.0,
+                                         solvers: set | None = None) -> None:
+    """Dolan-Moré performance profile using inner iteration counts.
+
+    SSN-PMM uses ssn_iter (total SSN Newton iterations).
+    QPALM uses qpalm_inner_iter (total inner QPALM iterations).
+    OSQP is excluded (no meaningful inner iterations).
+    """
+    if solvers is None:
+        solvers = {"ssn-pmm", "qpalm"}
+    solvers = solvers & {"ssn-pmm", "qpalm"}   # inner iters only defined for these two
+    if not solvers:
+        return
+
+    _meta = [
+        ("ssn-pmm", "ssn_solved",   "ssn_iter",         "SSN-PMM", "#1f77b4", "-"),
+        ("qpalm",   "qpalm_solved", "qpalm_inner_iter", "QPALM",   "#ff7f0e", "--"),
+    ]
+    df = pd.read_csv(csv_path)
+    n_total = len(df)
+
+    active = [(k, sc, ic, lbl, col, ls) for k, sc, ic, lbl, col, ls in _meta if k in solvers]
+
+    iters_list, plot_entries = [], []
+    for k, solved_col, iter_col, label, color, ls in active:
+        it = np.where(df[solved_col].fillna(0).astype(bool), df[iter_col].fillna(np.inf), np.inf)
+        iters_list.append(it)
+        plot_entries.append((f"{label} ({int(np.isfinite(it).sum())}/{n_total} solved)", color, ls))
+
+    iters    = np.stack(iters_list, axis=1)
+    tau_vals = np.logspace(0, 4, 2000)
+    profiles = compute_performance_profile(iters, tau_vals)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for s, (label, color, ls) in enumerate(plot_entries):
+        ax.semilogx(tau_vals, profiles[s], label=label,
+                    color=color, linewidth=2, linestyle=ls)
+
+    ax.set_xlabel(r"Performance ratio $\tau$", fontsize=13)
+    ax.set_ylabel(r"Fraction of problems $\rho_s(\tau)$", fontsize=13)
+    ax.set_title(
+        "Performance profile — Maros-Meszaros QPs\n"
+        f"(inner iterations,  tol = {_fmt_tol(tol)},  limit = {_fmt_limit(time_limit)})",
+        fontsize=12,
+    )
+    ax.set_xlim([1.0, tau_vals[-1]])
+    ax.set_ylim([0.0, 1.05])
+    ax.legend(fontsize=12)
+    ax.grid(True, which="both", alpha=0.3)
+    plt.tight_layout()
+
+    for ext in ("pdf", "png"):
+        p = out_prefix.with_suffix(f".{ext}")
+        fig.savefig(p, dpi=150)
+        print(f"Saved: {p}")
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Subprocess worker functions (each spawned in a fresh process for clean RSS)
 # ---------------------------------------------------------------------------
 
 def _worker_ssn_mm(sif_path, tol, time_limit, max_iter, conn):
     result = {}
-    with _PeakRSS() as mem:
-        try:
-            pd_data = ssn_pmm_bind.parse_sif(sif_path)
-            t0 = time.perf_counter()
+    try:
+        pd_data = ssn_pmm_bind.parse_sif(sif_path)
+        with _PeakRSS() as mem:
             r  = ssn_pmm_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
-            t1 = time.perf_counter()
-            r["solving_time"] = t1 - t0
             result["res"] = r
-        except Exception as e:
-            result["error"] = str(e)
-        result["ram"] = mem.peak_mb
+        result["ram"] = mem.avg_mb
+    except Exception as e:
+        result["error"] = str(e)
+        result["ram"] = float("nan")
     conn.send(result)
     conn.close()
 
 
 def _worker_qpalm_mm(sif_path, tol, time_limit, conn):
     result = {}
-    with _PeakRSS() as mem:
-        try:
-            result["res"] = run_qpalm(ssn_pmm_bind.parse_sif(sif_path), tol, time_limit)
-        except Exception as e:
-            result["error"] = str(e)
-        result["ram"] = mem.peak_mb
+    try:
+        pd_data = ssn_pmm_bind.parse_sif(sif_path)
+        with _PeakRSS() as mem:
+            result["res"] = run_qpalm(pd_data, tol, time_limit)
+        result["ram"] = mem.avg_mb
+    except Exception as e:
+        result["error"] = str(e)
+        result["ram"] = float("nan")
     conn.send(result)
     conn.close()
 
 
 def _worker_osqp_mm(sif_path, tol, time_limit, conn):
     result = {}
-    with _PeakRSS() as mem:
-        try:
-            result["res"] = run_osqp(ssn_pmm_bind.parse_sif(sif_path), tol, time_limit)
-        except Exception as e:
-            result["error"] = str(e)
-        result["ram"] = mem.peak_mb
+    try:
+        pd_data = ssn_pmm_bind.parse_sif(sif_path)
+        with _PeakRSS() as mem:
+            result["res"] = run_osqp(pd_data, tol, time_limit)
+        result["ram"] = mem.avg_mb
+    except Exception as e:
+        result["error"] = str(e)
+        result["ram"] = float("nan")
     conn.send(result)
     conn.close()
 
@@ -640,6 +697,10 @@ def main() -> None:
         choices=["ssn-pmm", "qpalm", "osqp"], metavar="SOLVER",
         help="Solvers to run (default: all three). Choices: ssn-pmm qpalm osqp",
     )
+    parser.add_argument(
+        "--cooldown", type=float, default=10.0,
+        help="Seconds to sleep between problems to prevent CPU throttling (default: 3)",
+    )
     mp.set_start_method("spawn", force=True)
     args = parser.parse_args()
     solvers = set(args.solver)
@@ -651,15 +712,16 @@ def main() -> None:
 
     tol        = args.tol
     time_limit = args.time_limit
+    cooldown   = args.cooldown
     max_iter   = 10_000_000_000   # effectively infinite for SSN-PMM
 
     prefix = f"{args.name}_" if args.name else ""
     csv_path = result_dir / f"{prefix}comparison_mm.csv"
     fieldnames = [
         "name",
-        "ssn_solved",   "ssn_status",   "pmm_iter", "ssn_iter",   "ssn_obj",   "pmm_tol_achieved",   "ssn_time",   "ssn_peak_ram_mb",
-        "qpalm_solved", "qpalm_status", "qpalm_iter",                 "qpalm_obj", "qpalm_tol_achieved", "qpalm_time", "qpalm_peak_ram_mb",
-        "osqp_solved",  "osqp_status",  "osqp_iter",                  "osqp_obj",  "osqp_tol_achieved",  "osqp_time",  "osqp_peak_ram_mb",
+        "ssn_solved",   "ssn_status",   "pmm_iter", "ssn_iter",   "ssn_obj",   "pmm_tol_achieved",   "ssn_time",   "ssn_avg_ram_mb",
+        "qpalm_solved", "qpalm_status", "qpalm_iter", "qpalm_inner_iter", "qpalm_obj", "qpalm_tol_achieved", "qpalm_time", "qpalm_avg_ram_mb",
+        "osqp_solved",  "osqp_status",  "osqp_iter",                      "osqp_obj",  "osqp_tol_achieved",  "osqp_time",  "osqp_avg_ram_mb",
     ]
 
     n_problems = len(QPS)
@@ -685,44 +747,50 @@ def main() -> None:
                     row.update(ssn_status=-99, ssn_solved=0, ssn_time=np.inf,
                                pmm_iter=np.inf, ssn_iter=np.inf,
                                ssn_obj=np.nan, pmm_tol_achieved=np.nan,
-                               ssn_peak_ram_mb=ssn_out.get("ram", float("nan")))
+                               ssn_avg_ram_mb=ssn_out.get("ram", float("nan")))
                 else:
                     r = ssn_out["res"]
                     row["ssn_status"]       = r["status"]
                     row["ssn_solved"]       = int(r["status"] == 0)
-                    row["ssn_time"]         = r["solving_time"]
+                    row["ssn_time"]         = r["run_time"]
                     row["pmm_iter"]         = r["pmm_iter"]
                     row["ssn_iter"]         = r["ssn_iter"]
                     row["ssn_obj"]          = r["obj_val"]
                     row["pmm_tol_achieved"] = r["pmm_tol_achieved"]
-                    row["ssn_peak_ram_mb"]  = ssn_out["ram"]
+                    row["ssn_avg_ram_mb"]  = ssn_out["ram"]
                     status_str = "OPTIMAL" if r["status"] == 0 else f"status={r['status']}"
-                    print(f"  SSN-PMM : {status_str:12s}  t = {r['solving_time']:.3f} s  "
+                    print(f"  SSN-PMM : {status_str:12s}  t = {r['run_time']:.3f} s  "
                           f"pmm={r['pmm_iter']} ssn={r['ssn_iter']}  "
                           f"tol={r['pmm_tol_achieved']:.2e}  obj = {r['obj_val']:.6g}  "
                           f"RAM = {ssn_out['ram']:.0f} MB")
+                if cooldown > 0:
+                    time.sleep(cooldown)
 
             # ---- QPALM --------------------------------------------------
             if "qpalm" in solvers:
                 qpalm_out = _run_isolated(_worker_qpalm_mm, (sif_path, tol, time_limit))
                 if "error" in qpalm_out:
                     print(f"  QPALM   : ERROR — {qpalm_out['error']}")
-                    row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf, qpalm_iter=np.inf,
+                    row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf,
+                               qpalm_iter=np.inf, qpalm_inner_iter=np.inf,
                                qpalm_obj=np.nan, qpalm_tol_achieved=np.nan,
-                               qpalm_peak_ram_mb=qpalm_out.get("ram", float("nan")))
+                               qpalm_avg_ram_mb=qpalm_out.get("ram", float("nan")))
                 else:
                     r = qpalm_out["res"]
                     row["qpalm_status"]        = r["status"]
                     row["qpalm_solved"]        = int(r["status"] == QPALM_SOLVED)
-                    row["qpalm_time"]          = r["solving_time"]
-                    row["qpalm_iter"]          = r["iter"]
+                    row["qpalm_time"]          = r["run_time"]
+                    row["qpalm_iter"]          = r["outer_iter"]
+                    row["qpalm_inner_iter"]    = r["inner_iter"]
                     row["qpalm_obj"]           = r["obj_val"]
                     row["qpalm_tol_achieved"]  = r["tol_achieved"]
-                    row["qpalm_peak_ram_mb"]   = qpalm_out["ram"]
+                    row["qpalm_avg_ram_mb"]   = qpalm_out["ram"]
                     status_str = "OPTIMAL" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
-                    print(f"  QPALM   : {status_str:12s}  t = {r['solving_time']:.3f} s  "
-                          f"iter = {r['iter']}  tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}  "
+                    print(f"  QPALM   : {status_str:12s}  t = {r['run_time']:.3f} s  "
+                          f"iter = {r['outer_iter']}  tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}  "
                           f"RAM = {qpalm_out['ram']:.0f} MB")
+                if cooldown > 0:
+                    time.sleep(cooldown)
 
             # ---- OSQP ---------------------------------------------------
             if "osqp" in solvers:
@@ -731,20 +799,22 @@ def main() -> None:
                     print(f"  OSQP    : ERROR — {osqp_out['error']}")
                     row.update(osqp_status=-99, osqp_solved=0, osqp_time=np.inf, osqp_iter=np.inf,
                                osqp_obj=np.nan, osqp_tol_achieved=np.nan,
-                               osqp_peak_ram_mb=osqp_out.get("ram", float("nan")))
+                               osqp_avg_ram_mb=osqp_out.get("ram", float("nan")))
                 else:
                     r = osqp_out["res"]
                     row["osqp_status"]       = r["status"]
                     row["osqp_solved"]       = int(r["status"] == OSQP_SOLVED)
-                    row["osqp_time"]         = r["solving_time"]
-                    row["osqp_iter"]         = r["iter"]
+                    row["osqp_time"]         = r["run_time"]
+                    row["osqp_iter"]         = r["outer_iter"]
                     row["osqp_obj"]          = r["obj_val"]
                     row["osqp_tol_achieved"] = r["tol_achieved"]
-                    row["osqp_peak_ram_mb"]  = osqp_out["ram"]
+                    row["osqp_avg_ram_mb"]  = osqp_out["ram"]
                     status_str = "OPTIMAL" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
-                    print(f"  OSQP    : {status_str:12s}  t = {r['solving_time']:.3f} s  "
-                          f"iter = {r['iter']}  tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}  "
+                    print(f"  OSQP    : {status_str:12s}  t = {r['run_time']:.3f} s  "
+                          f"iter = {r['outer_iter']}  tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}  "
                           f"RAM = {osqp_out['ram']:.0f} MB")
+                if cooldown > 0:
+                    time.sleep(cooldown)
 
             writer.writerow(row)
             fh.flush()
@@ -757,6 +827,9 @@ def main() -> None:
 
     out_prefix_iters = result_dir / f"{prefix}performance_profile_mm_iters"
     plot_performance_profile_iters(csv_path, out_prefix_iters, tol=tol, time_limit=time_limit, solvers=solvers)
+
+    out_prefix_inner = result_dir / f"{prefix}performance_profile_mm_inner_iters"
+    plot_performance_profile_inner_iters(csv_path, out_prefix_inner, tol=tol, time_limit=time_limit, solvers=solvers)
 
 
 if __name__ == "__main__":

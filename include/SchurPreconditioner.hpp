@@ -23,48 +23,44 @@ public:
     using Triplet = Eigen::Triplet<T>;
     using BoolArr = Eigen::Array<bool, Eigen::Dynamic, 1>;
 
+    // ------ Setup ------
+
     SchurPreconditioner() = default;
 
     SchurPreconditioner(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const BoolArr& active_K, T mu)
         : G_(&G), G_tr_(&G_tr), H_diag_(&H_diag), active_K_(&active_K), mu_(mu) {}
 
-    // prec_pattern_changed=true whenever G's sparsity structure or active_K changes:
-    // P = G E G^T + (1/mu) I, where E_ii = 1/H_diag_i if active_K_i else 0.
-    // Both G's column structure and which entries of E are nonzero determine P's sparsity.
-    // G E G^T is independent of mu (active_K entries have H_diag = 1/rho, not mu).
-    // So when only mu changes, we skip the G*E*G^T product and only update
-    // the (1/mu)I diagonal in P_ before refactorizing.
-    //
-    // active_W: full boolean mask of active W constraints (size l); used for SMW rank detection.
-    // B_rm:     row-major B matrix; used in SMW setup to compute V_+ and W_+ for added rows.
     void setData(const SpMat& G, const SpMat& G_tr, const Vec& H_diag,
                  const BoolArr& active_K, const BoolArr& active_W,
                  const RowMajorSpMat& B_rm,
                  T mu, bool rebuild, bool prec_pattern_changed) {
+        // Store data pointers and set flags for refactorization.
         G_        = &G;
         G_tr_     = &G_tr;
         H_diag_   = &H_diag;
         active_K_ = &active_K;
         active_W_ = &active_W;
-        B_rm_     = &B_rm;
+        B_rm_     = &B_rm; // row-major B matrix
         mu_       = mu;
 
-        // Detect if the size of G, the sparsity of G, or the active_K mask has changed since the last factorization.
+        // Detect if refactorization is needed.
         bool size_changed = (s_current_ != static_cast<int>(G.rows()));
         if (!pattern_analyzed_ || prec_pattern_changed || size_changed)
             pattern_dirty_ = true;
 
-        // Detect if the sparsity pattern of G has changed since the last factorization.
+        // Detect if G E G^T needs to be recomputed.
         if (prec_pattern_changed || size_changed)
             base_dirty_ = true;
 
-        // Detect if the numerical values of G or H_diag have changed since the last factorization.
+        // Detect if P needs to be rebuild.
         rebuild_ = rebuild || size_changed;
 
         // M_rows_ = number of equality-constraint (A) rows = G.rows() - n_active_W; constant.
         if (M_rows_ < 0 && static_cast<int>(G.rows()) > 0)
             M_rows_ = static_cast<int>(G.rows()) - static_cast<int>(active_W.count());
     }
+
+    // ------ Factorization ------
 
     template <typename MatrixType>
     SchurPreconditioner& compute(const MatrixType&) {
@@ -76,12 +72,24 @@ public:
         return *this;
     }
 
+    // ------ Application ------
+
     template <typename Rhs>
     const Vec& solve(const Eigen::MatrixBase<Rhs>& b) const {
         if (info_ != Eigen::Success)
             throw std::runtime_error("SchurPreconditioner solve called after failed factorization.");
+
         if (!use_smw_) {
-            direct_result_ = llt_.solve(b);
+            if (use_ldlt_) {
+                // Solve hat_P [w1; w2] = [0; b]; return w2 = P^{-1} b.
+                const int s = static_cast<int>(b.size());
+                ldlt_rhs_.resize(n_act_ + s);
+                ldlt_rhs_.head(n_act_).setZero();
+                ldlt_rhs_.tail(s) = b;
+                direct_result_ = ldlt_.solve(ldlt_rhs_).tail(s);
+            } else {
+                direct_result_ = llt_.solve(b);
+            }
             return direct_result_;
         }
 
@@ -93,7 +101,15 @@ public:
             r_pad_(retained_old_rows_[i]) = b(retained_new_rows_[i]);
 
         // u_base = P_old^-1 r_pad
-        u_base_ = llt_.solve(r_pad_);
+        if (use_ldlt_) {
+            const int s = r_pad_.size();
+            ldlt_rhs_.resize(n_act_ + s);
+            ldlt_rhs_.head(n_act_).setZero();
+            ldlt_rhs_.tail(s) = r_pad_;
+            u_base_ = ldlt_.solve(ldlt_rhs_).tail(s);
+        } else {
+            u_base_ = llt_.solve(r_pad_);
+        }
 
         // Lambda = g_all - V_all^T u_base, computed structurally without building V_all.
         //   E_-^T u_base  (h scalar gathers)
@@ -130,41 +146,161 @@ public:
         return z_new_;
     }
 
+    // ------ Diagnostics & SMW control ------
+
     Eigen::ComputationInfo info() const { return info_; }
     int fact_count() const { return fact_count_; }
     int smw_count()  const { return smw_count_; }
     bool used_smw()  const { return use_smw_; }
 
-    // Force the next build() to skip SMW and fully recompute G E G^T from scratch.
     void force_full_rebuild() { skip_smw_ = true; base_dirty_ = true; }
-
-    // Called by the solver when SMW was used but CG failed.
-    // Suppresses SMW after kMaxSmwFailStreak consecutive failures, or if the cumulative
-    // failure rate exceeds kMaxSmwFailRate once kMinSmwAttempts have been made.
     void record_smw_rebuild() { smw_fail_streak_++; smw_fail_total_++; }
-    // Called by the solver when CG succeeds on the first attempt with SMW active.
     void reset_smw_fail_streak() { smw_fail_streak_ = 0; }
     bool smw_suppressed() const {
         if (smw_fail_streak_ >= kMaxSmwFailStreak) return true;
-        if (smw_count_ >= kMinSmwAttempts &&
-            smw_fail_total_ >= static_cast<int>(kMaxSmwFailRate * smw_count_))
-            return true;
-        return false;
+        else return false;
     }
+    void set_use_ldlt(bool flag) { use_ldlt_ = flag; }
 
 private:
-    void snapshot_state() {
-        G_old_        = *G_;
-        H_diag_old_   = *H_diag_;
-        active_K_old_ = *active_K_;
-        if (active_W_) active_W_old_ = *active_W_;
+    // ------ Formation and Cholesky factorization ------
+
+    void build() {
+        use_smw_ = false;
+
+        // Case 1. Skip build() and reuse the cached factorization via low-rank SMW update.
+        if (initialized_ && info_ == Eigen::Success && try_build_smw())
+            return;
+
+        // Case 2. Full factorization.
+        if (use_ldlt_) {
+            factorize_by_ldlt();
+        } else {
+            factorize_by_chol();
+        }
     }
+
+    // Build P_hat = [-H_act, G_act^T; G_act, (1/mu)I] and factorize with LDLT.
+    void factorize_by_ldlt() {
+        const SpMat&   G        = *G_;
+        const Vec&     H_diag   = *H_diag_;
+        const BoolArr& active_K = *active_K_;
+
+        const Eigen::Index s = G.rows();
+        const Eigen::Index n = G.cols();
+
+        // Collect active K indices.
+        std::vector<int> act_idx;
+        act_idx.reserve(n);
+        for (Eigen::Index i = 0; i < n; ++i)
+            if (active_K(i)) act_idx.push_back(static_cast<int>(i));
+        const int n_act = static_cast<int>(act_idx.size());
+
+        // Build P_hat of size (n_act + s) x (n_act + s).
+        std::vector<Triplet> trips;
+        trips.reserve(n_act + 2 * static_cast<int>(G.nonZeros()) + static_cast<int>(s));
+
+        // Top-left block: -H_act (diagonal, n_act x n_act).
+        for (int k = 0; k < n_act; ++k)
+            trips.emplace_back(k, k, -H_diag(act_idx[k]));
+
+        // Off-diagonal blocks: G_act (s x n_act) and G_act^T (n_act x s).
+        for (int k = 0; k < n_act; ++k)
+            for (typename SpMat::InnerIterator it(G, act_idx[k]); it; ++it) {
+                const int row = static_cast<int>(it.row());
+                trips.emplace_back(n_act + row, k,          it.value()); // G_act
+                trips.emplace_back(k,           n_act + row, it.value()); // G_act^T
+            }
+
+        // Bottom-right block: (1/mu) I_s.
+        for (Eigen::Index i = 0; i < s; ++i)
+            trips.emplace_back(n_act + i, n_act + i, T(1) / mu_);
+
+        P_hat_.resize(n_act + s, n_act + s);
+        P_hat_.setFromTriplets(trips.begin(), trips.end());
+        P_hat_.makeCompressed();
+
+        if (pattern_dirty_) {
+            ldlt_.analyzePattern(P_hat_);
+            pattern_analyzed_ = true;
+            pattern_dirty_ = false;
+        }
+        ldlt_.factorize(P_hat_);
+        info_ = ldlt_.info();
+        fact_count_++;
+        mu_at_last_fact_       = mu_;
+        use_ldlt_at_last_fact_ = true;
+        n_act_     = n_act;
+        s_current_ = static_cast<int>(s);
+        base_dirty_ = false;
+
+        snapshot_state();
+    }
+
+    // Build P = G E G^T + (1/mu) I (or shift its mu diagonal), then factorize with Cholesky.
+    void factorize_by_chol() {
+        const SpMat&   G        = *G_;
+        const SpMat&   G_tr     = *G_tr_;
+        const Vec&     H_diag   = *H_diag_;
+        const BoolArr& active_K = *active_K_;
+
+        const Eigen::Index s = G.rows();
+        const Eigen::Index n = G.cols();
+
+        assert(G_tr.rows() == n);
+        assert(G_tr.cols() == s);
+        assert(H_diag.size() == n);
+        assert(active_K.size() == n);
+
+        if (base_dirty_) {
+            // Rebuild G E G^T.
+            assert(H_diag.minCoeff() > T(0));
+            std::vector<Triplet> trips;
+            trips.reserve(n);
+            for (Eigen::Index i = 0; i < n; ++i)
+                if (active_K(i))
+                    trips.emplace_back(i, i, T(1) / H_diag(i));
+            SpMat E(n, n);
+            E.setFromTriplets(trips.begin(), trips.end());
+            E.makeCompressed();
+
+            P_ = G * E * G_tr;
+            base_dirty_ = false;
+
+            for (Eigen::Index i = 0; i < s; ++i)
+                P_.coeffRef(i, i) += T(1) / mu_;
+            P_.makeCompressed();
+        } else {
+            // G E G^T unchanged; only mu changed: shift the (1/mu) I diagonal by delta.
+            const T delta = (mu_at_last_fact_ - mu_) / (mu_ * mu_at_last_fact_);
+            for (Eigen::Index i = 0; i < s; ++i)
+                P_.coeffRef(i, i) += delta;
+        }
+
+        if (pattern_dirty_) {
+            llt_.analyzePattern(P_);
+            pattern_analyzed_ = true;
+            pattern_dirty_ = false;
+        }
+        llt_.factorize(P_);
+        info_ = llt_.info();
+        fact_count_++;
+        mu_at_last_fact_       = mu_;
+        use_ldlt_at_last_fact_ = false;
+        s_current_ = static_cast<int>(s);
+
+        snapshot_state();
+    }
+
+    // ------ SMW low-rank update ------
 
     // SMW Setup Phase. Returns true and arms use_smw_ iff 0 < h+p+q <= threshold.
     bool try_build_smw() {
         if (skip_smw_) { skip_smw_ = false; return false; }
         if (smw_fail_streak_ >= kMaxSmwFailStreak) return false;
         if (!active_W_ || !B_rm_ || M_rows_ < 0) return false;
+        // If the factorization method changed since last full rebuild, do refactorization instead of SMW.
+        if (use_ldlt_ != use_ldlt_at_last_fact_) return false; 
         if (active_W_old_.size() == 0 || active_K_old_.size() == 0) return false;
 
         const int s_old = static_cast<int>(G_old_.rows());
@@ -172,7 +308,7 @@ private:
         const int N = static_cast<int>(G_old_.cols());
         const int l = static_cast<int>(active_W_->size());
 
-        // ---- Classify W and K changes ----
+        // Classify W and K changes
         deleted_old_rows_.clear();
         retained_old_rows_.clear();
         retained_new_rows_.clear();
@@ -209,7 +345,7 @@ private:
         h_ = h; p_ = p; q_ = q; s_old_ = s_old;
 
         // ---- Build V_plus_ (s_old × q) via sparse column accumulation ----
-        // For each added W constraint j: 
+        // For each added W constraint j:
         //   V_plus_[:,j] = sum_{i in B_j, active_K[i]} (b_ji / H_diag[i]) * G_old_[:,i].
         V_plus_.setZero(s_old, q);
         {
@@ -275,11 +411,22 @@ private:
         {
             Vec tmp = Vec::Zero(s_old);
 
+            // Helper: P_old^-1 v via LLT, or (P_hat_old^-1 [0;v]).tail via LDLT.
+            auto solve_base_vec = [&](const Vec& rhs) -> Vec {
+                if (use_ldlt_) {
+                    Vec padded = Vec::Zero(n_act_ + s_old);
+                    padded.tail(s_old) = rhs;
+                    return ldlt_.solve(padded).tail(s_old);
+                } else {
+                    return llt_.solve(rhs);
+                }
+            };
+
             // Cols 0..h-1: P_old^-1 e_{del_k}  (unit-vector RHS)
             for (int k = 0; k < h; ++k) {
                 if (k > 0) tmp(deleted_old_rows_[k - 1]) = T(0);
                 tmp(deleted_old_rows_[k]) = T(1);
-                Y_all_.col(k) = llt_.solve(tmp);
+                Y_all_.col(k) = solve_base_vec(tmp);
             }
             if (h > 0) tmp(deleted_old_rows_[h - 1]) = T(0);
 
@@ -287,14 +434,21 @@ private:
             for (int j = 0; j < p; ++j) {
                 for (typename SpMat::InnerIterator it(G_old_, delta_K_idx_[j]); it; ++it)
                     tmp(it.row()) = it.value();
-                Y_all_.col(h + j) = llt_.solve(tmp);
+                Y_all_.col(h + j) = solve_base_vec(tmp);
                 for (typename SpMat::InnerIterator it(G_old_, delta_K_idx_[j]); it; ++it)
                     tmp(it.row()) = T(0);
             }
 
             // Cols h+p..rank-1: P_old^-1 V_plus_  (dense block multi-RHS)
-            if (q > 0)
-                Y_all_.rightCols(q) = llt_.solve(V_plus_);
+            if (q > 0) {
+                if (use_ldlt_) {
+                    Mat padded_V = Mat::Zero(n_act_ + s_old, q);
+                    padded_V.bottomRows(s_old) = V_plus_;
+                    Y_all_.rightCols(q) = ldlt_.solve(padded_V).bottomRows(s_old);
+                } else {
+                    Y_all_.rightCols(q) = llt_.solve(V_plus_);
+                }
+            }
         }
 
         // ---- Capacitance matrix S_Lambda = M_sub - V_all^T Y_all, structured ----
@@ -313,7 +467,10 @@ private:
         if (q > 0)
             S_Lambda.bottomRows(q).noalias() -= V_plus_.transpose() * Y_all_;
 
+        S_lambda_lu_.setThreshold(std::sqrt(std::numeric_limits<T>::epsilon()));
         S_lambda_lu_.compute(S_Lambda);
+        if (S_lambda_lu_.rank() < rank)
+            return false;  // near-singular capacitance matrix; fall back to full rebuild
 
         // ---- Pre-allocate hot-loop vectors; set deleted r_pad_ positions to zero once ----
         const int s_new = s_old - h + q;
@@ -329,72 +486,15 @@ private:
         return true;
     }
 
-    // Build P = G E G^T + (1/mu) I.
-    // Tries SMW first; falls back to full rebuild if SMW is inapplicable.
-    // If base_dirty_: recompute P_base_ = G E G^T, then build P_.
-    // If only mu changed: update the (1/mu)I diagonal of P_ in-place, then refactorize.
-    void build() {
-        use_smw_ = false;
-
-        // Case 1. Reuse cached llt_ via low-rank SMW correction.
-        if (initialized_ && info_ == Eigen::Success && try_build_smw())
-            return;
-
-        // Case 2. Full rebuild of P and numeric factorization.
-        const SpMat& G       = *G_;
-        const SpMat& G_tr    = *G_tr_;
-        const Vec&   H_diag  = *H_diag_;
-        const BoolArr& active_K = *active_K_;
-
-        const Eigen::Index s = G.rows();
-        const Eigen::Index n = G.cols();
-
-        assert(G_tr.rows() == n);
-        assert(G_tr.cols() == s);
-        assert(H_diag.size() == n);
-        assert(active_K.size() == n);
-
-        if (base_dirty_) {
-            // Rebuild G E G^T: E_ii = 1/H_diag(i) if active_K(i), else 0.
-            std::vector<Triplet> trips;
-            trips.reserve(n);
-            for (Eigen::Index i = 0; i < n; ++i)
-                if (active_K(i))
-                    trips.emplace_back(i, i, T(1) / H_diag(i));
-            SpMat E(n, n);
-            E.setFromTriplets(trips.begin(), trips.end());
-            E.makeCompressed();
-
-            P_ = G * E * G_tr;
-            base_dirty_ = false;
-
-            for (Eigen::Index i = 0; i < s; ++i)
-                P_.coeffRef(i, i) += T(1) / mu_;
-            P_.makeCompressed();
-        } else {
-            // Only mu changed: shift the (1/mu)I diagonal by delta.
-            const T delta = T(1) / mu_ - T(1) / mu_at_last_fact_;
-            for (Eigen::Index i = 0; i < s; ++i)
-                P_.coeffRef(i, i) += delta;
-        }
-
-        // Symbolic analysis only when P's sparsity pattern has changed.
-        if (pattern_dirty_) {
-            llt_.analyzePattern(P_);
-            pattern_analyzed_ = true;
-            pattern_dirty_ = false;
-        }
-        llt_.factorize(P_);
-        info_ = llt_.info();
-        fact_count_++;
-        mu_at_last_fact_ = mu_;
-        s_current_ = static_cast<int>(G.rows());
-
-        // Snapshot for next SMW attempt: tracks the last fully-factorized state.
-        snapshot_state();
+    // Helper: snapshot last full-rebuild state for next SMW attempt
+    void snapshot_state() {
+        G_old_        = *G_;
+        H_diag_old_   = *H_diag_;
+        active_K_old_ = *active_K_;
+        if (active_W_) active_W_old_ = *active_W_;
     }
 
-    // ---- Pointers to external data ----
+    // ------ Setup: external data ------
     const SpMat*         G_        = nullptr;
     const SpMat*         G_tr_     = nullptr;
     const Vec*           H_diag_   = nullptr;
@@ -402,55 +502,54 @@ private:
     const BoolArr*       active_W_ = nullptr;
     const RowMajorSpMat* B_rm_     = nullptr;
     T mu_ = T(1);
+    int M_rows_    = -1;  // number of equality-constraint rows; constant once set
+    int s_current_ = -1;  // current row count of G (tracks dimension changes)
 
-    // ---- State flags ----
-    bool rebuild_          = true;
+    // ------ Formation state ------
     bool initialized_      = false;
+    bool rebuild_          = true;
     bool pattern_analyzed_ = false;
     bool pattern_dirty_    = true;
     bool base_dirty_       = true;
-    bool skip_smw_         = false;
     T    mu_at_last_fact_  = T(-1);
-    int  s_current_        = -1;
-    int  M_rows_           = -1;
 
-    // ---- Factorization data (full rebuild path) ----
+    // ------ Cholesky factorization ------
+    bool use_ldlt_ = false;
+    bool use_ldlt_at_last_fact_ = false; // which factorizer (llt_ or ldlt_) is currently valid
     SpMat P_;
-    Eigen::SimplicialLLT<SpMat> llt_;
+    Eigen::SimplicialLLT<SpMat>  llt_;
+    SpMat P_hat_;
+    Eigen::SimplicialLDLT<SpMat> ldlt_;
+    int n_act_ = 0;
     Eigen::ComputationInfo info_ = Eigen::Success;
-    int fact_count_      = 0;
-    int smw_count_       = 0;
-    int smw_fail_streak_ = 0;
-    int smw_fail_total_  = 0;
-    static constexpr int   kMaxSmwFailStreak = 5;
-    static constexpr int   kMinSmwAttempts   = 5;
-    static constexpr double kMaxSmwFailRate  = 0.5;
+    int fact_count_ = 0;
 
-    // ---- Snapshots from last FULL factorization ----
+    // ------ SMW low-rank update ------
+    // Control & failure tracking
+    bool skip_smw_        = false;
+    bool use_smw_         = false;
+    int  smw_count_       = 0;
+    int  smw_fail_streak_ = 0;
+    int  smw_fail_total_  = 0;
+    static constexpr int    kMaxSmwFailStreak = 5;
+    // Snapshots from last full rebuild (input to try_build_smw)
     SpMat   G_old_;
     Vec     H_diag_old_;
     BoolArr active_K_old_;
     BoolArr active_W_old_;
-
-    // ---- SMW capacitance data ----
-    bool use_smw_ = false;
-    int  s_old_ = 0, h_ = 0, p_ = 0, q_ = 0;
-
+    // Setup results (output of try_build_smw, consumed by solve)
+    int s_old_ = 0, h_ = 0, p_ = 0, q_ = 0;
     std::vector<int> deleted_old_rows_;
     std::vector<int> retained_old_rows_;
     std::vector<int> retained_new_rows_;
     std::vector<int> added_new_rows_;
     std::vector<int> added_W_src_;
     std::vector<int> delta_K_idx_;
-
-    // V_plus_: s_old × q dense (only the V_+ block of V_all; E_- and U blocks are implicit).
-    // Y_all_:  s_old × rank dense (all correction directions, needed for step 6 mat-vec).
     Mat V_plus_;
     Mat Y_all_;
     Eigen::FullPivLU<Mat> S_lambda_lu_;
-    // Eigen::PartialPivLU<Mat> S_lambda_lu_;
 
-    // Pre-allocated hot-loop vectors (mutable for const solve()).
-    // r_pad_ is zeroed once at setup; deleted positions never written during Krylov.
+    // ------ Application: solve-time working storage (mutable for const solve) ------
     mutable Vec r_pad_, u_base_, Lambda_all_, lambda_work_, z_base_, z_new_, direct_result_;
+    mutable Vec ldlt_rhs_;
 };
