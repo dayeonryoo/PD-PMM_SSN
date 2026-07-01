@@ -28,7 +28,7 @@ int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
-    std::string name = "HS21";
+    std::string name = "Q25FV47";
     std::string filename = root + name + ".SIF";
 
     std::cout << "==================== Solving " + name << " ====================\n";
@@ -38,21 +38,18 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-6;
-    int max_iter = 10000000;
+    int max_iter = 1000000;
     double time_limit = 1000.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
-    PrintWhat what = PrintWhat::MINIMAL;
+    PrintWhat what = PrintWhat::TUNING;
 
     Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
     SSN_PMM<T> solver(prob);
 
     // Solve:
-    auto start = std::chrono::high_resolution_clock::now();
     Solution<T> sol = solver.solve();
     sol.print_summary();
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    std::cout << "\nPMM solver took " << elapsed.count() << " s.\n";
+    std::cout << "\nPMM solver took " << sol.run_time << " s.\n";
 
     // Check feasibility
     // print_feasibility(pd, sol.x, tol);
@@ -557,16 +554,16 @@ int main() {
 
     // Parameters
     T tol = 1e-6;
-    int max_iter = 10000000;
-    double time_limit = 100.0; // in seconds
+    int max_iter = 3000;
+    double time_limit = 1800.0; // in seconds
 
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
-    int cooldown_sec = 2;      // seconds to sleep between problems (prevents CPU throttling)
+    int cooldown_sec = 0;      // seconds to sleep between problems (prevents CPU throttling)
 
     // Solver result
-    std::string csv_path = root + "results/0626mm_01.csv";
+    std::string csv_path = root + "results/0701mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {

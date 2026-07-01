@@ -712,14 +712,15 @@ template <typename T>
 void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg) {
 
     T worst_res = new_res_norms.maxCoeff();
+    T worst_res_old = res_norms.maxCoeff();
     T worst_ratio = (new_res_norms.array() / (res_norms.array().abs() + T(100) * std::numeric_limits<T>::epsilon())).maxCoeff();
 
     bool ssn_valid = (ssn_opt == 0 || (ssn_opt == 2 && ssn_tol_arg < worst_res));
     bool stagnating = (worst_ratio > T(0.9));
 
     if (ssn_opt == 0) {
-        mu = std::min(mu_limit, T(1.7) * mu);
-        rho = std::min(rho_limit, T(1.7) * rho);
+        mu = std::min(mu_limit, T(1.5) * mu);
+        rho = std::min(rho_limit, T(1.5) * rho);
         ssn_tol = std::max(eps_limit, ssn_tol / std::pow(mu, T(0.3)));
         /*
         if (!stagnating) {
@@ -746,8 +747,8 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
             }
         }
         */
-    } else if (ssn_opt == 2 && ssn_tol_arg < worst_res) {
-        // Max SSN iterations reached, but the inner tolerance was achieved and the PMM step made progress.
+    } else if (ssn_opt == 2 && worst_res < 0.9 * worst_res_old) {
+        // Max SSN iterations reached, but the PMM step made a good progress.
         // mu = std::min(mu_limit, T(1.05) * mu);
         // rho = std::min(rho_limit, T(1.05) * rho);
         // Keep the inner tolerance the same
@@ -761,7 +762,7 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
         rho = std::max(rho0, T(0.8) * rho);
         
         // Loosen the inner tolerance so the next PMM step can at least proceed.
-        ssn_tol = std::min({worst_res, T(10.0) * ssn_tol, T(1e-2)});
+        ssn_tol = std::min({worst_res, T(10) * ssn_tol, T(1e-2)});
     }
 }
 
@@ -916,17 +917,22 @@ Solution<T> SSN_PMM<T>::solve() {
             break;
         }
 
-        // Always accept x.
+        // Accept x.
         x = NS.x;
 
-        // Compute Ax, Bx, Qx for the new x (always needed for residual norms).
+        // Compute Ax, Bx, Qx for the new x.
         if (M > 0) Ax_scratch_.noalias() = A * x; else Ax_scratch_.setZero();
         if (l  > 0) Bx_scratch_.noalias() = B * x; else Bx_scratch_.setZero();
         if (Q_info != 0) Qx_scratch_.noalias() = Q_diag.cwiseProduct(x); else Qx_scratch_.setZero();
         Adx_scratch_.noalias() = Ax_scratch_ - Ax_old_scratch_;
         Bdx_scratch_.noalias() = Bx_scratch_ - Bx_old_scratch_;
 
-        if (ssn_tol_achieved <= T(1e3) * pmm_tol_achieved) {
+        // Dual infeasibility check
+        if (dual_infeas(x - x_old_scratch_, Adx_scratch_, Bdx_scratch_)) {
+                opt = -3; std::cout << "Dual infeasible.\n"; break;
+            }
+
+        if (ssn_tol_achieved <= T(100) * pmm_tol_achieved) {
             // Accept full update: y2, y1, z.
             y2 = NS.y2;
 
@@ -936,15 +942,15 @@ Solution<T> SSN_PMM<T>::solve() {
             delta_z = mu * (x - proj(z / mu + x, lx, ux));
             z += delta_z;
 
-            // Primal/dual infeasibility checks.
+            // Primal infeasibility checks.
             if (primal_infeas(delta_y1, y2 - y2_old_scratch_, delta_z)) {
                 opt = -2; std::cout << "Primal infeasible.\n"; break;
             }
-            if (dual_infeas(x - x_old_scratch_, Adx_scratch_, Bdx_scratch_)) {
-                opt = -3; std::cout << "Dual infeasible.\n"; break;
-            }
+        } else {
+            std::cout << "PMM res = " << pmm_tol_achieved << ", SSN res = " << ssn_tol_achieved;
+            std::cout << "SSN solve is not accurate enough.\n";
         }
-        // else: SSN residual > 1e4 — keep y2, y1, z from previous PMM iteration.
+        // else: keep y2, y1, z from previous PMM iteration.
 
         // Update PMM parameters based on the progress of residual norms and SSN solve quality.
         ResVec new_res_norms = compute_residual_norms_inf(Ax_scratch_, Bx_scratch_, Qx_scratch_);
@@ -970,7 +976,7 @@ Solution<T> SSN_PMM<T>::solve() {
         print(when, what, pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, res_norms, ssn_tol_achieved, mu, rho, eps_bcl, ssn_tol, linesearch_fail, NS.krylov_fail);
         pmm_iter++;
 
-        // Carry Ax, Bx forward via O(1) pointer swap — no allocation.
+        // Carry Ax, Bx forward.
         Ax_old_scratch_.swap(Ax_scratch_);
         Bx_old_scratch_.swap(Bx_scratch_);
 

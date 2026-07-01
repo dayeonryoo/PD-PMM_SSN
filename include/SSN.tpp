@@ -202,30 +202,33 @@ void SSN<T>::retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const Bool
 }
 
 template <typename T>
-bool SSN<T>::choose_ldlt(const SpMat& G) {
-    // Compare the estimated total works required to factorize the KKT matrix K and the Schur complement S.
-    //  Ratio = (s / (s+t)) * (|K|^2 / |S|^2), where t = G.cols(), s = G.rows().
-    // |K| = nnz in the full KKT matrix [-H, G^T; G, (1/mu)I].
-    // |S| is overestimated via the densest column and the pigeonhole principle.
+bool SSN<T>::choose_ldlt(const SpMat& G, const BoolArr& active_K) {
+    // Compare the estimated total work required to factorize the KKT matrix K and the Schur complement S.
+    //  Ratio = (s / (s+t)) * (|K|^2 / |S|^2), where s = G.rows() and t = n_act_K.
+    // |K| = nnz in the KKT matrix [-H_act_K, G_act_K^T; G_act_K, (1/mu)I] (active_K columns only).
+    // |S| is overestimated via the densest active_K column and the pigeonhole principle.
     // Returns true (prefer LDLT on K) when ratio < 0.1.
     const int s = G.rows();
-    const int t = G.cols();
 
-    const long long K_nnz = (long long)(t + s) + 2LL * G.nonZeros();
-
-    // Find densest column (hat_k, G_hat).
+    // Pass 1: count active_K columns (t), their total nnz, and the densest one (hat_k, G_hat).
+    long long t = 0, G_act_nnz = 0;
     int G_hat = 0, hat_k = -1;
-    for (int k = 0; k < t; ++k) {
+    for (int k = 0; k < N; ++k) {
+        if (!active_K(k)) continue;
+        ++t;
         int a_k = G.isCompressed()
                 ? G.outerIndexPtr()[k + 1] - G.outerIndexPtr()[k] // nnz in column k
                 : (int)G.col(k).nonZeros();
+        G_act_nnz += a_k;
         if (a_k > G_hat) { G_hat = a_k; hat_k = k; }
     }
 
-    // Overestimate |S|: s (diagonal) + off-diagonal from denest block + pigeonhole corrections.
+    const long long K_nnz = (t + s) + 2LL * G_act_nnz;
+
+    // Overestimate |S|: s (diagonal) + off-diagonal from densest block + pigeonhole corrections.
     long long S_nnz = (long long)s + (long long)G_hat * G_hat - G_hat;
-    for (int k = 0; k < t; ++k) {
-        if (k == hat_k) continue;
+    for (int k = 0; k < N; ++k) {
+        if (!active_K(k) || k == hat_k) continue;
         int a_k = G.isCompressed()
                 ? G.outerIndexPtr()[k + 1] - G.outerIndexPtr()[k]
                 : (int)G.col(k).nonZeros();
@@ -237,15 +240,15 @@ bool SSN<T>::choose_ldlt(const SpMat& G) {
     }
 
     if (S_nnz <= 0) {
-        // std::cout << "0: ";
+        std::cout << "0: ";
         return true;
     }
 
     const double ratio = ((double)s / (t + s))
                        * ((double)K_nnz / S_nnz)
                        * ((double)K_nnz / S_nnz);
-    
-    // std::cout << ratio << ": ";
+
+    std::cout << ratio << ": ";
     return ratio < 0.1;
 }
 
@@ -284,6 +287,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     // Returns false and increments krylov_fail on preconditioner failure or solver non-convergence.
     auto attempt_solve = [&](Vec& dy_out) -> bool {
         if (cg.preconditioner().info() != Eigen::Success) {
+            std::cout << "[WARN] Krylov failed due to preconditioner failure.\n";
             krylov_fail++;
             return false;
         }
@@ -296,6 +300,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         }
         krylov_iter += cg.iterations();
         if (cg.info() != Eigen::Success) {
+            std::cout << "[WARN] Krylov failed to converge.\n";
             krylov_fail++;
             return false;
         }
@@ -312,6 +317,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         setup_prec(false);
         ok = attempt_solve(dy_);
     } catch (const std::bad_alloc&) {
+        std::cout << "[WARN] CG failed due to bad_alloc.\n";
         krylov_fail++;
         krylov_converged = false;
         ldlt_used = true;
@@ -330,6 +336,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
             setup_prec(true);
             ok = attempt_solve(dy_);
         } catch (const std::bad_alloc&) {
+            std::cout << "[WARN] CG failed due to bad_alloc.\n";
             krylov_fail++;
             krylov_converged = false;
             ldlt_used = true;
@@ -339,6 +346,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
     // If CG failed again, fall back to LDLT.
     if (!ok) {
+        std::cout << "[WARN] CG failed, falling back to solving the augmented Lagrangian system via LDLT.\n";
         krylov_converged = false;
         ldlt_used = true;
         return solve_using_ldlt(G, H_diag, r1, r2);
@@ -808,6 +816,8 @@ void SSN<T>::solve_ssn(const T eps) {
             ldlt_pattern_dirty_ = true;
             ldlt_numeric_dirty_ = true;
 
+            prev_dy_.resize(0); // No warm-starting for CG
+
             diag_P_W = new_diag_P_W_;
             active_W = (diag_P_W.array() == 0);
             inactive_W = (diag_P_W.array() == 1);
@@ -844,11 +854,15 @@ void SSN<T>::solve_ssn(const T eps) {
         
         // Solve for dx and dy2_active_W.
         auto t0_solve_lin_sys = std::chrono::steady_clock::now();
-        if (!sys_chosen && pw_changed) {
-            use_ldlt = choose_ldlt(G);
+        if ((pk_changed || pw_changed) && ldlt_decisions_made_ < 3) {
+            auto t0_ratio_comp = std::chrono::steady_clock::now();
+            use_ldlt = choose_ldlt(G, active_K);
+            ++ldlt_decisions_made_;
             if (use_ldlt) std::cout << "LDLT used.\n";
             else std::cout << "Chol used.\n";
-        } // Determines the factorization method for a preconditioner
+            auto t1_ratio_compt = std::chrono::steady_clock::now();
+            // std::cout << "choosing a system took " << time_diff_ms(t0_ratio_comp, t1_ratio_compt) << "ms.\n";
+        } // Determines the factorization method for a preconditioner; locked after the first 3 decisions
         dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1_, r2_, mu, krylov_tol, krylov_max_in_iter, update_prec, prec_pattern_changed, use_ldlt);
 
         auto t1_solve_lin_sys = std::chrono::steady_clock::now();

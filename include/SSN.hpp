@@ -67,8 +67,9 @@ public:
     // Conjugate gradient parameters
     T krylov_tol = 1e-14;
     int krylov_max_in_iter = 500;
-    bool sys_chosen = false; // Choose how to factorize a preconditioner
+    bool choose_system = true; // Choose how to factorize a preconditioner based on sparsity
     bool use_ldlt = false; // Factorize a preconditioner via LDLT
+    int ldlt_decisions_made_ = 0; // choose_ldlt() call count; locked after the first 3 (ratio stabilizes early)
     bool ldlt_used = false; // PCG on normal eqn failed so LDLT on KKT system was used at least once
 
     using CGSolver = Eigen::ConjugateGradient<
@@ -166,7 +167,12 @@ public:
         this->delta_z = delta_z;
         ldlt_numeric_dirty_ = true;    // mu, rho may have changed
         A_tr_y1_ = A_tr * y1; // y1 is fixed for the entire SSN run; cache A^T y1 once
-        if (ssn_iter > 10) sys_chosen = true; // Enough SSN iters to fix the factorization method for a preconditioner
+
+        // Choose how to factorize a preconditioner every time in the early iterations
+        if (ssn_iter >= 5) choose_system = false;
+        else choose_system = true;
+        
+        cg.preconditioner().reset_smw_fail_streak(); // Reset SMW suppression
     }
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
@@ -198,7 +204,7 @@ public:
     SpMat scale_columns(const SpMat& M, const Vec& d);
     void retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);
     SpMat stack_rows(const SpMat& A, const SpMat& B);
-    bool choose_ldlt(const SpMat& G);
+    bool choose_ldlt(const SpMat& G, const BoolArr& active_K);
     Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool use_ldlt);
     Vec solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed);
     Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
