@@ -31,7 +31,7 @@ public:
     Vec x, y1, y2, z;
     Vec delta_x, delta_y1, delta_y2, delta_z;
     int ssn_max_in_iter;
-    T mu, rho, gamma, ssn_tol;
+    T mu, rho, alpha, ssn_tol;
     T eps_pinf, eps_dinf;
 
     // Useful vectors and matrices
@@ -154,14 +154,14 @@ public:
 
     void update_ssn_system(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z,
                            const Vec& delta_y1, const Vec& delta_z,
-                           T mu, T rho, T gamma, int ssn_iter) {
+                           T mu, T rho, T alpha, int ssn_iter) {
         this->x = x;
         this->y1 = y1;
         this->y2 = y2;
         this->z = z;
         this->mu = mu;
         this->rho = rho;
-        this->gamma = gamma;
+        this->alpha = alpha;
         this->ssn_iter = ssn_iter;
         this->delta_y1 = delta_y1;
         this->delta_z = delta_z;

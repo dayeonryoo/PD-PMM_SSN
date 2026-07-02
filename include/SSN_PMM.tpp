@@ -929,7 +929,7 @@ Solution<T> SSN_PMM<T>::solve() {
 
         // Dual infeasibility check
         if (dual_infeas(x - x_old_scratch_, Adx_scratch_, Bdx_scratch_)) {
-                opt = -3; std::cout << "Dual infeasible.\n"; break;
+                opt = -3; std::cout << "[Infeasibility] Dual infeasible.\n"; break;
             }
 
         if (ssn_tol_achieved <= T(100) * pmm_tol_achieved) {
@@ -944,13 +944,12 @@ Solution<T> SSN_PMM<T>::solve() {
 
             // Primal infeasibility checks.
             if (primal_infeas(delta_y1, y2 - y2_old_scratch_, delta_z)) {
-                opt = -2; std::cout << "Primal infeasible.\n"; break;
+                opt = -2; std::cout << "[Infeasibility] Primal infeasible.\n"; break;
             }
         } else {
-            std::cout << "PMM res = " << pmm_tol_achieved << ", SSN res = " << ssn_tol_achieved;
-            std::cout << "SSN solve is not accurate enough.\n";
+            std::cout << "[SSN] SSN solve is not accurate enough (SSN res = " << ssn_tol_achieved << ").\n";
+            // Keep y1, y2, z from previous PMM iteration
         }
-        // else: keep y2, y1, z from previous PMM iteration.
 
         // Update PMM parameters based on the progress of residual norms and SSN solve quality.
         ResVec new_res_norms = compute_residual_norms_inf(Ax_scratch_, Bx_scratch_, Qx_scratch_);

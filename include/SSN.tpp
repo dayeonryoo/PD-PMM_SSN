@@ -12,7 +12,7 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_
     using Vec = typename SSN<T>::Vec;
 
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
-    Vec dist_W = compute_dist_box(Bx_new + ((1 - gamma) * y2_new - y2) / mu, lw, uw);
+    Vec dist_W = compute_dist_box(Bx_new + ((1 - alpha) * y2_new - y2) / mu, lw, uw);
 
     Vec res_p = Ax_new - b;
 
@@ -22,13 +22,13 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_
         L = c.dot(x_new)
             - y1.dot(res_p) + (mu / 2) * res_p.squaredNorm()
             - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
-            + (mu / (2 * gamma)) * dist_W.squaredNorm() + ((1 - gamma) / (2 * mu)) * y2_new.squaredNorm() - y2.squaredNorm() / (2 * mu)
+            + (mu / (2 * alpha)) * dist_W.squaredNorm() + ((1 - alpha) / (2 * mu)) * y2_new.squaredNorm() - y2.squaredNorm() / (2 * mu)
             + (x_new - x).squaredNorm() / (2 * rho);
     } else {
         L = c.dot(x_new) + 0.5 * Q_diag.cwiseProduct(x_new).dot(x_new)
             - y1.dot(res_p) + (mu / 2) * res_p.squaredNorm()
             - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
-            + (mu / (2 * gamma)) * dist_W.squaredNorm() + ((1 - gamma) / (2 * mu)) * y2_new.squaredNorm() - y2.squaredNorm() / (2 * mu)
+            + (mu / (2 * alpha)) * dist_W.squaredNorm() + ((1 - alpha) / (2 * mu)) * y2_new.squaredNorm() - y2.squaredNorm() / (2 * mu)
             + (x_new - x).squaredNorm() / (2 * rho);
     }
     return L;
@@ -39,10 +39,10 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     using Vec = typename SSN<T>::Vec;
 
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
-    Vec dist_W = compute_dist_box(Bx_new + ((1 - gamma) * y2_new - y2) / mu, lw, uw);
+    Vec dist_W = compute_dist_box(Bx_new + ((1 - alpha) * y2_new - y2) / mu, lw, uw);
 
     Vec res_p = Ax_new - b;
-    Vec A_tr_y = - A_tr_y1_ + mu * A_tr * res_p + mu * dist_K + (mu / gamma) * B_tr * dist_W;
+    Vec A_tr_y = - A_tr_y1_ + mu * A_tr * res_p + mu * dist_K + (mu / alpha) * B_tr * dist_W;
 
     // Compute gradient of Lagrangian
     Vec grad_L_x;
@@ -52,7 +52,7 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
         Vec Qx = Q_diag.cwiseProduct(x_new);
         grad_L_x = c + Qx + A_tr_y + (x_new - x) / rho;
     }
-    Vec grad_L_y2 = ((1 - gamma) / gamma) * dist_W + ((1 - gamma) / mu) * y2_new;
+    Vec grad_L_y2 = ((1 - alpha) / alpha) * dist_W + ((1 - alpha) / mu) * y2_new;
 
     Vec grad_L(N + l);
     grad_L << grad_L_x, grad_L_y2;
@@ -287,7 +287,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     // Returns false and increments krylov_fail on preconditioner failure or solver non-convergence.
     auto attempt_solve = [&](Vec& dy_out) -> bool {
         if (cg.preconditioner().info() != Eigen::Success) {
-            std::cout << "[WARN] Krylov failed due to preconditioner failure.\n";
+            std::cout << "[PCG] CG failed due to preconditioner failure.\n";
             krylov_fail++;
             return false;
         }
@@ -300,7 +300,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         }
         krylov_iter += cg.iterations();
         if (cg.info() != Eigen::Success) {
-            std::cout << "[WARN] Krylov failed to converge.\n";
+            std::cout << "[PCG] CG failed to converge.\n";
             krylov_fail++;
             return false;
         }
@@ -317,7 +317,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         setup_prec(false);
         ok = attempt_solve(dy_);
     } catch (const std::bad_alloc&) {
-        std::cout << "[WARN] CG failed due to bad_alloc.\n";
+        std::cout << "[PCG] CG failed due to bad_alloc.\n";
         krylov_fail++;
         krylov_converged = false;
         ldlt_used = true;
@@ -336,7 +336,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
             setup_prec(true);
             ok = attempt_solve(dy_);
         } catch (const std::bad_alloc&) {
-            std::cout << "[WARN] CG failed due to bad_alloc.\n";
+            std::cout << "[PCG] CG failed due to bad_alloc.\n";
             krylov_fail++;
             krylov_converged = false;
             ldlt_used = true;
@@ -346,7 +346,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
     // If CG failed again, fall back to LDLT.
     if (!ok) {
-        std::cout << "[WARN] CG failed, falling back to solving the augmented Lagrangian system via LDLT.\n";
+        std::cout << "[PCG] CG failed, falling back to solving the augmented Lagrangian system via LDLT.\n";
         krylov_converged = false;
         ldlt_used = true;
         return solve_using_ldlt(G, H_diag, r1, r2);
@@ -606,15 +606,15 @@ T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr,
 template <typename T>
 T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                             const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx,
-                            const Vec& dist_K_u, const Vec& dist_W_v) {
+                            const Vec& dist_K_s, const Vec& dist_W_v) {
     /*
     psi(t) = <∇ M(u + t du), du>
-           = eta t + beta + mu <dist_K (s + t dx), dx> + <mu / gamma dv, dist_W (v + t dv)>,
-    where eta  = <(Q + mu A^T A + I_n/rho) dx, dx> + (1 - gamma) / mu ||dy2||^2,
-          beta = <c + Q x_curr - A^T y1 + mu A^T (A x_curr - b) + (x_curr - x)/rho, dx> + (1 - gamma) / mu <y2_curr, dy2>,
+           = eta t + zeta + mu <dist_K (s + t dx), dx> + <mu / alpha dv, dist_W (v + t dv)>,
+    where eta  = <(Q + mu A^T A + I_n/rho) dx, dx> + (1 - alpha) / mu ||dy2||^2,
+          zeta = <c + Q x_curr - A^T y1 + mu A^T (A x_curr - b) + (x_curr - x) / rho, dx> + (1 - alpha) / mu <y2_curr, dy2>,
           s    = z / mu + x_curr,
-          v    = B x_curr + ((1 - gamma) y2_curr - y2) / mu,
-          dv   = B dx + (1 - gamma) / mu dy2.
+          v    = B x_curr + ((1 - alpha) y2_curr - y2) / mu,
+          dv   = B dx + (1 - alpha) / mu dy2.
     Compute all breakpoints t and corresponding slope changes of psi, and sort them in increasing order.
     Write psi(t) = p + m (t - t_prev).
     For each breakpoint t, if psi(t) >= 0, return t = t_prev - p / m;
@@ -626,8 +626,8 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     const Vec& Bx = Bx_curr;
 
     Vec s = z / mu + x_curr;
-    Vec v = Bx + ((1 - gamma) * y2_curr - y2) / mu;
-    Vec dv = Bdx + (1 - gamma) / mu * dy2;
+    Vec v = Bx + ((1 - alpha) * y2_curr - y2) / mu;
+    Vec dv = Bdx + (1 - alpha) / mu * dy2;
 
     // eta: smooth linear term in psi(t)
     T eta = T(0);
@@ -636,15 +636,15 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     }
     eta += mu * (Adx).squaredNorm();
     eta += (1 / rho) * dx.squaredNorm();
-    eta += (1 - gamma) / mu * dy2.squaredNorm();
+    eta += (1 - alpha) / mu * dy2.squaredNorm();
 
-    // beta: constant term in psi(t)
-    T beta = T(0);
+    // zeta: constant term in psi(t)
+    T zeta = T(0);
     if (Q_info != 0) {
-        beta += dx.dot(Q_diag.cwiseProduct(x_curr));
+        zeta += dx.dot(Q_diag.cwiseProduct(x_curr));
     }
-    beta += dx.dot(c - A_tr_y1_ + mu * A_tr * (Ax - b) + (x_curr - x) / rho);
-    beta += (1 - gamma) / mu * dy2.dot(y2_curr);
+    zeta += dx.dot(c - A_tr_y1_ + mu * A_tr * (Ax - b) + (x_curr - x) / rho);
+    zeta += (1 - alpha) / mu * dy2.dot(y2_curr);
 
     // Reuse the member breakpoints vector.
     breakpoints_.clear();
@@ -678,11 +678,11 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
         const T li = lw(i), ui = uw(i);
 
         if (v_i < li - eps_zero || v_i > ui + eps_zero)
-            m += mu / gamma * dv_i * dv_i;
+            m += mu / alpha * dv_i * dv_i;
 
         if (std::abs(dv_i) < eps_direction) continue;
 
-        const T change = mu / gamma * dv_i * dv_i;
+        const T change = mu / alpha * dv_i * dv_i;
         const T t_l = (li - v_i) / dv_i;
         const T t_u = (ui - v_i) / dv_i;
         if (t_l > eps_zero) breakpoints.push_back({t_l, dv_i > 0 ? -change : +change});
@@ -696,10 +696,6 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     std::sort(breakpoints.begin(), breakpoints.end(), [](const Breakpoint& a, const Breakpoint& b){ return a.t < b.t; });
 
     // Merge entries with identical t.
-    // Two breakpoints t = (bound - s)/d computed independently agree to within
-    // ~4 * eps_machine * |t|, so a relative tolerance of 100 * eps is sufficient
-    // to catch true duplicates for both float and double without over-merging
-    // genuinely distinct breakpoints.
     const T merge_tol = T(100) * std::numeric_limits<T>::epsilon();
     int n_uniq = 0;
     for (size_t i = 0; i < breakpoints.size(); ) {
@@ -714,18 +710,20 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     breakpoints.resize(n_uniq);
 
     // Check if psi(0) >= 0; if so, return 0 (no crossing, linesearch failed).
-    T p = beta;
-    p += mu * dist_K_u.dot(dx);
-    p += mu / gamma * dist_W_v.dot(dv);
-    if (p >= eps_zero * (T(1) + std::abs(beta))) return T(0);
+    T p = zeta;
+    p += mu * dist_K_s.dot(dx);
+    p += mu / alpha * dist_W_v.dot(dv);
+    if (p >= T(0)) {
+        std::cout << "[Linesearch] psi'(0) is non-negative (" << p << ").\n";
+        return T(0);
+    }
 
     // If psi(0) < 0, check at every breakpoint t.
     T t_prev = T(0);
     for (const Breakpoint& bp : breakpoints) {
         T t = bp.t;
         T p_t = p + m * (t - t_prev);
-        if (p_t >= 0) return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
-
+        if (p_t >= T(0)) return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
         // Cross the breakpoint(s)
         t_prev = t;
         p = p_t;
@@ -734,7 +732,8 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
 
     // Checking the last breakpoint.
     // m should be >= 0.
-    if (m > -eps_zero * (T(1) + eta)) return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
+    if (m >= T(0)) return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
+    std::cout << "[Linesearch] Slope is negative.\n";
     return T(0); // safeguard: m truly negative
 }
 
@@ -775,7 +774,7 @@ void SSN<T>::solve_ssn(const T eps) {
         auto t0_chol_prep = std::chrono::steady_clock::now();
 
         u_.noalias() = z / mu + x_cur_;
-        v_ = Bx_ssn_ + ((1 - gamma) * y2_cur_ - y2) / mu;
+        v_ = Bx_ssn_ + ((1 - alpha) * y2_cur_ - y2) / mu;
 
         // Single pass each: Clarke subgradient and distance for K and W
         compute_subgrad_and_dist(u_, lx, ux, false, new_diag_P_K_, dist_K_u_);
@@ -829,10 +828,10 @@ void SSN<T>::solve_ssn(const T eps) {
         }
 
         // Compute dy2 in inactive_W:
-        //     dy2_inactive_W = - (mu / gamma) * dist_W(v)(inactive_W) - y2(inactive_W)
+        //     dy2_inactive_W = - (mu / alpha) * dist_W(v)(inactive_W) - y2(inactive_W)
         split_by_mask(y2_cur_, active_W, y2_active_W_, y2_inactive_W_);
         split_by_mask(dist_W_v_, active_W, dist_W_v_active_, dist_W_v_inactive_);
-        dy2_inactive_W_ = -(mu / gamma) * dist_W_v_inactive_ - y2_inactive_W_;
+        dy2_inactive_W_ = -(mu / alpha) * dist_W_v_inactive_ - y2_inactive_W_;
 
         // Compute the RHS vector.
         if (Q_info == 0) {
@@ -846,7 +845,7 @@ void SSN<T>::solve_ssn(const T eps) {
         }
         r2_.resize(M + n_active_W);
         r2_.head(M) = y1 / mu - Ax_ssn_ + b;
-        r2_.tail(n_active_W) = -dist_W_v_active_ - (gamma / mu) * y2_active_W_;
+        r2_.tail(n_active_W) = -dist_W_v_active_ - (alpha / mu) * y2_active_W_;
 
         auto t1_chol_prep = std::chrono::steady_clock::now();
         double timer_chol_prep = time_diff_ms(t0_chol_prep, t1_chol_prep);
@@ -858,8 +857,8 @@ void SSN<T>::solve_ssn(const T eps) {
             auto t0_ratio_comp = std::chrono::steady_clock::now();
             use_ldlt = choose_ldlt(G, active_K);
             ++ldlt_decisions_made_;
-            if (use_ldlt) std::cout << "LDLT used.\n";
-            else std::cout << "Chol used.\n";
+            if (use_ldlt) std::cout << "LDLT used as a preconditioner callback method.\n";
+            else std::cout << "Chol used as a preconditioner callback method.\n";
             auto t1_ratio_compt = std::chrono::steady_clock::now();
             // std::cout << "choosing a system took " << time_diff_ms(t0_ratio_comp, t1_ratio_compt) << "ms.\n";
         } // Determines the factorization method for a preconditioner; locked after the first 3 decisions
@@ -880,31 +879,31 @@ void SSN<T>::solve_ssn(const T eps) {
         retrieve_row_order(dy2_active_W, dy2_inactive_W_, active_W, dy2_);
 
         // ========== Exact linesearch ==========
-        auto t0_alpha = std::chrono::steady_clock::now();
+        auto t0_linesearch = std::chrono::steady_clock::now();
         Adx_.noalias() = A * dx;
         Bdx_.noalias() = B * dx;
-        T alpha = exact_line_search(x_cur_, y2_cur_, dx, dy2_,
+        T tau = exact_line_search(x_cur_, y2_cur_, dx, dy2_,
                                     Ax_ssn_, Bx_ssn_, Adx_, Bdx_,
                                     dist_K_u_, dist_W_v_);
-        auto t1_alpha = std::chrono::steady_clock::now();
-        double timer_alpha = time_diff_ms(t0_alpha, t1_alpha);
-        // std::cout << "  Linesearch took " << timer_alpha << " ms.\n";
-        // std::cout << "  alpha = " << alpha << "\n";
+        auto t1_linesearch = std::chrono::steady_clock::now();
+        double timer_linesearch = time_diff_ms(t0_linesearch, t1_linesearch);
+        // std::cout << "  Linesearch took " << timer_linesearch << " ms.\n";
+        // std::cout << "  Linesearch step size tau = " << tau << "\n";
 
         // ========== Update x and y2 ==========
-        if (alpha <= T(0)) { // Line search failed.
+        if (tau <= T(0)) { // Line search failed.
             linesearch_fail++;
             _opt = 3;
             break;
         } else {
-            x_cur_  += alpha * dx;
-            y2_cur_ += alpha * dy2_;
+            x_cur_  += tau * dx;
+            y2_cur_ += tau * dy2_;
             if (_iter % 10 == 9) { // Reset incremental drift every 10 iterations.
                 Ax_ssn_.noalias() = A * x_cur_;
                 Bx_ssn_.noalias() = B * x_cur_;
             } else {
-                Ax_ssn_ += alpha * Adx_;
-                Bx_ssn_ += alpha * Bdx_;
+                Ax_ssn_ += tau * Adx_;
+                Bx_ssn_ += tau * Bdx_;
             }
         }
 
