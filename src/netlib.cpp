@@ -253,13 +253,13 @@ int main() {
             else std::cout << "\nIncorrect Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n";
 
             // Store result
-            std::string system = { solver.more_rows_than_cols? "K" : "S" };
+            std::string system = "S";
             TestResult<T> result = {
                 system, agree, sol.opt, diverged,
                 name, abs_err, rel_err,
-                sol.obj_val, sol.PMM_iter, sol.SSN_iter,
-                sol.PMM_tol_achieved, sol.SSN_tol_achieved,
-                solving_time_sec
+                sol.obj_val, sol.pmm_iter, sol.ssn_iter,
+                sol.pmm_tol_achieved, sol.ssn_tol_achieved,
+                solving_time_sec, sol.linesearch_fails, sol.krylov_fails
             };
             append_csv_result(csv_path, result);
 
@@ -269,7 +269,8 @@ int main() {
                 e.what(), false, -5, false,
                 name, -1.0, -1.0,
                 -1.0, -1, -1,
-                -1.0, -1.0, -1.0
+                -1.0, -1.0, -1.0,
+                -1.0, 0, 0
             };
             append_csv_result(csv_path, result);
         }
@@ -332,7 +333,7 @@ int main() {
     if (!std::filesystem::exists(std::filesystem::path(csv_path))
         || std::filesystem::is_empty(std::filesystem::path(csv_path))) {
         std::ofstream csv(csv_path);
-        csv << "System,infeas_detected,opt_status,name,PMM_iter,SSN_iter,Krylov_iter,fact,PMM_res,SSN_res,solving_time_sec,linesearch_fails\n";
+        csv << "System,infeas_detected,opt_status,name,pmm_iter,ssn_iter,krylov_iter,fact,pmm_res,ssn_res,solving_time_sec,linesearch_fails,krylov_fails\n";
     }
 
     // Loop over all LPs
@@ -359,7 +360,7 @@ int main() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            std::string system = solver.more_rows_than_cols ? "K" : "S";
+            std::string system = "S";
 
             // Solve the LP
             auto t0 = std::chrono::steady_clock::now();
@@ -372,10 +373,11 @@ int main() {
             bool infeas_detected = (sol.opt == -2 || sol.opt == -3);
             std::ofstream csv(csv_path, std::ios::out | std::ios::app);
             csv << system << "," << infeas_detected << "," << sol.opt << ","
-                << name << "," << sol.PMM_iter << "," << sol.SSN_iter << ","
-                << sol.Krylov_iter << "," << sol.fact << ","
-                << sol.PMM_tol_achieved << "," << sol.SSN_tol_achieved << ","
-                << solving_time_sec << "," << sol.linesearch_fail << "\n";
+                << name << "," << sol.pmm_iter << "," << sol.ssn_iter << ","
+                << sol.krylov_iter << "," << sol.fact << ","
+                << sol.pmm_tol_achieved << "," << sol.ssn_tol_achieved << ","
+                << solving_time_sec << "," << sol.linesearch_fail << ","
+                <<  sol.krylov_fail << "\n";
             csv.close();
 
         } catch (const std::exception& e) {
@@ -384,7 +386,9 @@ int main() {
             csv << e.what() << "," << 0 << "," << -1 << ","
                 << name << "," << -1 << "," << -1 << ","
                 << -1 << "," << -1 << ","
-                << -1.0 << "," << -1.0 << "," << -1.0 << "," << 0 << "\n";
+                << -1.0 << "," << -1.0 << ","
+                << -1.0 << "," << 0 << ","
+                << 0 << "\n";
             csv.close();
         }
     }
@@ -417,8 +421,7 @@ int main() {
     // Chosen system
     std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";
     std::cout << "N = " << solver.N << ", M = " << solver.M << "\n";
-    if (solver.more_rows_than_cols) std::cout << "Solving KKT.\n";
-    else std::cout << "Solving Schur.\n";
+    std::cout << "Solving Schur (CG with LDLT fallback).\n";
 
     // Solve the LP
     auto t0 = std::chrono::steady_clock::now();

@@ -48,14 +48,15 @@ void print_feasibility(const PDPMMdata<T>& pd, const Vec x, const T tol) {
 
 int main() {
 
-    double tol = 1e-4;
-    int max_iter = 30;
+    double tol = 1e-6;
+    int max_iter = 100000;
+    double time_limit = 60.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
-    PrintWhat what = PrintWhat::MINIMAL;
+    PrintWhat what = PrintWhat::TUNING;
 
     // ====== Poisson ======
     PDPMMdata<T> data1 = pdegen::make_poisson_L1L2_control_default<T>();
-    Problem<T> pb1(data1, tol, max_iter, when, what);
+    Problem<T> pb1(data1, tol, max_iter, time_limit, when, what);
     SSN_PMM<T> solver1(pb1);
 
     auto start1 = std::chrono::high_resolution_clock::now();
@@ -65,11 +66,11 @@ int main() {
     std::chrono::duration<T> elapsed1 = end1 - start1;
     std::cout << "\nPMM solver took " << elapsed1.count() << " s.\n";
 
-    print_feasibility(data1, sol1.x, tol);
+    // print_feasibility(data1, sol1.x, tol);
 
     // ====== Convection-diffusion ======
     PDPMMdata<T> data2 = pdegen::make_convdiff_L1L2_control_default<T>();
-    Problem<T> pb2(data2, tol, max_iter, when, what);
+    Problem<T> pb2(data2, tol, max_iter, time_limit, when, what);
     SSN_PMM<T> solver2(pb2);
 
     auto start2 = std::chrono::high_resolution_clock::now();
@@ -79,6 +80,6 @@ int main() {
     std::chrono::duration<T> elapsed2 = end2 - start2;
     std::cout << "\nPMM solver took " << elapsed2.count() << " s.\n";
 
-    print_feasibility(data2, sol2.x, tol);
+    // print_feasibility(data2, sol2.x, tol);
 
 }

@@ -22,15 +22,17 @@ struct TestResult {
     T rel_err;
 
     T obj_val;
-    int PMM_iter;
-    int SSN_iter;
-    int Krylov_iter;
+    int pmm_iter;
+    int ssn_iter;
+    int krylov_iter;
     int fact;
-    T PMM_tol_achieved;
-    T SSN_tol_achieved;
+    int smw_count;
+    T pmm_tol_achieved;
+    T ssn_tol_achieved;
 
     double solving_time_sec;
     int linesearch_fail;
+    int krylov_fail;
 };
 
 template <typename T>
@@ -82,7 +84,8 @@ inline void write_csv_header(const std::string& path) {
     if (!fs::exists(fs::path(path)) || fs::is_empty(fs::path(path))) {
         std::ofstream csv(path);
         csv << "System,agree,opt_status,diverged,name,abs_err,rel_err,obj_val,"
-            << "PMM_iter,SSN_iter,Krylov_iter,fact,PMM_tol_achieved,SSN_tol_achieved,solving_time_sec,linesearch_fail\n";
+            << "pmm_iter,ssn_iter,krylov_iter,fact,smw_count,pmm_tol_achieved,ssn_tol_achieved,"
+            << "solving_time_sec,linesearch_fail,krylov_fail\n";
     } else if (!fs::is_empty(fs::path(path))) {
         std::ofstream csv(path, std::ios::out | std::ios::app);
         csv << "\n";
@@ -94,8 +97,8 @@ void append_csv_result(const std::string& path, const TestResult<T>& r) {
     std::ofstream csv(path, std::ios::out | std::ios::app);
     csv << r.system << "," << r.agree << "," << r.opt_status << "," << r.diverged << ","
         << r.name << "," << r.abs_err << "," << r.rel_err << ","
-        << r.obj_val << "," << r.PMM_iter << "," << r.SSN_iter << ","
-        << r.Krylov_iter << "," << r.fact << ","
-        << r.PMM_tol_achieved << "," << r.SSN_tol_achieved << ","
-        << r.solving_time_sec << "," << r.linesearch_fail << "\n";
+        << r.obj_val << "," << r.pmm_iter << "," << r.ssn_iter << ","
+        << r.krylov_iter << "," << r.fact << "," << r.smw_count << ","
+        << r.pmm_tol_achieved << "," << r.ssn_tol_achieved << ","
+        << r.solving_time_sec << "," << r.linesearch_fail << "," << r.krylov_fail << "\n";
 }

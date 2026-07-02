@@ -6,6 +6,7 @@
 #include <map>
 #include <chrono>
 #include <ctime>
+#include <thread>
 
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
@@ -27,9 +28,7 @@ int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
-    std::string name = "BOYD2";
-    T obj_val = 2.1256767e+01;
-
+    std::string name = "Q25FV47";
     std::string filename = root + name + ".SIF";
 
     std::cout << "==================== Solving " + name << " ====================\n";
@@ -39,27 +38,18 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-6;
-    int max_iter = 10000000000;
-    double time_limit = 600.0; // in seconds
+    int max_iter = 1000000;
+    double time_limit = 1000.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
     Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
     SSN_PMM<T> solver(prob);
 
-    // Chosen system
-    // std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";
-    // std::cout << "N = " << solver.N << ", M = " << solver.M << "\n";
-    // if (solver.more_rows_than_cols) std::cout << "Solving KKT.\n";
-    // else std::cout << "Solving Schur.\n";
-
     // Solve:
-    auto start = std::chrono::high_resolution_clock::now();
     Solution<T> sol = solver.solve();
     sol.print_summary();
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    std::cout << "\nPMM solver took " << elapsed.count() << " s.\n";
+    std::cout << "\nPMM solver took " << sol.run_time << " s.\n";
 
     // Check feasibility
     // print_feasibility(pd, sol.x, tol);
@@ -71,21 +61,13 @@ int main() {
         std::cout << "Lineserach failed. Solver terminated.\n";
     } else if (sol.opt < 0) {
         std::cout << "Solver detected infeasibility.\n";
+    } else  if (sol.opt == 4){
+        std::cout << "Solver hit the time limit.\n";
     } else {
         std::cout << "Solver hit the max iteration before converging.\n";
     }
-    if (sol.opt <= 0 && sol.PMM_tol_achieved > 1e0) {
-        std::cout << "Solver possibly diverged.\n"; 
-    }
-
-    // Compare with reference objective value
-    T abs_error = std::abs(sol.obj_val - obj_val);
-    T rel_error = abs_error / std::abs(obj_val);
-    T err_tol = 1e-2;
-    if (abs_error < err_tol || rel_error < err_tol) {
-        std::cout << "Correct! Absolute error = " << abs_error << ", relative error: " << rel_error << "\n";
-    } else {
-        std::cout << "Incorrect. Absolute error = " << abs_error << ", relative error: " << rel_error << "\n";
+    if (sol.opt <= 0 && sol.pmm_tol_achieved > 1e0) {
+        std::cout << "Solver possibly diverged.\n";
     }
 
     return 0;
@@ -246,7 +228,7 @@ void run_Netlib() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            std::string system = solver.more_rows_than_cols ? "K" : "S";
+            std::string system = "S";
             // std::string system = "M"; // MINRES
 
             // Solve the LP
@@ -262,9 +244,9 @@ void run_Netlib() {
             } else {
                 std::cout << "Solver hit the max iteration before converging.\n";
             }
-            if (sol.PMM_tol_achieved > 1e0) {
+            if (sol.pmm_tol_achieved > 1e0) {
                 diverged = true;
-                std::cout << "Solver possibly diverged.\n"; 
+                std::cout << "Solver possibly diverged.\n";
             }
 
             // Compare
@@ -282,9 +264,9 @@ void run_Netlib() {
                 system,
                 agree, sol.opt, diverged, name,
                 abs_err, rel_err, sol.obj_val,
-                sol.PMM_iter, sol.SSN_iter, sol.Krylov_iter, sol.fact,
-                sol.PMM_tol_achieved, sol.SSN_tol_achieved,
-                sol.solving_time, sol.linesearch_fail
+                sol.pmm_iter, sol.ssn_iter, sol.krylov_iter, sol.fact, sol.smw_count,
+                sol.pmm_tol_achieved, sol.ssn_tol_achieved,
+                sol.run_time, sol.linesearch_fail
             };
             append_csv_result(csv_path, result);
 
@@ -294,7 +276,7 @@ void run_Netlib() {
                 e.what(),
                 false, -1, false, name,
                 -1.0, -1.0,
-                -1.0, -1, -1, -1, -1,
+                -1.0, -1, -1, -1, -1, -1,
                 -1.0, -1.0, -1.0
             };
             append_csv_result(csv_path, result);
@@ -350,13 +332,13 @@ void run_Netlib_infeas() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0505infeas.csv";
+    std::string csv_path = root + "results/0513infeas.csv";
 
     // Write header
     if (!std::filesystem::exists(std::filesystem::path(csv_path))
         || std::filesystem::is_empty(std::filesystem::path(csv_path))) {
         std::ofstream csv(csv_path);
-        csv << "System,infeas_detected,opt_status,name,PMM_iter,SSN_iter,Krylov_iter,fact,PMM_res,SSN_res,solving_time_sec,linesearch_fail\n";
+        csv << "System,infeas_detected,opt_status,name,pmm_iter,ssn_iter,krylov_iter,fact,pmm_res,ssn_res,solving_time_sec,linesearch_fail\n";
     } else if (!std::filesystem::is_empty(std::filesystem::path(csv_path))) {
         std::ofstream csv(csv_path, std::ios::out | std::ios::app);
         csv << "\n";
@@ -386,7 +368,7 @@ void run_Netlib_infeas() {
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Chosen system:
-            std::string system = solver.more_rows_than_cols ? "K" : "S";
+            std::string system = "S";
 
             // Solve the LP
             auto t0 = std::chrono::steady_clock::now();
@@ -399,10 +381,10 @@ void run_Netlib_infeas() {
             bool infeas_detected = (sol.opt == -2 || sol.opt == -3);
             std::ofstream csv(csv_path, std::ios::out | std::ios::app);
             csv << system << "," << infeas_detected << "," << sol.opt << ","
-                << name << "," << sol.PMM_iter << "," << sol.SSN_iter << ","
-                << sol.Krylov_iter << "," << sol.fact << ","
-                << sol.PMM_tol_achieved << "," << sol.SSN_tol_achieved << ","
-                << sol.solving_time << "," << sol.linesearch_fail << "\n";
+                << name << "," << sol.pmm_iter << "," << sol.ssn_iter << ","
+                << sol.krylov_iter << "," << sol.fact << ","
+                << sol.pmm_tol_achieved << "," << sol.ssn_tol_achieved << ","
+                << sol.run_time << "," << sol.linesearch_fail << "\n";
             csv.close();
 
         } catch (const std::exception& e) {
@@ -426,22 +408,6 @@ int main() {
     // run_Netlib();
 
     // Filenames and objective values of Maros/Meszaros QPs
-    // static const std::map<std::string, double> QPs = {
-    //     // {"BOYD1",     -6.1735220e+07},
-    //     // {"BOYD2",      2.1256767e+01},
-    //     // {"CONT-300",   1.9151232e-01},
-    //     // {"CVXQP1L",    1.0870480e+08},
-    //     // {"CVXQP1M",    1.0875116e+06},
-    //     // {"CVXQP2L",    8.1842458e+07},
-    //     // {"CVXQP3L",    1.1571110e+08},
-    //     // {"CVXQP3M",    1.3628287e+06},
-    //     {"HUES-MOD",   3.4824690e+07},
-    //     // {"STADAT1",   -2.8526864e+07},
-    //     // {"STADAT2",   -3.2626665e+01},
-    //     {"STADAT3",   -3.5779453e+01},
-    //     {"UBH1",       1.1160008e+00}
-    // };
-
     static const std::map<std::string, double> QPs = {
         {"AUG2D",      1.6874118e+06},
         {"AUG2DC",     1.8183681e+06},
@@ -580,7 +546,7 @@ int main() {
         {"UBH1",       1.1160008e+00},
         {"VALUES",    -1.3966211e+00},
         {"YAO",        1.9770426e+02},
-        {"ZECEVIC2",  -4.1250000e+00},
+        {"ZECEVIC2",  -4.1250000e+00}
     };
 
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
@@ -588,17 +554,20 @@ int main() {
 
     // Parameters
     T tol = 1e-6;
-    int max_iter = 10000000000;
-    double time_limit = 180.0; // in seconds
-    
-    PrintWhen when = PrintWhen::ALWAYS;
+    int max_iter = 3000;
+    double time_limit = 1800.0; // in seconds
+
+    PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
+    int cooldown_sec = 0;      // seconds to sleep between problems (prevents CPU throttling)
+
     // Solver result
-    std::string csv_path = root + "results/0507mm.csv";
+    std::string csv_path = root + "results/0701mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
+
         // Build full path and check if file exists
         std::string filename = root + "data/maros_meszaros/" + name + ".SIF";
         if (!std::filesystem::exists(filename)) {
@@ -622,21 +591,23 @@ int main() {
 
             // Solve the QP
             Solution<T> sol = solver.solve();
-            sol.print_summary();
+            // sol.print_summary();
             
             // Check convergence
             bool diverged = false;
-            if (sol.opt == 0) {
-                std::cout << "Solver converged!\n";
-            } else if (sol.opt == 3) {
-                std::cout << "Lineserach failed. Solver terminated.\n";
-            } else {
-                std::cout << "Solver hit the max iteration before converging.\n";
-            }
-            if (sol.PMM_tol_achieved > 1e0) {
-                diverged = true;
-                std::cout << "Solver possibly diverged.\n"; 
-            }
+            // if (sol.opt == 0) {
+            //     std::cout << "Solver converged!\n";
+            // } else if (sol.opt == 3) {
+            //     std::cout << "Lineserach failed. Solver terminated.\n";
+            // } else if (sol.opt == 4) {
+            //     std::cout << "Solver terminated by time limit.\n";
+            // } else if (sol.opt == 1 || sol.opt == 2) {
+            //     std::cout << "Solver hit the max iteration before converging.\n";
+            // }
+            // if (sol.pmm_tol_achieved > 1e0) {
+            //     diverged = true;
+            //     std::cout << "Solver possibly diverged.\n"; 
+            // }
 
             // Compare
             T abs_err = std::abs(sol.obj_val - ref_obj_val);
@@ -645,19 +616,19 @@ int main() {
             bool abs_agree = abs_err < err_tol;
             bool rel_agree = rel_err < err_tol;
             bool agree = abs_agree || rel_agree;
-            if (agree) std::cout << "CORRECT! Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
-            else std::cout << "Incorrect. Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
+            // if (agree) std::cout << "CORRECT! Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
+            // else std::cout << "Incorrect. Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n\n";
 
             // Record result
-            std::string system = { solver.more_rows_than_cols? "K" : "S" };
-            // std::string system = "M"; // MINRES
+            std::string system = solver.ldlt_used? "L" : "S";
+
             TestResult<T> result = {
                 system,
                 agree, sol.opt, diverged, name,
                 abs_err, rel_err,
-                sol.obj_val, sol.PMM_iter, sol.SSN_iter, sol.Krylov_iter, sol.fact,
-                sol.PMM_tol_achieved, sol.SSN_tol_achieved,
-                sol.solving_time, sol.linesearch_fail
+                sol.obj_val, sol.pmm_iter, sol.ssn_iter, sol.krylov_iter, sol.fact, sol.smw_count,
+                sol.pmm_tol_achieved, sol.ssn_tol_achieved,
+                sol.run_time, sol.linesearch_fail, sol.krylov_fail
             };
             append_csv_result(csv_path, result);
 
@@ -667,11 +638,13 @@ int main() {
                 e.what(),
                 false, -1, false, name,
                 -1.0, -1.0,
-                -1.0, -1, -1, -1, -1,
+                -1.0, -1, -1, -1, -1, -1,
                 -1.0, -1.0, -1.0
             };
             append_csv_result(csv_path, result);
         }
+
+        std::this_thread::sleep_for(std::chrono::seconds(cooldown_sec));
     }
 
     return 0;

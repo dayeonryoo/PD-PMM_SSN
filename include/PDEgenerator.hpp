@@ -217,8 +217,8 @@ static PDPMMdata<T> make_problem_from_mats(
     T alpha2,
     T u_lower,
     T u_upper,
-    T y_lower = -std::numeric_limits<T>::infinity(),
-    T y_upper = +std::numeric_limits<T>::infinity()
+    T y_lower = -T(1e20),
+    T y_upper = +T(1e20)
 ) {
     PDPMMdata<T> pb;
     using SpMat = typename Problem<T>::SpMat;
@@ -248,6 +248,8 @@ static PDPMMdata<T> make_problem_from_mats(
     // --- c vector
     // Tracking: 0.5 y^T M y - (M yhat)^T y + const
     Vec Myhat = M_lump * yhat;
+
+    pb.obj_const = T(0.5) * yhat.dot(Myhat);
 
     pb.c.resize(nx);
     pb.c.setZero();
@@ -328,8 +330,8 @@ static PDPMMdata<T> make_problem_from_mats(
     // --- bounds on x: [y; u+; u-]
     pb.lx.resize(nx);
     pb.ux.resize(nx);
-    pb.lx.setConstant(-std::numeric_limits<T>::infinity());
-    pb.ux.setConstant(+std::numeric_limits<T>::infinity());
+    pb.lx.setConstant(-T(1e20));
+    pb.ux.setConstant(+T(1e20));
 
     // state bounds (default free)
     pb.lx.segment(0, np).setConstant(y_lower);
@@ -354,65 +356,58 @@ static PDPMMdata<T> make_problem_from_mats(
 // ---------------------------
 
 template <typename T>
-PDPMMdata<T> make_poisson_L1L2_control_default() {
-    // default values
-    const int nc = 8;
-    const T alpha2 = T(1e-2);
-    const T alpha1 = T(1e-6);
-    const T u_lower = T(-2);
-    const T u_upper = T(1.5);
-
+PDPMMdata<T> make_poisson_L1L2_control(
+    int nc, T alpha1, T alpha2,
+    T u_lower = T(-2), T u_upper = T(1.5))
+{
     Grid<T> g(nc);
 
-    // Assemble operator and mass + rhs with Dirichlet y=1 on boundary
     Eigen::SparseMatrix<T> K, M;
     Eigen::Matrix<T, Eigen::Dynamic, 1> rhs;
     assemble_poisson_fd_lumped_mass(g, K, M, rhs, /*bc=*/T(1));
 
-    // yhat(x,y) = sin(pi x) sin(pi y)
     Eigen::Matrix<T, Eigen::Dynamic, 1> yhat(g.np);
-    for (int j = 0; j < g.n1d; ++j) {
+    for (int j = 0; j < g.n1d; ++j)
         for (int i = 0; i < g.n1d; ++i) {
             const int p = Grid<T>::idx(i, j, g.n1d);
-            const T x = T(i) * g.h;
-            const T y = T(j) * g.h;
-            yhat(p) = std::sin(T(M_PI) * x) * std::sin(T(M_PI) * y);
+            yhat(p) = std::sin(T(M_PI) * T(i) * g.h)
+                    * std::sin(T(M_PI) * T(j) * g.h);
         }
-    }
 
     return make_problem_from_mats<T>(K, M, rhs, yhat, alpha1, alpha2, u_lower, u_upper);
 }
 
 template <typename T>
-PDPMMdata<T> make_convdiff_L1L2_control_default() {
-    // default values
-    const int nc = 8;
-    const T alpha2 = T(1e-2);
-    const T alpha1 = T(1e-6);
-    const T u_lower = T(-2);
-    const T u_upper = T(1.5);
-    const T eps = T(0.05);
+PDPMMdata<T> make_poisson_L1L2_control_default() {
+    return make_poisson_L1L2_control<T>(7, T(1e-2), T(1e-2));
+}
 
+template <typename T>
+PDPMMdata<T> make_convdiff_L1L2_control(
+    int nc, T alpha1, T alpha2,
+    T u_lower = T(-2), T u_upper = T(1.5), T eps = T(0.05))
+{
     Grid<T> g(nc);
 
     Eigen::SparseMatrix<T> D, M;
     Eigen::Matrix<T, Eigen::Dynamic, 1> rhs;
     assemble_convdiff_fd_lumped_mass(g, D, M, rhs, /*bc=*/T(0), eps);
 
-    // yhat = exp(-64((x-0.5)^2+(y-0.5)^2))
     Eigen::Matrix<T, Eigen::Dynamic, 1> yhat(g.np);
-    for (int j = 0; j < g.n1d; ++j) {
+    for (int j = 0; j < g.n1d; ++j)
         for (int i = 0; i < g.n1d; ++i) {
             const int p = Grid<T>::idx(i, j, g.n1d);
-            const T x = T(i) * g.h;
-            const T y = T(j) * g.h;
-            const T dx = x - T(0.5);
-            const T dy = y - T(0.5);
-            yhat(p) = std::exp(T(-64) * (dx*dx + dy*dy));
+            const T dx = T(i) * g.h - T(0.5);
+            const T dy = T(j) * g.h - T(0.5);
+            yhat(p) = T(1000) * std::exp(T(-64) * (dx*dx + dy*dy));
         }
-    }
-    
+
     return make_problem_from_mats<T>(D, M, rhs, yhat, alpha1, alpha2, u_lower, u_upper);
+}
+
+template <typename T>
+PDPMMdata<T> make_convdiff_L1L2_control_default() {
+    return make_convdiff_L1L2_control<T>(8, T(1e-6), T(1e-2));
 }
 
 } // namespace pdegen
