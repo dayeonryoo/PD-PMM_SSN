@@ -65,7 +65,7 @@ void print_header(PrintWhen when, PrintWhat what) {
 }
 
 template <typename T, typename Vec>
-void print(PrintWhen when, PrintWhat what, int pmm_iter, int ssn_iter, int krylov_iter, int fact, T obj_val, const Vec& res_norms, T ssn_res, T mu, T rho, T eps_bcl, T eps, int linesearch_failures, int krylov_fail) {
+void print(PrintWhen when, PrintWhat what, int pmm_iter, int ssn_iter, int krylov_iter, int fact, T obj_val, const Vec& res_norms, T ssn_res, T mu, T rho, T eps, int linesearch_failures, int krylov_fail) {
     if (when == PrintWhen::NEVER || what == PrintWhat::NONE) return;
     if (when == PrintWhen::EVERY10 && pmm_iter % 10 != 0) return;
 

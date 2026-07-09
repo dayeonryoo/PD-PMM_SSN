@@ -91,7 +91,7 @@ public:
     Vec Adx_scratch_, Bdx_scratch_;                 // differences
     Vec x_old_scratch_, y2_old_scratch_;            // previous iterates for infeasibility check
 
-    T inf = 1e20;
+    T inf = std::numeric_limits<T>::infinity();
     T eps_zero = T(100) * std::numeric_limits<T>::epsilon(); // ~2.2e-14 for double
 
     // Constant parameters
@@ -99,23 +99,22 @@ public:
     int max_iter = 100000000;
     int ssn_max_iter = 100000000;
     int ssn_max_in_iter = 20;
-    T eps_limit = 1e-3*tol;
-    T mu_limit = 1e6;
-    T rho_limit = 1e6;
+    T eps_limit = 1e-2*tol;
+    T mu_limit = 1e8;
+    T rho_limit = 1e8;
     T eps_pinf = 5e-2 * tol;
     T eps_dinf = 5e-2 * tol;
-    T gamma = 0.95;
+    T alpha = 0.95;
     double time_limit = 60.0; // in seconds
     int stagnation = 0;
     int linesearch_fail = 0;
     int consecutive_linesearch_fail = 0;
-    
+
     // Updated parameters
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e1;
-    T rho = 1e1;
-    T eps_bcl = 1e0;
+    T rho = 1e4;
     T ssn_tol = 1e-2;
     
     // Outputs:
@@ -156,7 +155,6 @@ public:
     void ruiz_scaling(const Problem<T>& problem, const Vec& Q_diag);
     void set_L_from_LLT(const SpMat& Q);
     void set_default(const Problem<T>& problem);
-    void compute_initial_penalties();
     void initialize_sols();
     void check_bounds();
 
@@ -170,7 +168,7 @@ public:
     ResVec compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx);
     T objective_value(const Vec& x, const Vec& Qx);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
-    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg);
+    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg, int ssn_inner_iters);
     bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
     bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     Solution<T> solve();

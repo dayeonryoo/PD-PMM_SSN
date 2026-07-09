@@ -35,7 +35,7 @@ public:
     T eps_pinf, eps_dinf;
 
     // Useful vectors and matrices
-    T inf = 1e20;
+    T inf = std::numeric_limits<T>::infinity();
     // eps_zero: relative tolerance for boundary/slope checks.
     // eps_direction: threshold for skipping near-zero Newton step components.
     T eps_zero      = T(100)  * std::numeric_limits<T>::epsilon();
@@ -65,9 +65,14 @@ public:
     T delta = 0.995;
 
     // Conjugate gradient parameters
-    T krylov_tol = 1e-14;
-    int krylov_max_in_iter = 500;
-    bool choose_system = true; // Choose how to factorize a preconditioner based on sparsity
+    T krylov_tol = 1e-15;
+    int krylov_max_in_iter = 200;
+
+    // Iterative refinement of the augmented system solve (residual correction on
+    // K [dx;dy] = [r1;r2], K = [-H, G^T; G, (1/mu)I]).
+    int refine_max_iter = 3;
+    T refine_rel_tol = 1e-10;
+    T refine_abs_tol = 1e-12;
     bool use_ldlt = false; // Factorize a preconditioner via LDLT
     int ldlt_decisions_made_ = 0; // choose_ldlt() call count; locked after the first 3 (ratio stabilizes early)
     bool ldlt_used = false; // PCG on normal eqn failed so LDLT on KKT system was used at least once
@@ -165,16 +170,14 @@ public:
         this->ssn_iter = ssn_iter;
         this->delta_y1 = delta_y1;
         this->delta_z = delta_z;
+
         ldlt_numeric_dirty_ = true;    // mu, rho may have changed
         A_tr_y1_ = A_tr * y1; // y1 is fixed for the entire SSN run; cache A^T y1 once
-
-        // Choose how to factorize a preconditioner every time in the early iterations
-        if (ssn_iter >= 5) choose_system = false;
-        else choose_system = true;
-        
+        linesearch_fail = 0; // Reset line search failure count for this SSN iteration
         cg.preconditioner().reset_smw_fail_streak(); // Reset SMW suppression
     }
     static inline T inf_norm(const Vec& v) {
+        if (v.size() == 0) return T(0);
         return v.cwiseAbs().maxCoeff();
     }
     static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
@@ -197,8 +200,6 @@ public:
     }
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
-    Vec clarke_subgrad_of_proj(const Vec& u, const Vec& lower, const Vec& upper, const bool include_bd);
-    bool is_P_unchanged(const Vec& diag_P, const Vec& new_diag_P);
     void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
     void rebuild_G();
     SpMat scale_columns(const SpMat& M, const Vec& d);
@@ -206,8 +207,6 @@ public:
     SpMat stack_rows(const SpMat& A, const SpMat& B);
     bool choose_ldlt(const SpMat& G, const BoolArr& active_K);
     Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool use_ldlt);
-    Vec solve_using_minres(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed);
-    Vec solve_using_schur(const SpMat& G, const SpMat& G_tr, const Vec& H_diag_inv, const Vec& r1, const Vec& r2);
     Vec solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                                const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);

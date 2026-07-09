@@ -23,12 +23,16 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 // ----------------------- Solving individual problem -----------------------
-
+/*
 int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
 
+    // std::string name = "HUES-MOD";
+    // std::string name = "QPCBOEI2";
     std::string name = "Q25FV47";
+    // std::string name = "QGROW15";
+
     std::string filename = root + name + ".SIF";
 
     std::cout << "==================== Solving " + name << " ====================\n";
@@ -38,8 +42,8 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-6;
-    int max_iter = 1000000;
-    double time_limit = 1000.0; // in seconds
+    int max_iter = 200;
+    double time_limit = 30.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
@@ -72,7 +76,7 @@ int main() {
 
     return 0;
 }
-
+*/
 
 // ----------------------- Running Netlib problems -----------------------
 void run_Netlib() {
@@ -401,7 +405,7 @@ void run_Netlib_infeas() {
 }
 
 // ----------------------- Solving a set of problems -----------------------
-/*
+
 int main() {
 
     // run_Netlib_infeas();
@@ -554,16 +558,16 @@ int main() {
 
     // Parameters
     T tol = 1e-6;
-    int max_iter = 3000;
-    double time_limit = 1800.0; // in seconds
+    int max_iter = 100000;
+    double time_limit = 30.0; // in seconds
 
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
-    int cooldown_sec = 0;      // seconds to sleep between problems (prevents CPU throttling)
+    int cooldown_sec = 3;      // seconds to sleep between problems (prevents CPU throttling)
 
     // Solver result
-    std::string csv_path = root + "results/0701mm.csv";
+    std::string csv_path = root + "results/0709mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -649,4 +653,3 @@ int main() {
 
     return 0;
 }
-*/

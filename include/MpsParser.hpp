@@ -49,7 +49,7 @@ public:
     using Triplet = Eigen::Triplet<T>;
 
     ParsedModel<T> parse(const std::string& filename);
-    PDPMMdata<T> to_pdpmm(const ParsedModel<T>& model, T eq_tol = 1e-8, T inf_cap = 1e20);
+    PDPMMdata<T> to_pdpmm(const ParsedModel<T>& model, T eq_tol = 1e-12, T inf_cap = std::numeric_limits<T>::infinity());
 
 private:
     enum class Section {

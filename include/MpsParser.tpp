@@ -71,6 +71,12 @@ PDPMMdata<T> MpsParser<T>::to_pdpmm(const ParsedModel<T>& model, T eq_tol, T inf
     for (int i = 0; i < pd.n; ++i) {
         pd.lx(i) = cap_inf(pd.lx(i));
         pd.ux(i) = cap_inf(pd.ux(i));
+        // Snap near-constant bounds to their exact midpoint.
+        if (!is_inf(pd.lx(i)) && !is_inf(pd.ux(i)) && std::abs(pd.lx(i) - pd.ux(i)) <= eq_tol) {
+            T mid = T(0.5) * (pd.lx(i) + pd.ux(i));
+            pd.lx(i) = mid;
+            pd.ux(i) = mid;
+        }
     }
 
     if (model.is_qp) pd.Q = model.Q;
@@ -92,7 +98,7 @@ PDPMMdata<T> MpsParser<T>::to_pdpmm(const ParsedModel<T>& model, T eq_tol, T inf
         T ub = cap_inf(model.row_upper(i));
         if (is_inf(lb) && is_inf(ub)) {
             continue; // Skip free constraints
-        } else if (std::abs(lb - ub) <= eq_tol) {
+        } else if (!is_inf(lb) && !is_inf(ub) && std::abs(lb - ub) <= eq_tol) {
             eq_rows.push_back(i);
         } else {
             ineq_rows.push_back(i);
@@ -359,7 +365,7 @@ void MpsParser<T>::parse_bounds(const std::vector<std::string>& tokens) {
     
     if (tokens.size() < 2) return; // Invalid line, ignore
 
-    const T inf = 1e20;
+    const T inf = std::numeric_limits<T>::infinity();
     const std::string& btype = tokens[0];
 
     // These bound types do not require a value
@@ -369,17 +375,33 @@ void MpsParser<T>::parse_bounds(const std::vector<std::string>& tokens) {
     std::string cname;
     std::string value_str;
 
-    if (tokens.size() >= 3) {
+    if (tokens.size() >= 4) {
+        // <bound_type> <bound_name> <col_name> <value>
+        bname = tokens[1];
+        cname = tokens[2];
+        value_str = tokens[3];
+    } else if (tokens.size() == 3) {
         // tokens[1] could be either bound name or column name.
-        // If tokens[1] is an existing column name, then we treat it as column name and use default bound name.
-        if (col_map_.find(tokens[1]) != col_map_.end()) {
+        // If tokens[1] is an existing column name, or tokens[2] parses as a number
+        // treat it as column name and use default bound name.
+        auto is_number = [](const std::string& s) {
+            if (s.empty()) return false;
+            try {
+                size_t pos;
+                std::stod(s, &pos);
+                return pos == s.size();
+            } catch (...) {
+                return false;
+            }
+        };
+
+        if (col_map_.find(tokens[1]) != col_map_.end() || is_number(tokens[2])) {
             bname = "BND"; // Use default bound name
             cname = tokens[1];
             value_str = tokens[2];
         } else {
             bname = tokens[1];
             cname = tokens[2];
-            if (tokens.size() >= 4) value_str = tokens[3];
         }
     } else {
         // tokens.size == 2, so we have only bound type and column name, no bound name or value
@@ -430,10 +452,6 @@ void MpsParser<T>::parse_bounds(const std::vector<std::string>& tokens) {
     else if (btype == "PL") model_.col_upper(col_idx) = inf;  // No upper bound
     else if (btype == "BV") { model_.col_lower(col_idx) = 0; model_.col_upper(col_idx) = 1; } // Binary variable
     else throw std::runtime_error("Unknown bound type in BOUNDS section: " + btype);
-
-    if (model_.col_lower(col_idx) > model_.col_upper(col_idx)) {
-        throw std::runtime_error("Inconsistent bounds for variable " + cname + ": lower bound is greater than upper bound.");
-    }
 }
 
 template <typename T>
@@ -468,8 +486,7 @@ void MpsParser<T>::parse_quadobj(const std::vector<std::string>& tokens) {
 template <typename T>
 void MpsParser<T>::finalize_defaults() {
 
-    T inf = 1e20;
-    // T inf = std::numeric_limits<T>::infinity();
+    T inf = std::numeric_limits<T>::infinity();
 
     // If objective row was not defined, create a default one
     if (obj_name_.empty()) {
@@ -510,12 +527,18 @@ void MpsParser<T>::finalize_defaults() {
     // actual values will be set in finalize_row_bounds()
     model_.row_lower = ParsedModel<T>::Vec::Constant(model_.num_rows, -inf);
     model_.row_upper = ParsedModel<T>::Vec::Constant(model_.num_rows, inf);
+
+    // Validate bound consistency.
+    for (int i = 0; i < model_.num_cols; ++i) {
+        if (model_.col_lower(i) > model_.col_upper(i)) {
+            throw std::runtime_error("Inconsistent bounds for variable " + std::to_string(i) + ": lower bound is greater than upper bound.");
+        }
+    }
 }
 
 template <typename T>
 void MpsParser<T>::finalize_row_bounds() {
-    T inf = 1e20;
-    // T inf = std::numeric_limits<T>::infinity();
+    T inf = std::numeric_limits<T>::infinity();
 
     // Build inverse map: row index -> row type
     std::vector<char> row_types(model_.num_rows, '\0'); // Default to null char for undefined rows

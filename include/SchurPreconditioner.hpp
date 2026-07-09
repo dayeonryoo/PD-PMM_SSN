@@ -9,6 +9,7 @@
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
+#include <variant>
 
 template <typename T>
 class SchurPreconditioner {
@@ -86,9 +87,9 @@ public:
                 ldlt_rhs_.resize(n_act_ + s);
                 ldlt_rhs_.head(n_act_).setZero();
                 ldlt_rhs_.tail(s) = b;
-                direct_result_ = ldlt_.solve(ldlt_rhs_).tail(s);
+                direct_result_ = std::get<LdltSolver>(active_solver_).ldlt.solve(ldlt_rhs_).tail(s);
             } else {
-                direct_result_ = llt_.solve(b);
+                direct_result_ = std::get<CholSolver>(active_solver_).llt.solve(b);
             }
             return direct_result_;
         }
@@ -106,9 +107,9 @@ public:
             ldlt_rhs_.resize(n_act_ + s);
             ldlt_rhs_.head(n_act_).setZero();
             ldlt_rhs_.tail(s) = r_pad_;
-            u_base_ = ldlt_.solve(ldlt_rhs_).tail(s);
+            u_base_ = std::get<LdltSolver>(active_solver_).ldlt.solve(ldlt_rhs_).tail(s);
         } else {
-            u_base_ = llt_.solve(r_pad_);
+            u_base_ = std::get<CholSolver>(active_solver_).llt.solve(r_pad_);
         }
 
         // Lambda = g_all - V_all^T u_base, computed structurally without building V_all.
@@ -162,6 +163,45 @@ public:
     }
     void set_use_ldlt(bool flag) { use_ldlt_ = flag; }
 
+    // Free all factorization/SMW state once the caller has permanently switched away from PCG.
+    void release() {
+        active_solver_.template emplace<std::monostate>(); // drops CholSolver/LdltSolver factorizations
+
+        SpMat().swap(G_old_);
+        H_diag_old_.resize(0);
+        active_K_old_.resize(0);
+        active_W_old_.resize(0);
+
+        std::vector<int>().swap(deleted_old_rows_);
+        std::vector<int>().swap(retained_old_rows_);
+        std::vector<int>().swap(retained_new_rows_);
+        std::vector<int>().swap(added_new_rows_);
+        std::vector<int>().swap(added_W_src_);
+        std::vector<int>().swap(delta_K_idx_);
+        V_plus_.resize(0, 0);
+        Y_all_.resize(0, 0);
+        S_lambda_lu_ = Eigen::FullPivLU<Mat>();
+
+        r_pad_.resize(0);
+        u_base_.resize(0);
+        Lambda_all_.resize(0);
+        lambda_work_.resize(0);
+        z_base_.resize(0);
+        z_new_.resize(0);
+        direct_result_.resize(0);
+        ldlt_rhs_.resize(0);
+
+        G_ = nullptr; G_tr_ = nullptr; H_diag_ = nullptr; active_K_ = nullptr; active_W_ = nullptr; B_rm_ = nullptr;
+
+        initialized_      = false;
+        rebuild_          = true;
+        pattern_analyzed_ = false;
+        pattern_dirty_    = true;
+        base_dirty_       = true;
+        use_smw_          = false;
+        skip_smw_         = false;
+    }
+
 private:
     // ------ Formation and Cholesky factorization ------
 
@@ -173,9 +213,15 @@ private:
             return;
 
         // Case 2. Full factorization.
+        // Only one of {Cholesky-on-Schur-complement, LDLT-on-augmented-KKT} is needed at a time;
+        // switching alternative frees the other one's memory (emplace destroys the previous one).
         if (use_ldlt_) {
+            if (!std::holds_alternative<LdltSolver>(active_solver_))
+                active_solver_.template emplace<LdltSolver>();
             factorize_by_ldlt();
         } else {
+            if (!std::holds_alternative<CholSolver>(active_solver_))
+                active_solver_.template emplace<CholSolver>();
             factorize_by_chol();
         }
     }
@@ -216,17 +262,19 @@ private:
         for (Eigen::Index i = 0; i < s; ++i)
             trips.emplace_back(n_act + i, n_act + i, T(1) / mu_);
 
-        P_hat_.resize(n_act + s, n_act + s);
-        P_hat_.setFromTriplets(trips.begin(), trips.end());
-        P_hat_.makeCompressed();
+        auto& sol = std::get<LdltSolver>(active_solver_);
+
+        sol.P_hat.resize(n_act + s, n_act + s);
+        sol.P_hat.setFromTriplets(trips.begin(), trips.end());
+        sol.P_hat.makeCompressed();
 
         if (pattern_dirty_) {
-            ldlt_.analyzePattern(P_hat_);
+            sol.ldlt.analyzePattern(sol.P_hat);
             pattern_analyzed_ = true;
             pattern_dirty_ = false;
         }
-        ldlt_.factorize(P_hat_);
-        info_ = ldlt_.info();
+        sol.ldlt.factorize(sol.P_hat);
+        info_ = sol.ldlt.info();
         fact_count_++;
         mu_at_last_fact_       = mu_;
         use_ldlt_at_last_fact_ = true;
@@ -252,6 +300,8 @@ private:
         assert(H_diag.size() == n);
         assert(active_K.size() == n);
 
+        auto& sol = std::get<CholSolver>(active_solver_);
+
         if (base_dirty_) {
             // Rebuild G E G^T.
             assert(H_diag.minCoeff() > T(0));
@@ -264,26 +314,30 @@ private:
             E.setFromTriplets(trips.begin(), trips.end());
             E.makeCompressed();
 
-            P_ = G * E * G_tr;
+            sol.P = G * E * G_tr;
             base_dirty_ = false;
 
             for (Eigen::Index i = 0; i < s; ++i)
-                P_.coeffRef(i, i) += T(1) / mu_;
-            P_.makeCompressed();
+                sol.P.coeffRef(i, i) += T(1) / mu_;
+            sol.P.makeCompressed();
         } else {
             // G E G^T unchanged; only mu changed: shift the (1/mu) I diagonal by delta.
+            // Relies on sol.P already holding the prior build; base_dirty_ is always set when
+            // active_solver_ switches alternative (see build()), so this only skips a rebuild
+            // when sol.P is genuinely the matrix built last time, not a freshly emplaced shell.
+            assert(sol.P.rows() == s && sol.P.cols() == s);
             const T delta = (mu_at_last_fact_ - mu_) / (mu_ * mu_at_last_fact_);
             for (Eigen::Index i = 0; i < s; ++i)
-                P_.coeffRef(i, i) += delta;
+                sol.P.coeffRef(i, i) += delta;
         }
 
         if (pattern_dirty_) {
-            llt_.analyzePattern(P_);
+            sol.llt.analyzePattern(sol.P);
             pattern_analyzed_ = true;
             pattern_dirty_ = false;
         }
-        llt_.factorize(P_);
-        info_ = llt_.info();
+        sol.llt.factorize(sol.P);
+        info_ = sol.llt.info();
         fact_count_++;
         mu_at_last_fact_       = mu_;
         use_ldlt_at_last_fact_ = false;
@@ -416,9 +470,9 @@ private:
                 if (use_ldlt_) {
                     Vec padded = Vec::Zero(n_act_ + s_old);
                     padded.tail(s_old) = rhs;
-                    return ldlt_.solve(padded).tail(s_old);
+                    return std::get<LdltSolver>(active_solver_).ldlt.solve(padded).tail(s_old);
                 } else {
-                    return llt_.solve(rhs);
+                    return std::get<CholSolver>(active_solver_).llt.solve(rhs);
                 }
             };
 
@@ -444,9 +498,9 @@ private:
                 if (use_ldlt_) {
                     Mat padded_V = Mat::Zero(n_act_ + s_old, q);
                     padded_V.bottomRows(s_old) = V_plus_;
-                    Y_all_.rightCols(q) = ldlt_.solve(padded_V).bottomRows(s_old);
+                    Y_all_.rightCols(q) = std::get<LdltSolver>(active_solver_).ldlt.solve(padded_V).bottomRows(s_old);
                 } else {
-                    Y_all_.rightCols(q) = llt_.solve(V_plus_);
+                    Y_all_.rightCols(q) = std::get<CholSolver>(active_solver_).llt.solve(V_plus_);
                 }
             }
         }
@@ -515,11 +569,21 @@ private:
 
     // ------ Cholesky factorization ------
     bool use_ldlt_ = false;
-    bool use_ldlt_at_last_fact_ = false; // which factorizer (llt_ or ldlt_) is currently valid
-    SpMat P_;
-    Eigen::SimplicialLLT<SpMat>  llt_;
-    SpMat P_hat_;
-    Eigen::SimplicialLDLT<SpMat> ldlt_;
+    bool use_ldlt_at_last_fact_ = false; // which alternative of active_solver_ is currently valid
+
+    // Only one of {Cholesky-on-Schur-complement, LDLT-on-augmented-KKT} is ever needed at a time;
+    // holding them in a variant means switching factorization method frees the other one's memory
+    // automatically (emplace<T>() destroys whatever alternative was previously active).
+    struct CholSolver {
+        SpMat P;
+        Eigen::SimplicialLLT<SpMat> llt;
+    };
+    struct LdltSolver {
+        SpMat P_hat;
+        Eigen::SimplicialLDLT<SpMat> ldlt;
+    };
+    std::variant<std::monostate, CholSolver, LdltSolver> active_solver_;
+
     int n_act_ = 0;
     Eigen::ComputationInfo info_ = Eigen::Success;
     int fact_count_ = 0;
