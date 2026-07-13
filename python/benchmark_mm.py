@@ -787,7 +787,8 @@ def main() -> None:
                     row["qpalm_avg_ram_mb"]   = qpalm_out["ram"]
                     status_str = "OPTIMAL" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
                     print(f"  QPALM   : {status_str:12s}  t = {r['run_time']:.3f} s  "
-                          f"iter = {r['outer_iter']}  tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}  "
+                          f"outer={r['outer_iter']} inner={r['inner_iter']}  "
+                          f"tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}  "
                           f"RAM = {qpalm_out['ram']:.0f} MB")
                 if cooldown > 0:
                     time.sleep(cooldown)

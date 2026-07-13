@@ -121,10 +121,9 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
     using SpMat = Eigen::SparseMatrix<T>;
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
-    const int max_ruiz_iter = 10;
+    const int max_ruiz_iter = 1;
     const T ruiz_tol = 1e-3;
-    // Prevent sqrt of near-zero row/column max; limits max scale amplification to 1/sqrt(eps_machine).
-    const T eps = std::sqrt(std::numeric_limits<T>::epsilon());
+    const T eps = std::sqrt(std::numeric_limits<T>::epsilon()); // for sqrt of near-zero row/column max.
 
     A_ruiz = problem.A;
     B_ruiz = problem.B;
@@ -265,6 +264,13 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
         D2_diag.array() *= dc.array();
 
     }
+    std::cout << "[Ruiz] Final Matrix Infinity Norms (Target ~ 1.0):\n";
+    if (m > 0 && A_ruiz.nonZeros() > 0) {
+        std::cout << "  Max |A_ruiz|: " << A_ruiz.coeffs().cwiseAbs().maxCoeff() << "\n";
+    }
+    if (l > 0 && B_ruiz.nonZeros() > 0) {
+        std::cout << "  Max |B_ruiz|: " << B_ruiz.coeffs().cwiseAbs().maxCoeff() << "\n";
+    }
 }
 
 template <typename T>
@@ -273,55 +279,36 @@ void SSN_PMM<T>::set_L_from_LLT(const SpMat& Q) {
     using SpMat = Eigen::SparseMatrix<T>;
     using Triplet = Eigen::Triplet<T>;
 
-    // Detect if Q has entries in the strict upper triangle (full matrix) or not (lower triangular).
-    bool is_full = false;
-    for (int k = 0; k < Q.outerSize() && !is_full; ++k) {
-        for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
-            if (it.row() < it.col()) { is_full = true; break; }
-        }
-    }
-
-    SpMat Q_full = is_full ? Q : SpMat(Q.template selfadjointView<Eigen::Lower>());
+    const int n = Q.rows();
     const T delta = std::sqrt(std::numeric_limits<T>::epsilon());
-    for (int i = 0; i < Q_full.rows(); ++i) {
-        Q_full.coeffRef(i, i) += delta; // Regularization for numerical stability.
-    }
-    Q_full.makeCompressed();
+
+    // Regularization for numerical stability.
+    SpMat I(n, n);
+    I.setIdentity();
+    SpMat Q_reg = Q + delta * I;
+    Q_reg.makeCompressed();
 
     Eigen::SimplicialLDLT<SpMat> ldlt;
-    ldlt.compute(Q_full);
-    auto P = ldlt.permutationP();
+    ldlt.compute(Q_reg);
 
     if (ldlt.info() != Eigen::Success) {
         throw std::runtime_error("LDLT factorization on Q failed. Q is possibly singular.");
     }
 
-    const Vec D = ldlt.vectorD();
+    // Clamp negative D values to 0.
+    Vec D = ldlt.vectorD();
     T min_D = D.minCoeff();
     if (min_D < -delta) {
         std::cerr << "[warn] Q has negative LDLT diagonal entry " << min_D
                   << "; treating as PSD (clamping to 0).\n";
     }
+    Vec D_sqrt = D.cwiseMax(T(0)).cwiseSqrt();
 
-    const int n = Q.rows();
-    std::vector<Triplet> trip;
-    trip.reserve(n);
-    for (int i = 0; i < n; ++i) {
-        T val;
-        if (D(i) > T(0)) {
-            val = std::sqrt(D(i));
-        } else {
-            val = T(0);
-        }
-        if (val != T(0)) {
-            trip.emplace_back(i, i, val);
-        }
-    }
-    SpMat D_sqrt(n, n);
-    D_sqrt.setFromTriplets(trip.begin(), trip.end());
-
+    auto P = ldlt.permutationP();
     SpMat L_D = ldlt.matrixL(); // lower triangular from LDL^T
-    L = P.transpose() * L_D * D_sqrt; // lower triangular from LL^T
+
+    // Diagonal scaling.
+    L = (P.transpose() * L_D) * D_sqrt.asDiagonal();
     L_tr = L.transpose();
     
 }
@@ -638,16 +625,16 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
         // std::cout << "[Optimal]: worst_ratio = " << worst_res / worst_res_old << std::endl;
 
         bool residual_improved = worst_res < T(0.9) * worst_res_old;
-        T growth;
+
         if (residual_improved) {
-            growth = T(2);
+            mu = std::min(mu_limit, T(2) * mu);
+            rho = std::min(rho_limit, T(2) * rho);
             ssn_tol = std::max(eps_limit, T(0.5) * ssn_tol);
         } else {
-            growth = T(1.2);
-            ssn_tol = std::max(eps_limit, T(0.8) * ssn_tol);
+            mu = std::min(mu_limit, T(1.2) * mu);
+            rho = std::min(rho_limit, T(1.2) * rho);
+            ssn_tol = std::max(eps_limit, T(0.5) * ssn_tol);
         }
-        mu = std::min(mu_limit, growth * mu);
-        rho = std::min(rho_limit, growth * rho);
 
     } else if (worst_res < 0.9 * worst_res_old) {
 
@@ -668,10 +655,10 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
 
         // Back off the penalties slightly to improve matrix conditioning for CG.
         if (true || mu != mu_limit) {
-            mu = std::max(mu0, T(0.9) * mu);
+            mu = std::max(mu0, T(0.8) * mu);
         }
         if (true ||rho != rho_limit) {
-            rho = std::max(rho0, T(0.9) * rho);
+            rho = std::max(rho0, T(0.8) * rho);
         }
         // Loosen the inner tolerance to allow the next PMM step to proceed.
         if (true || ssn_tol != eps_limit) {
@@ -908,30 +895,27 @@ Solution<T> SSN_PMM<T>::solve() {
             // Keep y1, z from previous PMM iteration
         }
 
-        // Update PMM parameters based on the progress of residual norms and SSN solve quality.
+        // Compute new residual norms.
         ResVec new_res_norms = compute_residual_norms_inf(Ax_scratch_, Bx_scratch_, Qx_scratch_);
         pmm_tol_achieved = new_res_norms.maxCoeff();
-        update_PMM_parameters(res_norms, new_res_norms, NS.opt, ssn_tol_achieved, NS.iter);
-        res_norms = new_res_norms; // for next iteration
-        pmm_tol_achieved = res_norms.maxCoeff();
 
         // Ruiz-descale and shrink to the original dimension (n, m, l) for printing.
         printable_sol(x, y1, y2, z); // (Modifies x_sol, y1_sol, y2_sol, z_sol.)
         obj_val = objective_value(x, Qx_scratch_);
 
-        
+        // Print current iteration info.
+        print(when, what, pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, new_res_norms, ssn_tol_achieved, mu, rho, ssn_tol, linesearch_fail, NS.krylov_fail);
+
         // Check termination criterion.
         if (pmm_tol_achieved < tol) {
             opt = 0; // Optimal solution found
-            if (when != PrintWhen::NEVER) {
-                print(PrintWhen::ALWAYS, what, pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, res_norms, ssn_tol_achieved, mu, rho, ssn_tol, linesearch_fail, NS.krylov_fail);
-            }
             break;
         }
-
-        // Print current iteration info.
-        print(when, what, pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, res_norms, ssn_tol_achieved, mu, rho, ssn_tol, linesearch_fail, NS.krylov_fail);
         pmm_iter++;
+
+        // Update PMM parameters based on the progress of residual norms and SSN solve quality.
+        update_PMM_parameters(res_norms, new_res_norms, NS.opt, ssn_tol_achieved, NS.iter);
+        res_norms = new_res_norms; // for next iteration
 
         // Carry Ax, Bx forward.
         Ax_old_scratch_.swap(Ax_scratch_);

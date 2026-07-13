@@ -185,7 +185,7 @@ def _fmt_ssn(r: dict) -> str:
 def _fmt_qpalm(r: dict) -> str:
     if r.get("qpalm_status") != QPALM_SOLVED:
         return "FAIL"
-    return str(r["qpalm_iter"])
+    return f"{r['qpalm_iter']}({r['qpalm_inner_iter']})"
 
 
 def _fmt_osqp(r: dict) -> str:
@@ -444,8 +444,9 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
                 qpalm_avg_ram_mb=qpalm_out["ram"],
             )
             ok = "OK" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
-            print(f"    QPALM    {ok:8s}  t={r['run_time']:.2f}s  iter={r['outer_iter']}  "
-                  f"tol={r['tol_achieved']:.2e}  RAM={qpalm_out['ram']:.0f}MB")
+            print(f"    QPALM    {ok:8s}  t={r['run_time']:.2f}s  "
+                  f"{r['outer_iter']}({r['inner_iter']})[tol={r['tol_achieved']:.2e}]  "
+                  f"RAM={qpalm_out['ram']:.0f}MB")
         if cooldown > 0:
             time.sleep(cooldown)
 
@@ -489,7 +490,7 @@ _W_RAM  =  9
 _HDR_VARY_N = (
     f"{'n':>{_W_ID}}  {'α₁':<{_W_A1}}  "
     f"{'PMM(SSN)[tol]':<{_W_ITER}}  "
-    f"{'QPALM iter':<{_W_ITER}}  "
+    f"{'QPALM(inner)':<{_W_ITER}}  "
     f"{'OSQP iter':<{_W_ITER}}  "
     f"{'PMM(s)':>{_W_T}}  {'QPALM(s)':>{_W_T}}  {'OSQP(s)':>{_W_T}}  "
     f"{'PMM avg MB':>{_W_RAM}}  {'QPALM avg MB':>{_W_RAM}}  {'OSQP avg MB':>{_W_RAM}}"
@@ -498,7 +499,7 @@ _HDR_VARY_N = (
 _HDR_VARY_A2 = (
     f"{'α₂':<{_W_A1}}  "
     f"{'PMM(SSN)[tol]':<{_W_ITER}}  "
-    f"{'QPALM iter':<{_W_ITER}}  "
+    f"{'QPALM(inner)':<{_W_ITER}}  "
     f"{'OSQP iter':<{_W_ITER}}  "
     f"{'PMM(s)':>{_W_T}}  {'QPALM(s)':>{_W_T}}  {'OSQP(s)':>{_W_T}}  "
     f"{'PMM avg MB':>{_W_RAM}}  {'QPALM avg MB':>{_W_RAM}}  {'OSQP avg MB':>{_W_RAM}}"

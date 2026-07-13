@@ -98,8 +98,8 @@ public:
     T tol = 1e-6;
     int max_iter = 100000000;
     int ssn_max_iter = 100000000;
-    int ssn_max_in_iter = 20;
-    T eps_limit = 1e-2*tol;
+    int ssn_max_in_iter = 30;
+    T eps_limit = 1e-3*tol;
     T mu_limit = 1e8;
     T rho_limit = 1e8;
     T eps_pinf = 5e-2 * tol;
@@ -114,7 +114,7 @@ public:
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e1;
-    T rho = 1e4;
+    T rho = 1e3;
     T ssn_tol = 1e-2;
     
     // Outputs:

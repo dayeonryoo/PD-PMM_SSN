@@ -862,7 +862,7 @@ void SSN<T>::solve_ssn(const T eps) {
         // Compute gradient of Lagrangian at current (x, y2).
         grad_L_ = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
         tol_achieved = inf_norm(grad_L_);
-        // std::cout << "[SSN] Iteration " << _iter << ": ||∇M|| = " << tol_achieved << ", tau = " << tau << "\n";
+        std::cout << "[SSN] Iteration " << _iter << ": ||∇M|| = " << tol_achieved << ", tau = " << tau << "\n";
         _iter++;
 
         auto t1_ssn = std::chrono::steady_clock::now();
@@ -885,7 +885,7 @@ void SSN<T>::solve_ssn(const T eps) {
         }
         prev_tol_achieved = tol_achieved;
 
-        if (stagnant_count >= 3) {
+        if (stagnant_count >= 5) {
             if (tol_achieved < T(5) * eps) {
                 _opt = 0; // Optimality achieved.
                 std::cout << "[Optimal] ||∇M|| stagnated (" << tol_achieved << "), but ||∇M|| <= 5 * eps, so we accept optimality.\n";
