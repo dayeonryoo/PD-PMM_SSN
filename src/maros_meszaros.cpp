@@ -23,11 +23,14 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 // ----------------------- Solving individual problem -----------------------
-
+/*
 int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
-    std::string name = "QCAPRI";
+    // std::string name = "EXDATA";
+    // std::string name = "QGROW7";
+    std::string name = "QSHELL";
+    // std::string name = "UBH1";
     std::string filename = root + name + ".SIF";
 
     std::cout << "==================== Solving " + name << " ====================\n";
@@ -37,7 +40,7 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-6;
-    int max_iter = 50;
+    int max_iter = 800;
     double time_limit = 30.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
@@ -71,7 +74,7 @@ int main() {
 
     return 0;
 }
-
+*/
 
 // ----------------------- Running Netlib problems -----------------------
 void run_Netlib() {
@@ -400,7 +403,7 @@ void run_Netlib_infeas() {
 }
 
 // ----------------------- Solving a set of problems -----------------------
-/*
+
 int main() {
 
     // run_Netlib_infeas();
@@ -562,7 +565,7 @@ int main() {
     int cooldown_sec = 3;      // seconds to sleep between problems (prevents CPU throttling)
 
     // Solver result
-    std::string csv_path = root + "results/0709mm_2.csv";
+    std::string csv_path = root + "results/0716mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -648,4 +651,3 @@ int main() {
 
     return 0;
 }
-*/

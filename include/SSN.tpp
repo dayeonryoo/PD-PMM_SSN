@@ -38,9 +38,10 @@ T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new) {
+typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new, T& grad_norm) {
     using Vec = typename SSN<T>::Vec;
 
+    // ===== Scaled, absolute gradient of Lagrangian =====
     Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
     Vec dist_W = compute_dist_box(Bx_new + ((1 - alpha) * y2_new - y2) / mu, lw, uw);
 
@@ -48,30 +49,51 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
     Vec A_tr_y = - A_tr_y1_ + mu * A_tr * res_p + mu * dist_K + (mu / alpha) * B_tr * dist_W;
 
     // Compute gradient of Lagrangian
-    Vec grad_L_x;
+    Vec grad_x;
+    Vec Qx;
+    T denom_x = std::max(inf_norm(c), inf_norm(A_tr_y1_));
     if (Q_info == 0) {
-        grad_L_x = c + A_tr_y + (x_new - x) / rho;
+        grad_x = c + A_tr_y + (x_new - x) / rho;
     } else {
-        Vec Qx = Q_diag.cwiseProduct(x_new);
-        grad_L_x = c + Qx + A_tr_y + (x_new - x) / rho;
+        Qx = Q_diag.cwiseProduct(x_new);
+        grad_x = c + Qx + A_tr_y + (x_new - x) / rho;
+        denom_x = std::max(denom_x, inf_norm(Qx));
     }
-    Vec grad_L_y2 = ((1 - alpha) / alpha) * dist_W + ((1 - alpha) / mu) * y2_new;
+    denom_x += T(1);
+    // grad_x /= denom_x;
 
-    Vec grad_L(N + l);
-    grad_L << grad_L_x, grad_L_y2;
+    Vec grad_y2 = ((1 - alpha) / alpha) * dist_W + ((1 - alpha) / mu) * y2_new;
+    T denom_y2 = 1 + std::max(inf_norm(dist_W), inf_norm(y2_new));
+    // grad_y2 /= denom_y2;
 
-    return grad_L;
+    Vec grad(N + l);
+    grad << grad_x, grad_y2;
+    // std::cout << "(Scaled) grad_x_norm = " << inf_norm(grad_x) << ", grad_y2_norm = " << inf_norm(grad_y2) << "\n";
+
+    // ===== Unscaled, relative gradient norm =====
+    grad_x_unscaled_ = grad_x.cwiseProduct(D2_ext_inv);
+    T grad_x_unscaled_norm = inf_norm(grad_x_unscaled_);
+
+    T denom_x_unscaled = inf_norm(c_orig);
+    if (Q_info != 0) {
+        Qx_unscaled_ = (T(1) / c_scalar) * Qx.cwiseProduct(D2_ext_inv);
+        denom_x_unscaled = std::max(denom_x_unscaled, inf_norm(Qx_unscaled_));
+    }
+    A_tr_y1_unscaled_ = A_tr_y1_.cwiseProduct(D2_ext_inv);
+    denom_x_unscaled = std::max(denom_x_unscaled, (T(1) / c_scalar) * inf_norm(A_tr_y1_unscaled_));
+    denom_x_unscaled += T(1);
+    // grad_x_unscaled_norm /= denom_x_unscaled;
+
+    grad_y2_unscaled_ = grad_y2.cwiseProduct(D1B_diag_inv);
+    T grad_y2_unscaled_norm = inf_norm(grad_y2_unscaled_);
+
+    T denom_y2_unscaled = T(1) + std::max(inf_norm(dist_W.cwiseProduct(D1B_diag_inv)),
+                                          (T(1) / c_scalar) * inf_norm(y2_new.cwiseProduct(D1B_diag)));
+    // grad_y2_unscaled_norm /= denom_y2_unscaled;
+
+    grad_norm = (T(1) / c_scalar) * std::max(grad_x_unscaled_norm, grad_y2_unscaled_norm);
+    return grad;
 }
-
-template <typename T>
-T SSN<T>::compute_grad_Lagrangian_unscaled_inf_norm(const Vec& grad_L) {
-    using Vec = typename SSN<T>::Vec;
-
-    T x_block = inf_norm(grad_L.head(N).cwiseQuotient(D2_ext));
-    T y2_block = inf_norm(grad_L.tail(l).cwiseQuotient(D1B_diag));
-
-    return (T(1) / c_scalar) * std::max(x_block, y2_block);
-} 
 
 template <typename T>
 void SSN<T>::split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel) {
@@ -298,12 +320,12 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         krylov_iter += cg.iterations();
         T err = cg.error();
         if (cg.info() != Eigen::Success) {
-            if (err > T(1e-10)) {
-                std::cout << "[PCG] CG failed to converge with " << err << "\n";
+            if (err > T(1e-8)) {
+                std::cout << "[PCG] CG failed to converge with " << err << ".\n";
                 krylov_fail++;
                 return false;
             }
-            std::cout << "[PCG] CG reached max iterations but error " << err << " <= 1e-10, accepting.\n";
+            std::cout << "[PCG] CG reached max iterations but error " << err << " <= 1e-8, accepting.\n";
         }
         dy_out = std::move(dy_);
         return true;
@@ -372,6 +394,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
 template <typename T> // as a fallback of PCG
 typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2) {
+    std::cout << "[LDLT] solve_using_ldlt is called.\n";
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
     using Triplet = typename SSN<T>::Triplet;
@@ -802,15 +825,15 @@ void SSN<T>::solve_ssn(const T eps) {
 
         // ========== Update x and y2 ==========
         if (tau <= T(0)) { // Linesearch found step size <= 0 with the Newton direction.
-            Vec grad_L = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
-            // T grad_norm = inf_norm(grad_L);
-            T grad_norm = compute_grad_Lagrangian_unscaled_inf_norm(grad_L);
+            T grad_norm;
+            Vec grad_L = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_, grad_norm);
             if (grad_norm <= T(5) * eps) {
                 _opt = 0; // ||∇M|| is small enough to accept optimality.
                 std::cout << "[Optimal] Linesearch failed but unscaled ||∇M|| = " << grad_norm << " <= 5 * eps, so we accept optimality.\n";
                 break;
             }
 
+            
             // Newton direction failed; retry once with the steepest-descent direction.
             std::cout << "[Grad desc] Linesearch failed with Newton direction (unscaled ||∇M|| = " << grad_norm << "); retrying with gradient descent: ";
             dx  = -grad_L.head(N);
@@ -821,11 +844,12 @@ void SSN<T>::solve_ssn(const T eps) {
             tau = exact_line_search(x_cur_, y2_cur_, dx, dy2_,
                                     Ax_ssn_, Bx_ssn_, Adx_, Bdx_,
                                     dist_K_u_, dist_W_v_);
-
+            
             if (tau <= T(0)) {
                 linesearch_fail++;
                 _opt = 3;
-                std::cout << "[Linesearch] Gradient-descent fallback also failed; exiting SSN loop early.\n";
+                // std::cout << "[Linesearch] Gradient-descent fallback also failed; exiting SSN loop early.\n";
+                std::cout << "[Linesearch] Linesearch failed; exiting SSN loop early.\n";
                 break;
             }
         }
@@ -841,10 +865,8 @@ void SSN<T>::solve_ssn(const T eps) {
         }
 
         // Compute gradient of Lagrangian at current (x, y2).
-        grad_L_ = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
-        // tol_achieved = inf_norm(grad_L_);
-        tol_achieved = compute_grad_Lagrangian_unscaled_inf_norm(grad_L_);
-        std::cout << "[SSN] Iteration " << _iter << ": unscaled ||∇M|| = " << tol_achieved << ", scaled ||∇M|| = " << inf_norm(grad_L_) << ", tau = " << tau << ", ||dx|| = " << dx.norm() << ", ||dy2|| = " << dy2_.norm() << "\n";
+        grad_ = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_, tol_achieved);
+        // std::cout << "[SSN] Iteration " << _iter << ": unscaled ||∇M|| = " << tol_achieved << ", scaled ||∇M|| = " << inf_norm(grad_) << ", tau = " << tau << ", ||dx|| = " << dx.norm() << ", ||dy2|| = " << dy2_.norm() << "\n";
         _iter++;
 
         auto t1_ssn = std::chrono::steady_clock::now();
@@ -858,7 +880,7 @@ void SSN<T>::solve_ssn(const T eps) {
         }
 
         // Stagnation check: 
-        // if ||∇M|| fails to meaningfully improve for 5 consecutive iterations, stop and let the PMM level adjust penalties.
+        // if ||∇M|| fails to meaningfully improve for 10 consecutive iterations, stop and let the PMM level adjust penalties.
         if (tol_achieved >= T(0.999) * prev_tol_achieved) {
             ++stagnant_count;
         } else {
@@ -866,14 +888,14 @@ void SSN<T>::solve_ssn(const T eps) {
         }
         prev_tol_achieved = tol_achieved;
 
-        if (stagnant_count >= 5) {
+        if (stagnant_count >= 10) {
             if (tol_achieved < T(5) * eps) {
                 _opt = 0; // Optimality achieved.
-                std::cout << "[Optimal] unscaled ||∇M|| stagnated (" << tol_achieved << "), but ||∇M|| <= 5 * eps, so we accept optimality.\n";
+                std::cout << "[Optimal] unscaled ||∇M|| stagnated for 10 iters (" << tol_achieved << "), but ||∇M|| <= 5 * eps, so we accept optimality.\n";
                 break;
             }
             _opt = 5; // ||∇M|| stagnated; not a confirmed optimum.
-            std::cout << "[Stagnated] unscaled ||∇M|| stagnated (" << tol_achieved << "); exiting SSN loop early.\n";
+            std::cout << "[Stagnated]  unscaled ||∇M|| stagnated for 10 iters (" << tol_achieved << "); exiting SSN loop early.\n";
             break;
         }
     }
@@ -885,4 +907,5 @@ void SSN<T>::solve_ssn(const T eps) {
     y2 = y2_cur_;
     opt = _opt;
     iter = _iter;
+    // std::cout << "[SSN result] SSN opt = " << opt << "\n";
 }

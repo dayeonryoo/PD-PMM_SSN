@@ -85,6 +85,7 @@ public:
     Vec problem_Q_diag, Q_diag_ruiz, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz, lw_ruiz, uw_ruiz;
     Vec D1A_diag, D1B_diag, D2_diag;
     Vec D1A_ext, D2_ext; // extended to size N, M
+    Vec D1A_ext_inv, D2_ext_inv, D1B_diag_inv; // precomputed reciprocals (cwiseProduct is cheaper than cwiseQuotient)
     Vec c_orig, b_orig, lx_orig, ux_orig, lw_orig, uw_orig; // unscaled problem data for terminataion/infeasibility check
     Vec x_sol, y1_sol, y2_sol, z_sol;
 
@@ -94,6 +95,16 @@ public:
     Vec Adx_scratch_, Bdx_scratch_;                 // differences
     Vec x_old_scratch_, y2_old_scratch_;            // previous iterates for infeasibility check
 
+    // Pre-allocated scratch vectors for compute_residual_unscaled_inf_norms
+    Vec A_tr_y1_scratch_, B_tr_y2_scratch_;         // size N
+    Vec num_scratch_;                               // size N
+    Vec proj_K_scratch_, proj_K_unscaled_scratch_;  // size N
+    Vec proj_W_scratch_, proj_W_unscaled_scratch_;  // size l
+    Vec Ax_unscaled_scratch_;                       // size M
+    Vec z_unscaled_scratch_, num_unscaled_scratch_; // size N
+    Vec x_unscaled_scratch_;                        // size N
+    Vec Bx_unscaled_scratch_, y2_unscaled_scratch_; // size l
+
     T inf = std::numeric_limits<T>::infinity();
     T eps_zero = T(100) * std::numeric_limits<T>::epsilon(); // ~2.2e-14 for double
 
@@ -101,8 +112,8 @@ public:
     T tol = 1e-6;
     int max_iter = 100000000;
     int ssn_max_iter = 100000000;
-    int ssn_max_in_iter = 40;
-    T eps_limit = tol;
+    int ssn_max_in_iter = 50;
+    T eps_limit = 1e-3 * tol;
     T mu_limit = 1e8;
     T rho_limit = 1e8;
     T eps_pinf = 5e-2 * tol;
@@ -115,9 +126,9 @@ public:
     // Updated parameters
     T mu0 = 1e0;
     T rho0 = 1e0;
-    T mu = 1e2;
-    T rho = 1e2;
-    T ssn_tol = 1e-1;
+    T mu = 1e1;
+    T rho = 1e1;
+    T ssn_tol = 1e-2;
     
     // Outputs:
     int opt;
