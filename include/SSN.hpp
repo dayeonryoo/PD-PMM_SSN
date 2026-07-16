@@ -24,8 +24,9 @@ public:
     const int Q_info;
     const Vec& Q_diag;
     const SpMat& L, A, B;
-    const Vec& D1A_diag, D1B_diag, D2_diag;
+    const Vec& D1A_diag, D1B_diag, D2_ext;
     const Vec& c, b, lx, ux, lw, uw;
+    const T c_scalar;
     const T obj_const;
     const int n, m, N, M, l;
     Vec x, y1, y2, z;
@@ -68,14 +69,15 @@ public:
     T krylov_tol = 1e-15;
     int krylov_max_in_iter = 200;
 
-    // Iterative refinement of the augmented system solve (residual correction on
-    // K [dx;dy] = [r1;r2], K = [-H, G^T; G, (1/mu)I]).
+    // Iterative refinement of the augmented system solve:
+    // (residual correction on K [dx;dy] = [r1;r2], K = [-H, G^T; G, (1/mu)I]).
     int refine_max_iter = 3;
     T refine_rel_tol = 1e-10;
     T refine_abs_tol = 1e-12;
-    bool use_ldlt = false; // Factorize a preconditioner via LDLT
+
+    bool use_ldlt = false;        // Factorize a preconditioner via LDLT
     int ldlt_decisions_made_ = 0; // choose_ldlt() call count; locked after the first 3 (ratio stabilizes early)
-    bool ldlt_used = false; // PCG on normal eqn failed so LDLT on KKT system was used at least once
+    bool ldlt_used = false;       // PCG on normal eqn failed so LDLT on KKT system was used at least once
 
     using CGSolver = Eigen::ConjugateGradient<
         SchurOperator<T>,
@@ -103,13 +105,13 @@ public:
     Vec new_diag_P_W_, dist_W_v_;             // size l
     Vec y2_active_W_, y2_inactive_W_;         // size n_active_W, n_inactive_W
     Vec dist_W_v_active_, dist_W_v_inactive_; // size n_active_W, n_inactive_W
-    Vec dy2_inactive_W_;                              // size n_inactive_W
+    Vec dy2_inactive_W_;                      // size n_inactive_W
     Vec r1_, r2_;                             // size N, M+n_active_W
-    Vec dxdy_;                                        // size N+M+n_active_W
-    Vec dy2_;                                         // size l
+    Vec dxdy_;                                // size N+M+n_active_W
+    Vec dy2_;                                 // size l
     Vec Adx_, Bdx_;                           // size M, l
-    Vec grad_L_;                                      // size N+l
-    std::vector<Breakpoint> breakpoints_;             // reused across exact_line_search calls
+    Vec grad_L_;                              // size N+l
+    std::vector<Breakpoint> breakpoints_;     // reused across exact_line_search calls
 
     // Stored LDLT factorization for the KKT system [-H, G^T; G, (1/mu)I].
     // ldlt_pattern_dirty_: true when K's dimension changed (n_active_W changed), requires analyzePattern.
@@ -127,13 +129,15 @@ public:
 
     SSN(const int Q_info, const Vec& Q_diag, const SpMat& L, const SpMat& L_tr,
         const SpMat& A, const SpMat& B, const SpMat& A_tr, const SpMat& B_tr,
-        const Vec& c, const Vec& b, const Vec& D1A_diag, const Vec& D1B_diag, const Vec& D2_diag,
-        const Vec& lx, const Vec& ux, const Vec& lw, const Vec& uw, const T obj_const,
+        const Vec& c, const Vec& b, const T c_scalar, const T obj_const,
+        const Vec& D1A_diag, const Vec& D1B_diag, const Vec& D2_ext,
+        const Vec& lx, const Vec& ux, const Vec& lw, const Vec& uw, 
         int n, int m, int N, int M, int l,
         T ssn_tol, int ssn_max_in_iter, T eps_pinf, T eps_dinf)
     : Q_info(Q_info), Q_diag(Q_diag), L(L), L_tr(L_tr),
       A(A), B(B), A_tr(A_tr), B_tr(B_tr),
-      c(c), b(b), D1A_diag(D1A_diag), D1B_diag(D1B_diag), D2_diag(D2_diag),
+      c(c), b(b), c_scalar(c_scalar),
+      D1A_diag(D1A_diag), D1B_diag(D1B_diag), D2_ext(D2_ext),
       lx(lx), ux(ux), lw(lw), uw(uw), obj_const(obj_const),
       n(n), m(m), N(N), M(M), l(l),
       ssn_tol(ssn_tol), ssn_max_in_iter(ssn_max_in_iter),
@@ -200,6 +204,7 @@ public:
     }
     T compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
     Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
+    T compute_grad_Lagrangian_unscaled_inf_norm(const Vec& grad_L);
     void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
     void rebuild_G();
     SpMat scale_columns(const SpMat& M, const Vec& d);

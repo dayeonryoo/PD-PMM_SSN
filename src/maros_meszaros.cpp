@@ -37,7 +37,7 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-6;
-    int max_iter = 10;
+    int max_iter = 50;
     double time_limit = 30.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;

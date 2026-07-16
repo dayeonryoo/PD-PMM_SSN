@@ -64,6 +64,16 @@ typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec
 }
 
 template <typename T>
+T SSN<T>::compute_grad_Lagrangian_unscaled_inf_norm(const Vec& grad_L) {
+    using Vec = typename SSN<T>::Vec;
+
+    T x_block = inf_norm(grad_L.head(N).cwiseQuotient(D2_ext));
+    T y2_block = inf_norm(grad_L.tail(l).cwiseQuotient(D1B_diag));
+
+    return (T(1) / c_scalar) * std::max(x_block, y2_block);
+} 
+
+template <typename T>
 void SSN<T>::split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel) {
     int t = static_cast<int>(mask.count());
     u_sel.resize(t);
@@ -618,9 +628,6 @@ void SSN<T>::solve_ssn(const T eps) {
     x_cur_ = x;
     y2_cur_ = y2;
     int _iter = 0, _opt = -1;
-
-    // Stagnation detection: consecutive SSN iterations where ||∇M|| (the actual termination
-    // criterion) fails to improve, even if the Newton step itself is still nonzero.
     T prev_tol_achieved = inf;
     int stagnant_count = 0;
 
@@ -665,33 +672,6 @@ void SSN<T>::solve_ssn(const T eps) {
         bool first_ssn_iter = (diag_P_K.size() == 0);
         bool pk_changed = first_ssn_iter || (diag_P_K.array() != new_diag_P_K_.array()).any();
         bool pw_changed = first_ssn_iter || (diag_P_W.array() != new_diag_P_W_.array()).any();
-
-        if (!first_ssn_iter) {
-            const auto flip_K = (diag_P_K.array() != new_diag_P_K_.array());
-            const auto flip_W = (diag_P_W.array() != new_diag_P_W_.array());
-            const int n_flip_K = flip_K.count();
-            const int n_flip_W = flip_W.count();
-            if (n_flip_K > 0 || n_flip_W > 0) {
-                // A flip is "near-boundary" when the iterate that triggered it sits within
-                // eps_zero of the bound it flipped across -- i.e. the flip is attributable to
-                // the iterate hovering at the edge rather than a genuine crossing.
-                int n_flip_K_near = 0, n_flip_W_near = 0;
-                for (int i = 0; i < N; ++i) {
-                    if (!flip_K(i)) continue;
-                    const T tol = eps_zero * (T(1) + std::abs(u_(i)));
-                    if (std::abs(u_(i) - lx(i)) < tol || std::abs(u_(i) - ux(i)) < tol) ++n_flip_K_near;
-                }
-                for (int i = 0; i < l; ++i) {
-                    if (!flip_W(i)) continue;
-                    const T tol = eps_zero * (T(1) + std::abs(v_(i)));
-                    if (std::abs(v_(i) - lw(i)) < tol || std::abs(v_(i) - uw(i)) < tol) ++n_flip_W_near;
-                }
-
-                // std::cout << "[SSN] Active-set flips: K = " << n_flip_K << "/" << N
-                //           << " (" << n_flip_K_near << " near boundary), W = " << n_flip_W << "/" << l
-                //           << " (" << n_flip_W_near << " near boundary)" << "\n";
-            }
-        }
 
         if (pk_changed) {
             update_prec = true;
@@ -823,15 +803,16 @@ void SSN<T>::solve_ssn(const T eps) {
         // ========== Update x and y2 ==========
         if (tau <= T(0)) { // Linesearch found step size <= 0 with the Newton direction.
             Vec grad_L = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
-            T grad_norm = inf_norm(grad_L);
+            // T grad_norm = inf_norm(grad_L);
+            T grad_norm = compute_grad_Lagrangian_unscaled_inf_norm(grad_L);
             if (grad_norm <= T(5) * eps) {
                 _opt = 0; // ||∇M|| is small enough to accept optimality.
-                std::cout << "[Optimal] Linesearch failed but ||∇M|| = " << grad_norm << " <= 5 * eps, so we accept optimality.\n";
+                std::cout << "[Optimal] Linesearch failed but unscaled ||∇M|| = " << grad_norm << " <= 5 * eps, so we accept optimality.\n";
                 break;
             }
 
             // Newton direction failed; retry once with the steepest-descent direction.
-            std::cout << "[Grad desc] Linesearch failed with Newton direction (||∇M|| = " << grad_norm << "); retrying with gradient descent: ";
+            std::cout << "[Grad desc] Linesearch failed with Newton direction (unscaled ||∇M|| = " << grad_norm << "); retrying with gradient descent: ";
             dx  = -grad_L.head(N);
             dy2_ = -grad_L.tail(l);
             std::cout << "grad: ||dx|| = " << dx.norm() << ", ||dy2|| = " << dy2_.norm() << "\n";
@@ -861,8 +842,9 @@ void SSN<T>::solve_ssn(const T eps) {
 
         // Compute gradient of Lagrangian at current (x, y2).
         grad_L_ = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
-        tol_achieved = inf_norm(grad_L_);
-        std::cout << "[SSN] Iteration " << _iter << ": ||∇M|| = " << tol_achieved << ", tau = " << tau << "\n";
+        // tol_achieved = inf_norm(grad_L_);
+        tol_achieved = compute_grad_Lagrangian_unscaled_inf_norm(grad_L_);
+        std::cout << "[SSN] Iteration " << _iter << ": unscaled ||∇M|| = " << tol_achieved << ", scaled ||∇M|| = " << inf_norm(grad_L_) << ", tau = " << tau << ", ||dx|| = " << dx.norm() << ", ||dy2|| = " << dy2_.norm() << "\n";
         _iter++;
 
         auto t1_ssn = std::chrono::steady_clock::now();
@@ -875,9 +857,8 @@ void SSN<T>::solve_ssn(const T eps) {
             break;
         }
 
-        // Stagnation check: if ||∇M|| fails to meaningfully improve for consecutive iterations,
-        // further Newton steps aren't making real progress (even if the step itself is nonzero) —
-        // stop and let the PMM level adjust penalties rather than burn iterations here.
+        // Stagnation check: 
+        // if ||∇M|| fails to meaningfully improve for 5 consecutive iterations, stop and let the PMM level adjust penalties.
         if (tol_achieved >= T(0.999) * prev_tol_achieved) {
             ++stagnant_count;
         } else {
@@ -888,11 +869,11 @@ void SSN<T>::solve_ssn(const T eps) {
         if (stagnant_count >= 5) {
             if (tol_achieved < T(5) * eps) {
                 _opt = 0; // Optimality achieved.
-                std::cout << "[Optimal] ||∇M|| stagnated (" << tol_achieved << "), but ||∇M|| <= 5 * eps, so we accept optimality.\n";
+                std::cout << "[Optimal] unscaled ||∇M|| stagnated (" << tol_achieved << "), but ||∇M|| <= 5 * eps, so we accept optimality.\n";
                 break;
             }
             _opt = 5; // ||∇M|| stagnated; not a confirmed optimum.
-            std::cout << "[Stagnated] ||∇M|| stagnated (" << tol_achieved << "); exiting SSN loop early.\n";
+            std::cout << "[Stagnated] unscaled ||∇M|| stagnated (" << tol_achieved << "); exiting SSN loop early.\n";
             break;
         }
     }
