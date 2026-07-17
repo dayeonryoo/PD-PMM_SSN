@@ -920,7 +920,7 @@ Solution<T> SSN_PMM<T>::solve() {
         }
 
         // Update multipliers y1, z if SSN solve is accurate enough.
-        if (true || ssn_tol_achieved <= T(100) * pmm_tol_achieved) {
+        if (ssn_tol_achieved <= T(100) * pmm_tol_achieved) {
             delta_y1 = -mu * (Ax_scratch_ - b);
             y1 += delta_y1;
             delta_z = mu * (x - proj(z / mu + x, lx, ux));
