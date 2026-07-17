@@ -121,7 +121,7 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
     using SpMat = Eigen::SparseMatrix<T>;
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
-    const int max_ruiz_iter = 1;
+    const int max_ruiz_iter = 10;
     const T ruiz_tol = 1e-3;
     const T eps = std::sqrt(std::numeric_limits<T>::epsilon()); // for sqrt of near-zero row/column max.
 
@@ -263,13 +263,6 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
         if (l > 0) D1B_diag.array() *= drB.array();
         D2_diag.array() *= dc.array();
 
-    }
-    std::cout << "[Ruiz] Final Matrix Infinity Norms (Target ~ 1.0):\n";
-    if (m > 0 && A_ruiz.nonZeros() > 0) {
-        std::cout << "  Max |A_ruiz|: " << A_ruiz.coeffs().cwiseAbs().maxCoeff() << "\n";
-    }
-    if (l > 0 && B_ruiz.nonZeros() > 0) {
-        std::cout << "  Max |B_ruiz|: " << B_ruiz.coeffs().cwiseAbs().maxCoeff() << "\n";
     }
 }
 
@@ -611,7 +604,27 @@ void SSN_PMM<T>::printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const
     }
 }
 
+template <typename T>
+void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_res, int ssn_inner_iters) {
 
+    T worst_res = new_res_norms.maxCoeff();
+    T worst_res_old = res_norms.maxCoeff();
+    T worst_ratio = (new_res_norms.array() / (res_norms.array().abs() + T(100) * std::numeric_limits<T>::epsilon())).maxCoeff();
+
+    if (ssn_opt == 0) { // SSN optimal.
+        mu = std::min(mu_limit, T(2) * mu);
+        rho = std::min(rho_limit, T(2) * rho);
+        ssn_tol = std::max(eps_limit, T(0.8) * ssn_tol);
+
+    } else if (ssn_opt == 3 || ((ssn_opt == 2 || ssn_opt == 5) && ssn_res > T(100) * pmm_tol_achieved)) {
+        // Linesearch failed, or SSN residual is too large compared to PMM tolerance achieved.
+        mu = std::max(mu0, T(0.8) * mu);
+        rho = std::max(rho0, T(0.8) * rho);
+        ssn_tol = std::min({worst_res, T(1.1) * ssn_tol, T(1e-2)});
+
+    }
+}
+/*
 template <typename T>
 void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg, int ssn_inner_iters) {
 
@@ -667,7 +680,7 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
     }
 
 }
-
+*/
 /*
 template <typename T>
 void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg, int ssn_inner_iters) {

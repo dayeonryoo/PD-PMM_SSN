@@ -65,7 +65,7 @@ public:
     T delta = 0.995;
 
     // Conjugate gradient parameters
-    T krylov_tol = 1e-15;
+    T krylov_tol = 1e-12;
     int krylov_max_in_iter = 200;
 
     // Iterative refinement of the augmented system solve (residual correction on
