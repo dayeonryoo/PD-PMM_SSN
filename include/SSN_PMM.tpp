@@ -904,7 +904,7 @@ Solution<T> SSN_PMM<T>::solve() {
             delta_z = mu * (x - proj(z / mu + x, lx, ux));
             z += delta_z;
         } else {
-            std::cout << "[SSN] SSN solve is not accurate enough (SSN res = " << ssn_tol_achieved << ").\n";
+            // std::cout << "[SSN] SSN solve is not accurate enough (SSN res = " << ssn_tol_achieved << ").\n";
             // Keep y1, z from previous PMM iteration
         }
 

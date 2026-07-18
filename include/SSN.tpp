@@ -220,16 +220,12 @@ bool SSN<T>::choose_ldlt(const SpMat& G, const BoolArr& active_K) {
                    + o_k;
     }
 
-    if (S_nnz <= 0) {
-        std::cout << "0: ";
-        return true;
-    }
+    if (S_nnz <= 0) return true;
 
     const double ratio = ((double)s / (t + s))
                        * ((double)K_nnz / S_nnz)
                        * ((double)K_nnz / S_nnz);
 
-    std::cout << ratio << ": ";
     return ratio < 0.1;
 }
 
@@ -759,8 +755,8 @@ void SSN<T>::solve_ssn(const T eps) {
             auto t0_ratio_comp = std::chrono::steady_clock::now();
             use_ldlt = choose_ldlt(G, active_K);
             ++ldlt_decisions_made_;
-            if (use_ldlt) std::cout << "LDLT used as a preconditioner callback method.\n";
-            else std::cout << "Chol used as a preconditioner callback method.\n";
+            // if (use_ldlt) std::cout << "LDLT used as a preconditioner callback method.\n";
+            // else std::cout << "Chol used as a preconditioner callback method.\n";
             auto t1_ratio_compt = std::chrono::steady_clock::now();
             // std::cout << "choosing a system took " << time_diff_ms(t0_ratio_comp, t1_ratio_compt) << "ms.\n";
         } // Determines the factorization method for a preconditioner; locked after the first 3 decisions
@@ -826,15 +822,15 @@ void SSN<T>::solve_ssn(const T eps) {
             T grad_norm = inf_norm(grad_L);
             if (grad_norm <= T(5) * eps) {
                 _opt = 0; // ||∇M|| is small enough to accept optimality.
-                std::cout << "[Optimal] Linesearch failed but ||∇M|| = " << grad_norm << " <= 5 * eps, so we accept optimality.\n";
+                // std::cout << "[Optimal] Linesearch failed but ||∇M|| = " << grad_norm << " <= 5 * eps, so we accept optimality.\n";
                 break;
             }
 
             // Newton direction failed; retry once with the steepest-descent direction.
-            std::cout << "[Grad desc] Linesearch failed with Newton direction (||∇M|| = " << grad_norm << "); retrying with gradient descent: ";
+            // std::cout << "[Grad desc] Linesearch failed with Newton direction (||∇M|| = " << grad_norm << "); retrying with gradient descent: ";
             dx  = -grad_L.head(N);
             dy2_ = -grad_L.tail(l);
-            std::cout << "grad: ||dx|| = " << dx.norm() << ", ||dy2|| = " << dy2_.norm() << "\n";
+            // std::cout << "grad: ||dx|| = " << dx.norm() << ", ||dy2|| = " << dy2_.norm() << "\n";
             Adx_.noalias() = A * dx;
             Bdx_.noalias() = B * dx;
             tau = exact_line_search(x_cur_, y2_cur_, dx, dy2_,
@@ -888,11 +884,11 @@ void SSN<T>::solve_ssn(const T eps) {
         if (stagnant_count >= 10) {
             if (tol_achieved < T(5) * eps) {
                 _opt = 0; // Optimality achieved.
-                std::cout << "[Optimal] ||∇M|| stagnated (" << tol_achieved << "), but ||∇M|| <= 5 * eps, so we accept optimality.\n";
+                // std::cout << "[Optimal] ||∇M|| stagnated (" << tol_achieved << "), but ||∇M|| <= 5 * eps, so we accept optimality.\n";
                 break;
             }
             _opt = 5; // ||∇M|| stagnated; not a confirmed optimum.
-            std::cout << "[Stagnated] ||∇M|| stagnated (" << tol_achieved << "); exiting SSN loop early.\n";
+            // std::cout << "[Stagnated] ||∇M|| stagnated (" << tol_achieved << "); exiting SSN loop early.\n";
             break;
         }
     }
