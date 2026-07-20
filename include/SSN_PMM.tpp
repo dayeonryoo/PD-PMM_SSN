@@ -118,6 +118,14 @@ void SSN_PMM<T>::check_dimensions(const Problem<T>& problem) {
 
 template <typename T>
 void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_diag) {
+    /*
+    drA = Diag(sqrt(||A_{i.}||_inf))_i; drB = Diag(sqrt(||B_{i.}||_inf))_i; dc = Diag(sqrt(||[A; B; I]_{.j}||_inf))_j;
+    D1A <- D1A / drA; D1B <- D1B / drB; D2 <- D2 / dc;
+    A <- D1A A D2; B <- D1B B D2; c <- D2 c; b <- D1A b; (lx ux) <- D2^{-1} (lx, ux); (lw, uw) <- D1B (lw, uw).
+
+    Given scaled (x, y1, y2, z), unscale them as follows:
+    x_unscaled = D2 x; y1_unscaled = D1A y1; y2_unscaled = D1B y2; z_unscaled = D2^{-1} z.
+    */
     using SpMat = Eigen::SparseMatrix<T>;
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -148,12 +156,12 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
 
     for (int k = 0; k < max_ruiz_iter; ++k) {
 
-        // Compute row-/column-wise infinity norms of constraint matrices
+        // Compute row-/column-wise infinity norms of constraint matrices.
         Vec row_max_A = Vec::Zero(m); // row_max(i) = max_j |A(i,j)|
         Vec row_max_B = Vec::Zero(l); // row_max(i) = max_j |B(i,j)|
         Vec col_max = Vec::Ones(n);   // col_max(j) = max_i |[A; B; I](i,j)| (starts at 1 due to I)
 
-        // Contribution from A
+        // Contribution from A.
         for (int col = 0; col < n; ++col) {
             for (typename SpMat::InnerIterator it(A_ruiz, col); it; ++it) {
                 const int i = it.row();
@@ -163,7 +171,7 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
             }
         }
 
-        // Contribution from B
+        // Contribution from B.
         for (int col = 0; col < n; ++col) {
             for (typename SpMat::InnerIterator it(B_ruiz, col); it; ++it) {
                 const int i = it.row();
@@ -173,14 +181,14 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
             }
         }
 
-        // Check convergence on [A; B; I]
+        // Check convergence on [A; B; I].
         T row_dev = T(0);
         if (m > 0) row_dev = std::max(row_dev, (row_max_A.array() - T(1)).abs().maxCoeff());
         if (l > 0) row_dev = std::max(row_dev, (row_max_B.array() - T(1)).abs().maxCoeff());
         T col_dev = (col_max.array() - T(1)).abs().maxCoeff();
         if (row_dev < ruiz_tol && col_dev < ruiz_tol) break;
 
-        // Scaling factors: dr, dc = sqrt(max_norms); inverse computed in the same pass
+        // Scaling factors: dr, dc = sqrt(max_norms).
         Vec drA(m), drA_inv(m);
         Vec drB(l), drB_inv(l);
         Vec dc(n),  dc_inv(n);
@@ -197,7 +205,7 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
             dc_inv(j) = T(1) / dc(j);
         }
 
-        // Scale A: A <-  D1A^{-1} A D2^{-1}
+        // Scale A: A <-  D1A A D2.
         for (int j = 0; j < n; ++j) {
             const T col_fac = dc_inv(j);
             for (typename SpMat::InnerIterator it(A_ruiz, j); it; ++it) {
@@ -205,7 +213,7 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
                 it.valueRef() *= row_fac * col_fac;
             }
         }
-        // Scale B: B <- D1B^{-1} B D2^{-1}
+        // Scale B: B <- D1B B D2.
         for (int j = 0; j < n; ++j) {
             const T col_fac = dc_inv(j);
             for (typename SpMat::InnerIterator it(B_ruiz, j); it; ++it) {
@@ -214,29 +222,29 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
             }
         }
 
-        // Scale I: I <- D1^{-1} I D2^{-1}
-        // This is represented through the variable substitution and scaling of lx, ux below.
+        // Scale I: I <- D1 I D2;
+        // this is represented through the variable substitution and scaling of lx, ux below.
 
-        // Scale Q if Q is nonzero: Q <- D2^{-1} Q D2^{-1}
+        // Scale Q if Q is nonzero: Q <- D2 Q D2.
         if (Q_info == 2) {
             for (int j = 0; j < n; ++j) {
                 const T col_fac = dc_inv(j);
                 for (typename SpMat::InnerIterator it(Q_ruiz, j); it; ++it) {
                     const T row_fac = dc_inv(it.row());
-                    it.valueRef() *= row_fac * col_fac; // Q_ij *= 1/d_i * 1/d_j
+                    it.valueRef() *= row_fac * col_fac; // Q_ij *= 1/dc_i * 1/dc_j
                 }
             }
         } else if (Q_info == 1) {
-            Q_diag_ruiz.array() *= dc_inv.array().square(); // Q_ii *= 1/d_i * 1/d_i
+            Q_diag_ruiz.array() *= dc_inv.array().square(); // Q_ii *= 1/dc_i * 1/dc_i
         }
 
-        // Scale c: c <- D2^{-1} c
+        // Scale c: c <- D2^ c.
         if (c_ruiz.size() == n) c_ruiz.array() *= dc_inv.array();
 
-        // Scale b: b <- D1A^{-1} b
+        // Scale b: b <- D1A b.
         if (b_ruiz.size() == m) b_ruiz.array() *= drA_inv.array();
 
-        // Scale lw, uw: D1B^{-1} lw, uw — single pass, shared drB_inv(i) load
+        // Scale lw, uw: (lw, uw) <- D1B (lw, uw).
         const bool has_lw = (lw_ruiz.size() == l);
         const bool has_uw = (uw_ruiz.size() == l);
         if (has_lw || has_uw) {
@@ -247,7 +255,7 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
             }
         }
 
-        // Scale lx, ux: D2 lx, ux — single pass, shared dc(i) load
+        // Scale lx, ux: (lx, ux) <- D2^{-1} (lx, ux).
         const bool has_lx = (lx_ruiz.size() == n);
         const bool has_ux = (ux_ruiz.size() == n);
         if (has_lx || has_ux) {
@@ -258,10 +266,10 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
             }
         }
 
-        // Accumulate scaling factors (D <- D * diag(d))
-        if (m > 0) D1A_diag.array() *= drA.array();
-        if (l > 0) D1B_diag.array() *= drB.array();
-        D2_diag.array() *= dc.array();
+        // Accumulate scaling factors (D <- D / diag(d)).
+        if (m > 0) D1A_diag.array() *= drA_inv.array();
+        if (l > 0) D1B_diag.array() *= drB_inv.array();
+        D2_diag.array() *= dc_inv.array();
 
     }
 }
@@ -476,59 +484,6 @@ void SSN_PMM<T>::check_bounds() {
 }
 
 template <typename T>
-typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx) {
-
-    // Primal residual norm
-    T res_p;
-    if (M == 0) res_p = T(0);
-    else {
-        // T denom = 1 + b.norm(); // original denominator based only on a constant term b
-        T denom = 1 + std::max(Ax.norm(), b.norm());
-        res_p = (Ax - b).norm() / denom;
-    }
-
-    // Dual residual norm
-    Vec num = c + z;
-    // T denom = 1 + c.norm(); // original denominator based only on a constant term c
-    T denom = std::max(c.norm(), z.norm());
-    if (Q_info != 0) {
-        num += Qx;
-        denom = std::max(denom, Qx.norm());
-    }
-    if (M != 0) {
-        Vec A_tr_y1 = A_tr * y1;
-        num -= A_tr_y1;
-        denom = std::max(denom, A_tr_y1.norm());
-    }
-    if (l != 0) {
-        Vec B_tr_y2 = B_tr * y2;
-        num -= B_tr_y2;
-        denom = std::max(denom, B_tr_y2.norm());
-    }
-    denom += T(1);
-    T res_d = num.norm() / denom;
-
-    // Complementarity residual norm for box constraints on x
-    Vec proj_K = proj(x + z, lx, ux);
-    T compl_x = (x - proj_K).norm();
-    compl_x /= (T(1) + std::max(z.norm(), proj_K.norm()));
-
-    // Complementarity residual norm for Bx constraints
-    T compl_w;
-    if (l == 0) compl_w = T(0);
-    else {
-        Vec proj_W = proj(Bx - y2, lw, uw);
-        compl_w = (Bx - proj_W).norm();
-        compl_w /= (T(1) + std::max(y2.norm(), proj_W.norm()));
-    }
-
-    ResVec res_norms;
-    res_norms << res_p, res_d, compl_x, compl_w;
-    return res_norms;
-
-}
-
-template <typename T>
 typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx) {
     // Primal residual norm
     T res_p;
@@ -592,14 +547,14 @@ template <typename T>
 void SSN_PMM<T>::printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z) {
     // Ruiz descale, and shrink to original dimension if needed
     if (Q_info == 2) {
-        x_sol = x.head(n).array() / D2_diag.array();
-        y1_sol = y1.head(m).array() / D1A_diag.array();
-        y2_sol = y2.head(l).array() / D1B_diag.array();
-        z_sol = z.head(n).array() * D2_diag.array();
+        x_sol = x.head(n).cwiseProduct(D2_diag);
+        y1_sol = y1.head(m).cwiseProduct(D1A_diag);
+        y2_sol = y2.head(l).cwiseProduct(D1B_diag);
+        z_sol = z.head(n).cwiseQuotient(D2_diag);
     } else {
-        x_sol = x.cwiseQuotient(D2_diag);
-        y1_sol = y1.cwiseQuotient(D1A_diag);
-        y2_sol = y2.cwiseQuotient(D1B_diag);
+        x_sol = x.cwiseProduct(D2_diag);
+        y1_sol = y1.cwiseProduct(D1A_diag);
+        y2_sol = y2.cwiseProduct(D1B_diag);
         z_sol = z.cwiseProduct(D2_diag);
     }
 }
@@ -624,105 +579,6 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
 
     }
 }
-/*
-template <typename T>
-void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg, int ssn_inner_iters) {
-
-    T worst_res = new_res_norms.maxCoeff();
-    T worst_res_old = res_norms.maxCoeff();
-    T worst_ratio = (new_res_norms.array() / (res_norms.array().abs() + T(100) * std::numeric_limits<T>::epsilon())).maxCoeff();
-
-    if (ssn_opt == 0) {
-
-        // SSN optimal.
-        // std::cout << "[Optimal]: worst_ratio = " << worst_res / worst_res_old << std::endl;
-
-        bool residual_improved = worst_res < T(0.9) * worst_res_old;
-
-        if (residual_improved) {
-            mu = std::min(mu_limit, T(2) * mu);
-            rho = std::min(rho_limit, T(2) * rho);
-            ssn_tol = std::max(eps_limit, T(0.5) * ssn_tol);
-        } else {
-            mu = std::min(mu_limit, T(1.2) * mu);
-            rho = std::min(rho_limit, T(1.2) * rho);
-            ssn_tol = std::max(eps_limit, T(0.5) * ssn_tol);
-        }
-
-    } else if (worst_res < 0.9 * worst_res_old) {
-
-        // SSN isn't optimal, but still making good progress: keep mu/rho constant.
-        // std::cout << "[Constant]: worst_ratio = " << worst_res / worst_res_old << std::endl;
-
-    } else if (ssn_opt == 5 && ssn_tol_arg < T(100) * worst_res) {
-
-        // SSN stagnated and the PMM step is not improving the residuals
-        // std::cout << "[Stagnated]: worst_ratio = " << worst_res / worst_res_old << std::endl;
-        mu = std::min(mu_limit, T(1.2) * mu);
-        rho = std::min(rho_limit, T(1.5) * rho);
-
-    } else {
-        // SSN FAILED
-        // The subproblem was too ill-conditioned or the tolerance was too tight.
-        // std::cout << "[Failed] worst_ratio = " << worst_res / worst_res_old << std::endl;
-
-        // Back off the penalties slightly to improve matrix conditioning for CG.
-        if (true || mu != mu_limit) {
-            mu = std::max(mu0, T(0.8) * mu);
-        }
-        if (true ||rho != rho_limit) {
-            rho = std::max(rho0, T(0.8) * rho);
-        }
-        // Loosen the inner tolerance to allow the next PMM step to proceed.
-        if (true || ssn_tol != eps_limit) {
-            ssn_tol = std::min({worst_res, T(1.1) * ssn_tol, T(1e-2)});
-        }
-    }
-
-}
-*/
-/*
-template <typename T>
-void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg, int ssn_inner_iters) {
-
-    T worst_res = new_res_norms.maxCoeff();
-    T worst_res_old = res_norms.maxCoeff();
-    T worst_ratio = (new_res_norms.array() / (res_norms.array().abs() + T(100) * std::numeric_limits<T>::epsilon())).maxCoeff();
-
-    bool ssn_valid = (ssn_opt == 0 || (ssn_opt == 2 && ssn_tol_arg < worst_res));
-    bool improving = (worst_res < T(0.9) * worst_res_old);
-
-    // growth is derived from worst_ratio = new_res / old_res, so it reflects how much this
-    // PMM step actually improved (or hurt) the worst residual, rather than a fixed constant
-    // that would need re-tuning per problem.
-    const T growth_floor_success = T(3);
-    const T growth_cap_success   = T(5);
-    const T growth_floor_fail    = T(0.5);
-    const T growth_cap_fail      = T(0.95);
-
-    T growth;
-    if (ssn_opt == 0) {
-        // SSN optimal: grow mu/rho in proportion to how much the residual improved
-        // (small improvement -> mild growth, large improvement -> aggressive growth).
-        growth = std::clamp(T(1) / worst_ratio, growth_floor_success, growth_cap_success);
-        ssn_tol = std::max(eps_limit, T(0.5) * ssn_tol);
-        stagnation = 0;
-    } else if (improving) {
-        // SSN isn't optimal, but the PMM step is still making good progress — hold mu/rho
-        // and the inner tolerance steady rather than perturbing a working regime.
-        growth = std::clamp(T(1) / worst_ratio, growth_floor_success, growth_cap_success);
-    } else {
-        // SSN FAILED: the subproblem was too ill-conditioned or the tolerance was too tight.
-        // Back off in proportion to how much worse the residual got.
-        stagnation++;
-        growth = std::clamp(T(1) / worst_ratio, growth_floor_fail, growth_cap_fail);
-        ssn_tol = std::min({worst_res, T(1.1) * ssn_tol, T(1e-2)});
-    }
-    std::cout << "growth = " << growth << ", worst_ratio = " << worst_ratio << ", worst_res = " << worst_res << ", worst_res_old = " << worst_res_old << std::endl;
-    mu  = std::clamp(growth * mu,  mu0,  mu_limit);
-    rho = std::clamp(growth * rho, rho0, rho_limit);
-}
-*/
 
 template <typename T>
 bool SSN_PMM<T>::primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z) {

@@ -164,7 +164,6 @@ public:
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
     }
-    ResVec compute_residual_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx);
     ResVec compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx);
     T objective_value(const Vec& x, const Vec& Qx);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
