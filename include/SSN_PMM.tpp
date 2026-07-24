@@ -22,7 +22,7 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
         Q_info = 1; // Q is diagonal until proven otherwise
         for (int k = 0; k < Q.outerSize() && Q_info < 2; ++k) {
             for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
-                if (it.row() != it.col()) {
+                if (it.row() != it.col() && it.value() != T(0)) {
                     Q_info = 2;
                     break;
                 }
@@ -310,8 +310,6 @@ void SSN_PMM<T>::set_L_from_LLT(const SpMat& Q) {
 
     // Diagonal scaling.
     L = (P.transpose() * L_D) * D_sqrt.asDiagonal();
-    L_tr = L.transpose();
-    
 }
 
 template <typename T>
@@ -535,10 +533,10 @@ typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_norms_inf(const Vec& Ax
 }
 
 template <typename T>
-T SSN_PMM<T>::objective_value(const Vec& x, const Vec& Qx) {
-    T obj_val = obj_const + c.dot(x);
+T SSN_PMM<T>::objective_value(const Vec& x_orig) {
+    T obj_val = obj_const + c_orig.dot(x_orig);
     if (Q_info != 0) {
-        obj_val += T(0.5) * Qx.dot(x);
+        obj_val += T(0.5) * x_orig.dot(Q * x_orig);
     }
     return obj_val;
 }
@@ -563,15 +561,13 @@ template <typename T>
 void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_res, int ssn_inner_iters) {
 
     T worst_res = new_res_norms.maxCoeff();
-    T worst_res_old = res_norms.maxCoeff();
-    T worst_ratio = (new_res_norms.array() / (res_norms.array().abs() + T(100) * std::numeric_limits<T>::epsilon())).maxCoeff();
-
-    if (ssn_opt == 0) { // SSN optimal.
-        mu = std::min(mu_limit, T(2) * mu);
-        rho = std::min(rho_limit, T(2) * rho);
+    
+    if (ssn_opt == 0) { // SSN optimal or algorithm is close to convergence.
+        mu = std::min(mu_limit, T(1.3) * mu);
+        rho = std::min(rho_limit, T(1.3) * rho);
         ssn_tol = std::max(eps_limit, T(0.8) * ssn_tol);
 
-    } else if (ssn_opt == 3 || ((ssn_opt == 2 || ssn_opt == 5) && ssn_res > T(100) * pmm_tol_achieved)) {
+    } else if (ssn_opt == 3 || ((ssn_opt == 2 || ssn_opt == 5) && ssn_res > T(100) * worst_res)) {
         // Linesearch failed, or SSN residual is too large compared to PMM tolerance achieved.
         mu = std::max(mu0, T(0.8) * mu);
         rho = std::max(rho0, T(0.8) * rho);
@@ -690,7 +686,7 @@ Solution<T> SSN_PMM<T>::solve() {
     auto solving_start = std::chrono::steady_clock::now();
 
     // Build the Newton system
-    SSN<T> NS(Q_info, Q_diag, L, L_tr,
+    SSN<T> NS(Q_info, Q_diag, L,
             A, B, A_tr, B_tr, c, b, D1A_diag, D1B_diag, D2_diag,
             lx, ux, lw, uw, obj_const, n, m, N, M, l,
             ssn_tol, ssn_max_in_iter,
@@ -723,8 +719,6 @@ Solution<T> SSN_PMM<T>::solve() {
         ssn_iter += NS.iter;
         ssn_tol_achieved = NS.tol_achieved;
         linesearch_fail += NS.linesearch_fail;
-        if (NS.linesearch_fail > 0) consecutive_linesearch_fail++;
-        else                        consecutive_linesearch_fail = 0;
 
         // If SSN was not "successful", discard the recent SSN and revert to solution from previous PMM iter.
         if (ssn_iter >= ssn_max_iter) { // Max total SSN iteration is reached
@@ -770,7 +764,7 @@ Solution<T> SSN_PMM<T>::solve() {
 
         // Ruiz-descale and shrink to the original dimension (n, m, l) for printing.
         printable_sol(x, y1, y2, z); // (Modifies x_sol, y1_sol, y2_sol, z_sol.)
-        obj_val = objective_value(x, Qx_scratch_);
+        obj_val = objective_value(x_sol);
 
         // Print current iteration info.
         print(when, what, pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, new_res_norms, ssn_tol_achieved, mu, rho, ssn_tol, linesearch_fail, NS.krylov_fail);

@@ -73,11 +73,14 @@ public:
     Vec lx, ux, lw, uw;
     T obj_const;
 
+    // Original (unscaled, un-lifted) c.
+    Vec c_orig;
+
     int n, m, l;
     int N, M;
     int Q_info; // 0 = zero; 1 = diagonal; 2 = general
     Vec Q_diag;
-    SpMat L, L_tr;
+    SpMat L;
     SpMat A_tr, B_tr;
 
     SpMat Q_ruiz, A_ruiz, B_ruiz;
@@ -87,7 +90,7 @@ public:
 
     // Pre-allocated scratch vectors for the PMM main loop
     Vec Ax_scratch_, Bx_scratch_, Qx_scratch_;      // current iteration products
-    Vec Ax_old_scratch_, Bx_old_scratch_;           // previous iteration products (swapped, not copied)
+    Vec Ax_old_scratch_, Bx_old_scratch_;           // previous iteration products
     Vec Adx_scratch_, Bdx_scratch_;                 // differences
     Vec x_old_scratch_, y2_old_scratch_;            // previous iterates for infeasibility check
 
@@ -100,21 +103,19 @@ public:
     int ssn_max_iter = 100000000;
     int ssn_max_in_iter = 50;
     T eps_limit = 1e-3*tol;
-    T mu_limit = 1e8;
-    T rho_limit = 1e8;
-    T eps_pinf = 5e-2 * tol;
-    T eps_dinf = 5e-2 * tol;
+    T mu_limit = 1e9;
+    T rho_limit = 1e7;
+    T eps_pinf = 1e-1 * tol;
+    T eps_dinf = 1e-1 * tol;
     T alpha = 0.95;
     double time_limit = 60.0; // in seconds
-    int stagnation = 0;
     int linesearch_fail = 0;
-    int consecutive_linesearch_fail = 0;
 
     // Updated parameters
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e2;
-    T rho = 1e2;
+    T rho = 1e4;
     T ssn_tol = 1e-2;
     
     // Outputs:
@@ -141,10 +142,26 @@ public:
             determine_dimensions(problem);
         }
         check_dimensions(problem);
+        Q = problem.Q;
+        c_orig = (problem.c.size() == 0) ? Vec::Zero(n) : problem.c;
         ruiz_scaling(problem, problem_Q_diag);
         set_default(problem);
+
+        SpMat().swap(Q_ruiz);
+        SpMat().swap(A_ruiz);
+        SpMat().swap(B_ruiz);
+        Vec().swap(problem_Q_diag);
+        Vec().swap(Q_diag_ruiz);
+        Vec().swap(c_ruiz);
+        Vec().swap(b_ruiz);
+        Vec().swap(lx_ruiz);
+        Vec().swap(ux_ruiz);
+        Vec().swap(lw_ruiz);
+        Vec().swap(uw_ruiz);
+
         initialize_sols();
         check_bounds();
+
         A_tr = A.transpose();
         B_tr = B.transpose();
     }
@@ -165,7 +182,7 @@ public:
         return v.cwiseAbs().maxCoeff();
     }
     ResVec compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx);
-    T objective_value(const Vec& x, const Vec& Qx);
+    T objective_value(const Vec& x_orig);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
     void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg, int ssn_inner_iters);
     bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);

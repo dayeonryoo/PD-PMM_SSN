@@ -379,7 +379,7 @@ PDPMMdata<T> make_poisson_L1L2_control(
 
 template <typename T>
 PDPMMdata<T> make_poisson_L1L2_control_default() {
-    return make_poisson_L1L2_control<T>(7, T(1e-2), T(1e-2));
+    return make_poisson_L1L2_control<T>(7, T(1e-4), T(1e-4));
 }
 
 template <typename T>
@@ -407,7 +407,7 @@ PDPMMdata<T> make_convdiff_L1L2_control(
 
 template <typename T>
 PDPMMdata<T> make_convdiff_L1L2_control_default() {
-    return make_convdiff_L1L2_control<T>(8, T(1e-6), T(1e-2));
+    return make_convdiff_L1L2_control<T>(9, T(1e-4), T(1e-4));
 }
 
 } // namespace pdegen

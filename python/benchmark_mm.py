@@ -336,12 +336,12 @@ def pdpmm_to_qpalm(pd: dict):
 # ---------------------------------------------------------------------------
 QPALM_SOLVED = qpalm.Info.SOLVED   # == 1
 
-def run_qpalm(pd: dict, tol: float, time_limit: float) -> dict:
-    """Run QPALM on a problem given as a parse_sif dict.
+def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
+    """Run QPALM on a problem already converted via pdpmm_to_qpalm.
 
     Returns dict with: status, obj_val, run_time, outter_iter, inner_iter.
     """
-    Q_upper, q, C, bmin, bmax, n, m_total = pdpmm_to_qpalm(pd)
+    Q_upper, q, C, bmin, bmax, n, m_total = qpalm_data
 
     data      = qpalm.Data(n, m_total)
     data.Q    = Q_upper
@@ -377,12 +377,12 @@ def run_qpalm(pd: dict, tol: float, time_limit: float) -> dict:
 # ---------------------------------------------------------------------------
 OSQP_SOLVED = 1   # osqp.constant("OSQP_SOLVED")
 
-def run_osqp(pd: dict, tol: float, time_limit: float) -> dict:
-    """Run OSQP on a problem given as a parse_sif dict.
+def run_osqp(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
+    """Run OSQP on a problem already converted via pdpmm_to_qpalm.
 
     Returns dict with: status, obj_val, run_time, outer_iter, inner_iter=0.
     """
-    Q_upper, q, C, bmin, bmax, *_ = pdpmm_to_qpalm(pd)
+    Q_upper, q, C, bmin, bmax, *_ = qpalm_data
 
     prob = osqp.OSQP()
     prob.setup(                         # setup: scaling + factorisation
@@ -637,8 +637,9 @@ def _worker_qpalm_mm(sif_path, tol, time_limit, conn):
     result = {}
     try:
         pd_data = ssn_pmm_bind.parse_sif(sif_path)
+        qpalm_data = pdpmm_to_qpalm(pd_data)
         with _PeakRSS() as mem:
-            result["res"] = run_qpalm(pd_data, tol, time_limit)
+            result["res"] = run_qpalm(qpalm_data, tol, time_limit)
         result["ram"] = mem.avg_mb
     except Exception as e:
         result["error"] = str(e)
@@ -651,8 +652,9 @@ def _worker_osqp_mm(sif_path, tol, time_limit, conn):
     result = {}
     try:
         pd_data = ssn_pmm_bind.parse_sif(sif_path)
+        qpalm_data = pdpmm_to_qpalm(pd_data)
         with _PeakRSS() as mem:
-            result["res"] = run_osqp(pd_data, tol, time_limit)
+            result["res"] = run_osqp(qpalm_data, tol, time_limit)
         result["ram"] = mem.avg_mb
     except Exception as e:
         result["error"] = str(e)
@@ -698,7 +700,7 @@ def main() -> None:
         help="Solvers to run (default: all three). Choices: ssn-pmm qpalm osqp",
     )
     parser.add_argument(
-        "--cooldown", type=float, default=10.0,
+        "--cooldown", type=float, default=3.0,
         help="Seconds to sleep between problems to prevent CPU throttling (default: 3)",
     )
     mp.set_start_method("spawn", force=True)

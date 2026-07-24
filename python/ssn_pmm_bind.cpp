@@ -68,9 +68,15 @@ static py::array_t<double> eigen_vec_to_array(const Vec& v) {
 //   obj_const                – scalar constant in objective
 // -----------------------------------------------------------------------
 py::dict parse_sif(const std::string& filename) {
-    MpsParser<T> parser;
-    ParsedModel<T> model = parser.parse(filename);
-    PDPMMdata<T>   pd    = parser.to_pdpmm(model);
+    PDPMMdata<T> pd;
+    {
+        // Parsing is pure C++/file I/O; release the GIL so other Python threads
+        // (e.g. a background RSS sampler) can run while this executes.
+        py::gil_scoped_release release;
+        MpsParser<T>   parser;
+        ParsedModel<T> model = parser.parse(filename);
+        pd = parser.to_pdpmm(model);
+    }
 
     py::dict out;
     out["n"] = pd.n;
@@ -111,22 +117,35 @@ py::dict solve_from_sif(const std::string& filename,
                         double tol        = 1e-6,
                         long long max_iter = 1'000'000'000LL,
                         double time_limit  = 600.0) {
-    MpsParser<T>   parser;
-    ParsedModel<T> model  = parser.parse(filename);
-    PDPMMdata<T>   pd     = parser.to_pdpmm(model);
+    int opt, pmm_iter, ssn_iter;
+    double obj_val, run_time, pmm_tol_achieved;
+    {
+        // Parsing + solving is pure C++; release the GIL so other Python threads
+        // (e.g. a background RSS sampler) can run while this executes.
+        py::gil_scoped_release release;
+        MpsParser<T>   parser;
+        ParsedModel<T> model  = parser.parse(filename);
+        PDPMMdata<T>   pd     = parser.to_pdpmm(model);
 
-    Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
-                     PrintWhen::NEVER, PrintWhat::NONE);
-    SSN_PMM<T>  solver(prob);
-    Solution<T> sol = solver.solve();
+        Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
+                         PrintWhen::NEVER, PrintWhat::NONE);
+        SSN_PMM<T>  solver(prob);
+        Solution<T> sol = solver.solve();
+        opt              = sol.opt;
+        obj_val          = (double)sol.obj_val;
+        run_time         = sol.run_time;
+        pmm_iter         = sol.pmm_iter;
+        ssn_iter         = sol.ssn_iter;
+        pmm_tol_achieved = (double)sol.pmm_tol_achieved;
+    }
 
     py::dict out;
-    out["status"]           = sol.opt;
-    out["obj_val"]          = (double)sol.obj_val;
-    out["run_time"]         = sol.run_time;
-    out["pmm_iter"]         = sol.pmm_iter;
-    out["ssn_iter"]         = sol.ssn_iter;
-    out["pmm_tol_achieved"] = (double)sol.pmm_tol_achieved;
+    out["status"]           = opt;
+    out["obj_val"]          = obj_val;
+    out["run_time"]         = run_time;
+    out["pmm_iter"]         = pmm_iter;
+    out["ssn_iter"]         = ssn_iter;
+    out["pmm_tol_achieved"] = pmm_tol_achieved;
     return out;
 }
 
@@ -193,20 +212,33 @@ py::dict solve_from_data(const py::dict& pd_dict,
                          double tol         = 1e-6,
                          long long max_iter = 1'000'000'000LL,
                          double time_limit  = 600.0) {
-    PDPMMdata<T> pd = dict_to_pdpmm(pd_dict);
+    PDPMMdata<T> pd = dict_to_pdpmm(pd_dict); // reads Python objects; needs the GIL
 
-    Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
-                     PrintWhen::NEVER, PrintWhat::NONE);
-    SSN_PMM<T>  solver(prob);
-    Solution<T> sol = solver.solve();
+    int opt, pmm_iter, ssn_iter;
+    double obj_val, run_time, pmm_tol_achieved;
+    {
+        // The solve itself is pure C++; release the GIL so other Python threads
+        // (e.g. a background RSS sampler) can run while this executes.
+        py::gil_scoped_release release;
+        Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
+                         PrintWhen::NEVER, PrintWhat::NONE);
+        SSN_PMM<T>  solver(prob);
+        Solution<T> sol = solver.solve();
+        opt              = sol.opt;
+        obj_val          = (double)sol.obj_val;
+        run_time         = sol.run_time;
+        pmm_iter         = sol.pmm_iter;
+        ssn_iter         = sol.ssn_iter;
+        pmm_tol_achieved = (double)sol.pmm_tol_achieved;
+    }
 
     py::dict out;
-    out["status"]           = sol.opt;
-    out["obj_val"]          = (double)sol.obj_val;
-    out["run_time"]         = sol.run_time;
-    out["pmm_iter"]         = sol.pmm_iter;
-    out["ssn_iter"]         = sol.ssn_iter;
-    out["pmm_tol_achieved"] = (double)sol.pmm_tol_achieved;
+    out["status"]           = opt;
+    out["obj_val"]          = obj_val;
+    out["run_time"]         = run_time;
+    out["pmm_iter"]         = pmm_iter;
+    out["ssn_iter"]         = ssn_iter;
+    out["pmm_tol_achieved"] = pmm_tol_achieved;
     return out;
 }
 
@@ -245,11 +277,18 @@ static py::dict pdpmm_to_dict(const PDPMMdata<T>& pd) {
 // to solve_from_data() and pdpmm_to_qpalm() in benchmark_pde.py.
 // -----------------------------------------------------------------------
 py::dict generate_pde_problem(const std::string& choice) {
-    if (choice == "poisson")
-        return pdpmm_to_dict(pdegen::make_poisson_L1L2_control_default<T>());
-    if (choice == "convdiff")
-        return pdpmm_to_dict(pdegen::make_convdiff_L1L2_control_default<T>());
-    throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
+    if (choice != "poisson" && choice != "convdiff")
+        throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
+
+    PDPMMdata<T> pd;
+    {
+        // Problem generation is pure C++; release the GIL so other Python threads
+        // (e.g. a background RSS sampler) can run while this executes.
+        py::gil_scoped_release release;
+        pd = (choice == "poisson") ? pdegen::make_poisson_L1L2_control_default<T>()
+                                    : pdegen::make_convdiff_L1L2_control_default<T>();
+    }
+    return pdpmm_to_dict(pd);
 }
 
 // -----------------------------------------------------------------------
@@ -262,13 +301,19 @@ py::dict generate_pde_problem(const std::string& choice) {
 // -----------------------------------------------------------------------
 py::dict generate_pde_problem_params(const std::string& choice,
                                       int nc, double alpha1, double alpha2) {
-    if (choice == "poisson")
-        return pdpmm_to_dict(
-            pdegen::make_poisson_L1L2_control<T>(nc, (T)alpha1, (T)alpha2));
-    if (choice == "convdiff")
-        return pdpmm_to_dict(
-            pdegen::make_convdiff_L1L2_control<T>(nc, (T)alpha1, (T)alpha2));
-    throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
+    if (choice != "poisson" && choice != "convdiff")
+        throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
+
+    PDPMMdata<T> pd;
+    {
+        // Problem generation is pure C++; release the GIL so other Python threads
+        // (e.g. a background RSS sampler) can run while this executes.
+        py::gil_scoped_release release;
+        pd = (choice == "poisson")
+               ? pdegen::make_poisson_L1L2_control<T>(nc, (T)alpha1, (T)alpha2)
+               : pdegen::make_convdiff_L1L2_control<T>(nc, (T)alpha1, (T)alpha2);
+    }
+    return pdpmm_to_dict(pd);
 }
 
 // -----------------------------------------------------------------------

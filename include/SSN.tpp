@@ -9,66 +9,30 @@
 #include <cassert>
 
 template <typename T>
-T SSN<T>::compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new) {
-    using Vec = typename SSN<T>::Vec;
+const typename SSN<T>::Vec& SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new) {
+    grad_dist_K_ = compute_dist_box(z / mu + x_new, lx, ux);
+    grad_dist_W_ = compute_dist_box(Bx_new + ((1 - alpha) * y2_new - y2) / mu, lw, uw);
+    grad_res_p_.noalias() = Ax_new - b;
 
-    Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
-    Vec dist_W = compute_dist_box(Bx_new + ((1 - alpha) * y2_new - y2) / mu, lw, uw);
+    grad_Atr_resp_.noalias()  = A_tr * grad_res_p_;
+    grad_Btr_distW_.noalias() = B_tr * grad_dist_W_;
+    grad_A_tr_y_.noalias() = mu * grad_Atr_resp_ + (mu / alpha) * grad_Btr_distW_
+                            + mu * grad_dist_K_ - A_tr_y1_;
 
-    Vec res_p = Ax_new - b;
-
-    // Compute Lagrangian
-    T L;
+    // Compute gradient of Lagrangian.
     if (Q_info == 0) {
-        L = c.dot(x_new)
-            - y1.dot(res_p) + (mu / 2) * res_p.squaredNorm()
-            - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
-            + (mu / (2 * alpha)) * dist_W.squaredNorm()
-            + ((1 - alpha) / (2 * mu)) * y2_new.squaredNorm() - y2.squaredNorm() / (2 * mu)
-            + (x_new - x).squaredNorm() / (2 * rho);
+        grad_L_.head(N).noalias() = c + grad_A_tr_y_ + (x_new - x) / rho;
     } else {
-        L = c.dot(x_new) + 0.5 * Q_diag.cwiseProduct(x_new).dot(x_new)
-            - y1.dot(res_p) + (mu / 2) * res_p.squaredNorm()
-            - z.squaredNorm() / (2 * mu) + (mu / 2) * dist_K.squaredNorm()
-            + (mu / (2 * alpha)) * dist_W.squaredNorm()
-            + ((1 - alpha) / (2 * mu)) * y2_new.squaredNorm() - y2.squaredNorm() / (2 * mu)
-            + (x_new - x).squaredNorm() / (2 * rho);
+        grad_Qx_.noalias() = Q_diag.cwiseProduct(x_new);
+        grad_L_.head(N).noalias() = c + grad_Qx_ + grad_A_tr_y_ + (x_new - x) / rho;
     }
-    return L;
+    grad_L_.tail(l).noalias() = ((1 - alpha) / alpha) * grad_dist_W_ + ((1 - alpha) / mu) * y2_new;
+
+    return grad_L_;
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new) {
-    using Vec = typename SSN<T>::Vec;
-
-    Vec dist_K = compute_dist_box(z / mu + x_new, lx, ux);
-    Vec dist_W = compute_dist_box(Bx_new + ((1 - alpha) * y2_new - y2) / mu, lw, uw);
-
-    Vec res_p = Ax_new - b;
-    Vec A_tr_y = - A_tr_y1_ + mu * A_tr * res_p + mu * dist_K + (mu / alpha) * B_tr * dist_W;
-
-    // Compute gradient of Lagrangian
-    Vec grad_L_x;
-    if (Q_info == 0) {
-        grad_L_x = c + A_tr_y + (x_new - x) / rho;
-    } else {
-        Vec Qx = Q_diag.cwiseProduct(x_new);
-        grad_L_x = c + Qx + A_tr_y + (x_new - x) / rho;
-    }
-    Vec grad_L_y2 = ((1 - alpha) / alpha) * dist_W + ((1 - alpha) / mu) * y2_new;
-
-    Vec grad_L(N + l);
-    grad_L << grad_L_x, grad_L_y2;
-
-    return grad_L;
-}
-
-template <typename T>
-void SSN<T>::split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel) {
-    int t = static_cast<int>(mask.count());
-    u_sel.resize(t);
-    u_unsel.resize(mask.size() - t);
-
+void SSN<T>::split_by_mask(const Vec& u, const BoolArr& mask, int t, Vec& u_sel, Vec& u_unsel) {
     int i_sel = 0;
     int i_unsel = 0;
     for (int i = 0; i < mask.size(); ++i) {
@@ -87,88 +51,44 @@ void SSN<T>::rebuild_G() {
     const int n_act   = n_active_W;
     const int n_inact = l - n_act;
 
-    // Partitioning B into active and inactive
-    std::vector<Triplet> B_act_trips, B_inact_trips;
-    B_act_trips.reserve(B_rm.nonZeros());
-    B_inact_trips.reserve(B_rm.nonZeros());
+    // Partitioning B into active and inactive.
+    B_act_trips_.clear();
+    B_inact_trips_.clear();
+    B_act_trips_.reserve(B_rm.nonZeros());
+    B_inact_trips_.reserve(B_rm.nonZeros());
 
     // G = [A; B_active_W]
-    std::vector<Triplet> G_trips;
-    G_trips.reserve(G_A_trips_.size() + B_rm.nonZeros());
-    G_trips.insert(G_trips.end(), G_A_trips_.begin(), G_A_trips_.end());
+    G_trips_.clear();
+    G_trips_.reserve(G_A_trips_.size() + B_rm.nonZeros());
+    G_trips_.insert(G_trips_.end(), G_A_trips_.begin(), G_A_trips_.end());
 
     int i_act = 0, i_inact = 0;
     for (int i = 0; i < l; ++i) {
         if (active_W(i)) {
             for (RIt it(B_rm, i); it; ++it) {
-                B_act_trips.emplace_back(i_act, it.col(), it.value());
-                G_trips.emplace_back(M + i_act, it.col(), it.value());
+                B_act_trips_.emplace_back(i_act, it.col(), it.value());
+                G_trips_.emplace_back(M + i_act, it.col(), it.value());
             }
             ++i_act;
         } else {
             for (RIt it(B_rm, i); it; ++it)
-                B_inact_trips.emplace_back(i_inact, it.col(), it.value());
+                B_inact_trips_.emplace_back(i_inact, it.col(), it.value());
             ++i_inact;
         }
     }
 
     B_active_W.resize(n_act, N);
-    B_active_W.setFromTriplets(B_act_trips.begin(), B_act_trips.end());
+    B_active_W.setFromTriplets(B_act_trips_.begin(), B_act_trips_.end());
     B_active_W.makeCompressed();
 
     B_inactive_W.resize(n_inact, N);
-    B_inactive_W.setFromTriplets(B_inact_trips.begin(), B_inact_trips.end());
+    B_inactive_W.setFromTriplets(B_inact_trips_.begin(), B_inact_trips_.end());
     B_inactive_W.makeCompressed();
 
     G.resize(M + n_act, N);
-    G.setFromTriplets(G_trips.begin(), G_trips.end());
+    G.setFromTriplets(G_trips_.begin(), G_trips_.end());
     G.makeCompressed();
     G_tr = G.transpose();
-}
-
-template <typename T> // used only in solve_using_schur
-typename SSN<T>::SpMat SSN<T>::scale_columns(const SpMat& M, const Vec& d) {
-    assert(M.cols() == d.size());
-
-    SpMat M_scaled = M;
-    for (int j = 0; j < M_scaled.outerSize(); ++j) {
-        T scale = d(j);
-        for (typename SpMat::InnerIterator it(M_scaled, j); it; ++it) {
-            it.valueRef() *= scale;
-        }
-    }
-    return M_scaled;
-}
-
-template <typename T> // used only in solve_using_schur
-typename SSN<T>::SpMat SSN<T>::stack_rows(const SpMat& A, const SpMat& B) {
-    using SpMat = typename SSN<T>::SpMat;
-    using Triplet = typename SSN<T>::Triplet;
-
-    assert(A.cols() == B.cols());
-
-    int A_rows = A.rows();
-    int B_rows = B.rows();
-    int A_cols = A.cols();
-
-    SpMat stack(A_rows + B_rows, A.cols());
-    std::vector<Triplet> trpl;
-    trpl.reserve(A.nonZeros() + B.nonZeros());
-
-    for (int col = 0; col < A_cols; ++col) {
-        for (typename SpMat::InnerIterator it(A, col); it; ++it) {
-            trpl.emplace_back(it.row(), col, it.value());
-        }
-    }
-
-    for (int col = 0; col < A_cols; ++col) {
-        for (typename SpMat::InnerIterator it(B, col); it; ++it) {
-            trpl.emplace_back(A_rows + it.row(), col, it.value());
-        }
-    }
-
-    stack.setFromTriplets(trpl.begin(), trpl.end());
-    return stack;
 }
 
 template <typename T>
@@ -184,14 +104,16 @@ void SSN<T>::retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const Bool
 
 template <typename T>
 bool SSN<T>::choose_ldlt(const SpMat& G, const BoolArr& active_K) {
-    // Compare the estimated total work required to factorize the KKT matrix K and the Schur complement S.
-    //  Ratio = (s / (s+t)) * (|K|^2 / |S|^2), where s = G.rows() and t = n_act_K.
-    // |K| = nnz in the KKT matrix [-H_act_K, G_act_K^T; G_act_K, (1/mu)I] (active_K columns only).
-    // |S| is overestimated via the densest active_K column and the pigeonhole principle.
-    // Returns true (prefer LDLT on K) when ratio < 0.1.
+    /*
+    Compare the estimated total work required to factorize the KKT matrix K and the Schur complement S.
+     Ratio = (s / (s+t)) * (|K|^2 / |S|^2), where s = G.rows() and t = n_act_K.
+    |K| = nnz in the KKT matrix [-H_act_K, G_act_K^T; G_act_K, (1/mu)I] (active_K columns only).
+    |S| is overestimated via the densest active_K column and the pigeonhole principle.
+    Returns true (prefer LDLT on K) when ratio < 0.1.
+    */
     const int s = G.rows();
 
-    // Pass 1: count active_K columns (t), their total nnz, and the densest one (hat_k, G_hat).
+    // Count active_K columns (t), their total nnz, and the densest one (hat_k, G_hat).
     long long t = 0, G_act_nnz = 0;
     int G_hat = 0, hat_k = -1;
     for (int k = 0; k < N; ++k) {
@@ -236,8 +158,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
                                             bool use_ldlt) {
     using Vec = typename SSN<T>::Vec;
 
-    // Once PCG has failed and the solve has permanently switched to LDLT on the augmented
-    // KKT system, never attempt PCG again for the remainder of the run.
+    // Once PCG has failed, permanently switch to LDLT on the augmented KKT system.
     if (ldlt_used)
         return solve_using_ldlt(G, H_diag, r1, r2);
 
@@ -246,7 +167,9 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
     // Schur complement system: S dy = G H_inv G^T dy + (1/mu) dy = G H_inv r1 + r2
     SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
-    Vec rhs = G * H_diag_inv.cwiseProduct(r1) + r2;
+    cg_Hinv_r1_.noalias() = H_diag_inv.cwiseProduct(r1);
+    cg_rhs_.noalias() = G * cg_Hinv_r1_ + r2;
+    const Vec& rhs = cg_rhs_;
 
     cg.setTolerance(tol);
     cg.setMaxIterations(max_iter);
@@ -266,8 +189,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     };
 
     // Run preconditioned CG.
-    // Returns false and increments krylov_fail on preconditioner failure or solver non-convergence with error > 1e-8.
-    // If max_iter is reached but the error is <= 1e-8, the direction is accepted.
+    // Returns false and increments krylov_fail on preconditioner failure or solver non-convergence with error > 1e-10.
+    // If max_iter is reached but the error is <= 1e-10, the direction is accepted.
     auto attempt_solve = [&](Vec& dy_out) -> bool {
         if (cg.preconditioner().info() != Eigen::Success) {
             std::cout << "[PCG] CG failed due to preconditioner failure.\n";
@@ -275,7 +198,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
             return false;
         }
         Vec dy_;
-        bool warm_start = (prev_dy_.size() == s); // prev_dy_ is empty on the first SSN iteration, or if the active set changed.
+        bool warm_start = (prev_dy_.size() == s); // prev_dy_ is empty on the first SSN iteration or if the active set changed.
         if (warm_start) {
             dy_ = cg.solveWithGuess(rhs, prev_dy_);
         } else {
@@ -295,13 +218,15 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         return true;
     };
 
-    // Permanently switch to LDLT on the augmented KKT system.
-    // Release the now-unused PCG state.
+    // Release the now-unused PCG state if solve switches to LDLT on the augmented KKT system.
     auto switch_to_ldlt = [&]() {
         krylov_converged = false;
         ldlt_used = true;
         cg.preconditioner().release();
         prev_dy_.resize(0);
+        cg_Hinv_r1_.resize(0);
+        cg_rhs_.resize(0);
+        cg_dx_.resize(0);
     };
 
     // Set up and attempt to solve by PCG.
@@ -348,26 +273,25 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     prev_dy_ = dy_;
 
     // Recover dx = H_inv (G^T dy_ - r1)
-    Vec dx = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
+    cg_dx_.noalias() = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
 
-    Vec dxdy_(n + s);
-    dxdy_.head(n) = dx;
-    dxdy_.tail(s) = dy_;
-    return dxdy_;
+    Vec result(n + s);
+    result.head(n) = cg_dx_;
+    result.tail(s) = dy_;
+    return result;
 }
 
 template <typename T> // as a fallback of PCG
 typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
-    using Triplet = typename SSN<T>::Triplet;
 
     const int s = G.rows();
     const int n = G.cols();
     const int N_tot = n + s;
 
-    Vec rhs(N_tot);
-    rhs << r1, r2;
+    ldlt_solve_rhs_.resize(N_tot);
+    ldlt_solve_rhs_ << r1, r2;
 
     // If stored factorization is for a different system size, force re-analyze.
     if (!ldlt_pattern_dirty_ && ldlt_.rows() > 0 && ldlt_.rows() != static_cast<Eigen::Index>(N_tot)) {
@@ -380,22 +304,22 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
         if (ldlt_pattern_dirty_ || !K_ldlt_built_) {
             // Full rebuild: G's sparsity changed (active_W changed) or first call.
             // Assemble K = [-H, G^T; G, (1/mu) I] from triplets and cache it.
-            std::vector<Triplet> trip;
-            trip.reserve(N_tot + 2 * G.nonZeros());
+            ldlt_trip_.clear();
+            ldlt_trip_.reserve(N_tot + 2 * G.nonZeros());
 
             for (int i = 0; i < n; ++i)
-                trip.emplace_back(i, i, -H_diag(i));
+                ldlt_trip_.emplace_back(i, i, -H_diag(i));
             const T mu_inv = T(1) / mu;
             for (int i = 0; i < s; ++i)
-                trip.emplace_back(n + i, n + i, mu_inv);
+                ldlt_trip_.emplace_back(n + i, n + i, mu_inv);
             for (int col = 0; col < G.outerSize(); ++col)
                 for (typename SpMat::InnerIterator it(G, col); it; ++it) {
-                    trip.emplace_back(n + it.row(), it.col(), it.value());
-                    trip.emplace_back(it.col(), n + it.row(), it.value());
+                    ldlt_trip_.emplace_back(n + it.row(), it.col(), it.value());
+                    ldlt_trip_.emplace_back(it.col(), n + it.row(), it.value());
                 }
 
             K_ldlt_.resize(N_tot, N_tot);
-            K_ldlt_.setFromTriplets(trip.begin(), trip.end());
+            K_ldlt_.setFromTriplets(ldlt_trip_.begin(), ldlt_trip_.end());
             K_ldlt_.makeCompressed();
             K_ldlt_built_ = true;
 
@@ -420,38 +344,10 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
         fact++;
     }
 
-    Vec dxdy_ = ldlt_.solve(rhs);
+    Vec result = ldlt_.solve(ldlt_solve_rhs_);
     if (ldlt_.info() != Eigen::Success)
         throw std::runtime_error("Solving the augmented Lagrangian system via LDLT failed.");
-    return dxdy_;
-}
-
-template <typename T> // not in used
-T SSN<T>::backtracking_line_search(const Vec& x_curr, const Vec& y2_curr,
-                                    const Vec& dx, const Vec& dy2,
-                                    const Vec& Ax_curr, const Vec& Bx_curr,
-                                    const Vec& Adx, const Vec& Bdx) {
-    using Vec = typename SSN<T>::Vec;
-
-    T alpha = delta;
-    int m = 1;
-
-    // Lagrangian and descent slope at current point — no SpMVs, use pre-computed Ax/Bx
-    T L = compute_Lagrangian(x_curr, y2_curr, Ax_curr, Bx_curr);
-    Vec grad_L = compute_grad_Lagrangian(x_curr, y2_curr, Ax_curr, Bx_curr);
-    T grad_desc = grad_L.head(N).dot(dx) + grad_L.tail(l).dot(dy2);
-
-    // Armijo backtracking: reduce alpha until sufficient decrease is achieved
-    while (true) {
-        Vec Ax_new = Ax_curr + alpha * Adx;
-        Vec Bx_new = Bx_curr + alpha * Bdx;
-        T L_new = compute_Lagrangian(x_curr + alpha * dx, y2_curr + alpha * dy2, Ax_new, Bx_new);
-        if (L_new <= L + beta * alpha * grad_desc) break;
-        m += 10;
-        alpha = pow(delta, m);
-        if (alpha < T(1e-5)) { alpha = T(0); break; }
-    }
-    return alpha;
+    return result;
 }
 
 template <typename T>
@@ -476,9 +372,9 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     const Vec& Ax = Ax_curr;
     const Vec& Bx = Bx_curr;
 
-    Vec s = z / mu + x_curr;
-    Vec v = Bx + ((1 - alpha) * y2_curr - y2) / mu;
-    Vec dv = Bdx + (1 - alpha) / mu * dy2;
+    ls_s_.noalias()  = z / mu + x_curr;
+    ls_v_.noalias()  = Bx + ((1 - alpha) * y2_curr - y2) / mu;
+    ls_dv_.noalias() = Bdx + (1 - alpha) / mu * dy2;
 
     // eta: smooth linear term in psi(t)
     T eta = T(0);
@@ -497,8 +393,6 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     zeta += dx.dot(c - A_tr_y1_ + mu * A_tr * (Ax - b) + (x_curr - x) / rho);
     zeta += (1 - alpha) / mu * dy2.dot(y2_curr);
 
-    // std::cout << "N_K = " << N - new_diag_P_K_.count() << ", N = " << N << ", N_W = " << l - new_diag_P_W_.count() << ", l = " << l << "\n";
-
     // Reuse the member breakpoints vector.
     breakpoints_.clear();
     if (breakpoints_.capacity() < static_cast<size_t>(2 * (N + l)))
@@ -508,7 +402,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     // Build K breakpoints and accumulate initial slope m.
     T m = eta;
     for (int i = 0; i < N; ++i) {
-        const T s_i = s(i);
+        const T s_i = ls_s_(i);
         const T dx_i = dx(i);
         const T li = lx(i), ui = ux(i);
 
@@ -530,8 +424,8 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
 
     // Build W breakpoints and accumulate initial slope m.
     for (int i = 0; i < l; ++i) {
-        const T v_i = v(i);
-        const T dv_i = dv(i);
+        const T v_i = ls_v_(i);
+        const T dv_i = ls_dv_(i);
         const T li = lw(i), ui = uw(i);
 
         if ((li > -inf && v_i < li - eps_zero) || (ui < inf && v_i > ui + eps_zero))
@@ -550,7 +444,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
         }
     }
 
-    // Trivial case
+    // Trivial case.
     if (breakpoints.empty()) return T(1);
 
     // Sort breakpoints by t in ascending order.
@@ -573,21 +467,16 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     // Check if psi'(0) >= 0; if so, return 0 (no crossing, linesearch failed).
     T p = zeta;
     p += mu * dist_K_s.dot(dx);
-    p += mu / alpha * dist_W_v.dot(dv);
-    if (p >= T(0)) {
-        // std::cout << "[Linesearch] psi'(0) is non-negative (p = " << p << ", ||∇M|| = " << compute_grad_Lagrangian(x_curr, y2_curr, Ax_curr, Bx_curr).norm() << ").\n";
-        return T(0);
-    }
+    p += mu / alpha * dist_W_v.dot(ls_dv_);
+    if (p >= T(0)) return T(0);
 
     // If psi'(0) < 0, check at every breakpoint t.
     T t_prev = T(0);
     for (const Breakpoint& bp : breakpoints) {
         T t = bp.t;
         T p_t = p + m * (t - t_prev);
-        if (p_t >= T(0)) {
-            // std::cout << "[Linesearch] Found breakpoint at t = " << t << ", psi'(t) = " << p_t << ", slope = " << m << ".\n";
-            return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
-        }
+        if (p_t >= T(0)) return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
+
         // Cross the breakpoint(s)
         t_prev = t;
         p = p_t;
@@ -599,7 +488,6 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     if (m >= T(0)) {
         return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
     }
-    std::cout << "[Linesearch] Slope is negative.\n";
     return T(0); // safeguard: m truly negative
 }
 
@@ -610,15 +498,12 @@ void SSN<T>::solve_ssn(const T eps) {
     using BoolArr = typename SSN<T>::BoolArr;
     using Triplet = typename SSN<T>::Triplet;
 
-    // Intialize iteration counter and set starting points
+    // Intialize iteration counter and set starting points.
     x_cur_ = x;
     y2_cur_ = y2;
     int _iter = 0, _opt = -1;
-
-    // Stagnation detection: consecutive SSN iterations where ||∇M|| (the actual termination
-    // criterion) fails to improve, even if the Newton step itself is still nonzero.
     T prev_tol_achieved = inf;
-    int stagnant_count = 0;
+    int stagnation = 0;
 
     // Useful matvecs
     Ax_ssn_.noalias() = A * x_cur_;
@@ -647,7 +532,7 @@ void SSN<T>::solve_ssn(const T eps) {
         u_.noalias() = z / mu + x_cur_;
         v_ = Bx_ssn_ + ((1 - alpha) * y2_cur_ - y2) / mu;
 
-        // Single pass each: Clarke subgradient and distance for K and W
+        // Clarke subgradient and distance for K and W
         compute_subgrad_and_dist(u_, lx, ux, false, new_diag_P_K_, dist_K_u_);
         compute_subgrad_and_dist(v_, lw, uw, true,  new_diag_P_W_, dist_W_v_);
 
@@ -661,33 +546,6 @@ void SSN<T>::solve_ssn(const T eps) {
         bool first_ssn_iter = (diag_P_K.size() == 0);
         bool pk_changed = first_ssn_iter || (diag_P_K.array() != new_diag_P_K_.array()).any();
         bool pw_changed = first_ssn_iter || (diag_P_W.array() != new_diag_P_W_.array()).any();
-
-        if (!first_ssn_iter) {
-            const auto flip_K = (diag_P_K.array() != new_diag_P_K_.array());
-            const auto flip_W = (diag_P_W.array() != new_diag_P_W_.array());
-            const int n_flip_K = flip_K.count();
-            const int n_flip_W = flip_W.count();
-            if (n_flip_K > 0 || n_flip_W > 0) {
-                // A flip is "near-boundary" when the iterate that triggered it sits within
-                // eps_zero of the bound it flipped across -- i.e. the flip is attributable to
-                // the iterate hovering at the edge rather than a genuine crossing.
-                int n_flip_K_near = 0, n_flip_W_near = 0;
-                for (int i = 0; i < N; ++i) {
-                    if (!flip_K(i)) continue;
-                    const T tol = eps_zero * (T(1) + std::abs(u_(i)));
-                    if (std::abs(u_(i) - lx(i)) < tol || std::abs(u_(i) - ux(i)) < tol) ++n_flip_K_near;
-                }
-                for (int i = 0; i < l; ++i) {
-                    if (!flip_W(i)) continue;
-                    const T tol = eps_zero * (T(1) + std::abs(v_(i)));
-                    if (std::abs(v_(i) - lw(i)) < tol || std::abs(v_(i) - uw(i)) < tol) ++n_flip_W_near;
-                }
-
-                // std::cout << "[SSN] Active-set flips: K = " << n_flip_K << "/" << N
-                //           << " (" << n_flip_K_near << " near boundary), W = " << n_flip_W << "/" << l
-                //           << " (" << n_flip_W_near << " near boundary)" << "\n";
-            }
-        }
 
         if (pk_changed) {
             update_prec = true;
@@ -721,73 +579,64 @@ void SSN<T>::solve_ssn(const T eps) {
             n_active_W = active_W.count();
             n_inactive_W = l - n_active_W;
 
-            // Rebuild G = [A; B_active_W], B_active_W, B_inactive_W, G_tr.
-            rebuild_G();
+            rebuild_G(); // Rebuild G = [A; B_active_W], B_active_W, B_inactive_W, G_tr.
         }
 
-        // Compute dy2 in inactive_W:
-        //     dy2_inactive_W = - (mu / alpha) * dist_W(v)(inactive_W) - y2(inactive_W)
-        split_by_mask(y2_cur_, active_W, y2_active_W_, y2_inactive_W_);
-        split_by_mask(dist_W_v_, active_W, dist_W_v_active_, dist_W_v_inactive_);
-        dy2_inactive_W_ = -(mu / alpha) * dist_W_v_inactive_ - y2_inactive_W_;
+        // Compute dy2 in inactive_W: dy2_inactive_W = - (mu / alpha) * dist_W(v)(inactive_W) - y2(inactive_W).
+        split_by_mask(y2_cur_, active_W, n_active_W, y2_active_W_, y2_inactive_W_);
+        split_by_mask(dist_W_v_, active_W, n_active_W, dist_W_v_active_, dist_W_v_inactive_);
+        dy2_inactive_W_.head(n_inactive_W).noalias() =
+            -(mu / alpha) * dist_W_v_inactive_.head(n_inactive_W) - y2_inactive_W_.head(n_inactive_W);
 
         // Compute the RHS vector.
         if (Q_info == 0) {
             r1_ = c + mu * dist_K_u_
-                 - B_tr * y2_cur_ - B_inactive_W.transpose() * dy2_inactive_W_
+                 - B_tr * y2_cur_ - B_inactive_W.transpose() * dy2_inactive_W_.head(n_inactive_W)
                  + (x_cur_ - x) / rho;
         } else {
             r1_ = c + Q_diag.cwiseProduct(x_cur_) + mu * dist_K_u_
-                 - B_tr * y2_cur_ - B_inactive_W.transpose() * dy2_inactive_W_
+                 - B_tr * y2_cur_ - B_inactive_W.transpose() * dy2_inactive_W_.head(n_inactive_W)
                  + (x_cur_ - x) / rho;
         }
         r2_.resize(M + n_active_W);
         r2_.head(M) = y1 / mu - Ax_ssn_ + b;
-        r2_.tail(n_active_W) = -dist_W_v_active_ - (alpha / mu) * y2_active_W_;
+        r2_.tail(n_active_W) = -dist_W_v_active_.head(n_active_W) - (alpha / mu) * y2_active_W_.head(n_active_W);
 
         auto t1_chol_prep = std::chrono::steady_clock::now();
         double timer_chol_prep = time_diff_ms(t0_chol_prep, t1_chol_prep);
         // std::cout << "  Prep to solve SSN system took " << timer_chol_prep << " ms.\n";
         
-        // Solve for dx and dy2_active_W.
         auto t0_solve_lin_sys = std::chrono::steady_clock::now();
+        // Determines the factorization method for a preconditioner; locked after the first 3 decisions.
         if ((pk_changed || pw_changed) && ldlt_decisions_made_ < 3) {
-            auto t0_ratio_comp = std::chrono::steady_clock::now();
             use_ldlt = choose_ldlt(G, active_K);
             ++ldlt_decisions_made_;
-            // if (use_ldlt) std::cout << "LDLT used as a preconditioner callback method.\n";
-            // else std::cout << "Chol used as a preconditioner callback method.\n";
-            auto t1_ratio_compt = std::chrono::steady_clock::now();
-            // std::cout << "choosing a system took " << time_diff_ms(t0_ratio_comp, t1_ratio_compt) << "ms.\n";
-        } // Determines the factorization method for a preconditioner; locked after the first 3 decisions
+        }
+        // Solve for dx and dy2_active_W.
         dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1_, r2_, mu, krylov_tol, krylov_max_in_iter, update_prec, prec_pattern_changed, use_ldlt);
 
-        // Iterative refinement: correct the residual of K [dx;dy] = [r1_;r2_], K = [-H, G^T; G, (1/mu)I],
-        // by resolving the same augmented system with the residual as the new RHS (reusing the already-built
-        // preconditioner/factorization) and accumulating the correction, until the residual is small or capped.
-        if (true) {
-            const int s = static_cast<int>(r2_.size());
-            const T ref_norm = std::max(inf_norm(r1_), inf_norm(r2_));
-            Vec rho1(N), rho2(s);
+        // Iterative refinement: correct the residual of K [dx;dy] = [r1_;r2_], K = [-H, G^T; G, (1/mu)I].
+        const int s = static_cast<int>(r2_.size());
+        const T ref_norm = std::max(inf_norm(r1_), inf_norm(r2_));
+        Vec rho1(N), rho2(s);
 
-            for (int k = 0; k < refine_max_iter; ++k) {
-                const auto dx_k = dxdy_.head(N);
-                const auto dy_k = dxdy_.tail(s);
-                Vec Gtr_dy = G_tr * dy_k;
-                Vec G_dx   = G * dx_k;
-                rho1 = r1_ + H_diag.cwiseProduct(dx_k) - Gtr_dy;
-                rho2 = r2_ - G_dx - dy_k / mu;
+        for (int k = 0; k < refine_max_iter; ++k) {
+            const auto dx_k = dxdy_.head(N);
+            const auto dy_k = dxdy_.tail(s);
+            Vec Gtr_dy = G_tr * dy_k;
+            Vec G_dx   = G * dx_k;
+            rho1 = r1_ + H_diag.cwiseProduct(dx_k) - Gtr_dy;
+            rho2 = r2_ - G_dx - dy_k / mu;
 
-                const T res_norm = std::max(inf_norm(rho1), inf_norm(rho2));
-                // std::cout << "   Iterative refinement " << k << ": ||dx|| = " << dx_k.norm() << ", ||dy_active_W|| = " << dxdy_.tail(n_active_W).norm() << ", res_norm = " << res_norm << "\n";
-                if (res_norm <= std::max(refine_rel_tol * ref_norm, refine_abs_tol)) break;
+            const T res_norm = std::max(inf_norm(rho1), inf_norm(rho2));
+            // std::cout << "   Iterative refinement " << k << ": ||dx|| = " << dx_k.norm() << ", ||dy_active_W|| = " << dxdy_.tail(n_active_W).norm() << ", res_norm = " << res_norm << "\n";
+            if (res_norm <= std::max(refine_rel_tol * ref_norm, refine_abs_tol)) break;
 
-                prev_dy_.resize(0); // cold-start: a small correction isn't well warm-started by the full dy
-                Vec correction = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, rho1, rho2,
-                                                mu, krylov_tol, krylov_max_in_iter, false, false, use_ldlt);
-                dxdy_ += correction;
-                prev_dy_ = dxdy_.tail(s); // warm-start for the next SSN iteration's main solve
-            }
+            prev_dy_.resize(0); // cold-start for iterative refinement
+            Vec correction = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, rho1, rho2,
+                                            mu, krylov_tol, krylov_max_in_iter, false, false, use_ldlt);
+            dxdy_ += correction;
+            prev_dy_ = dxdy_.tail(s); // warm-start for the next SSN iteration's main solve
         }
 
         auto t1_solve_lin_sys = std::chrono::steady_clock::now();
@@ -799,10 +648,11 @@ void SSN<T>::solve_ssn(const T eps) {
         const auto dy2_active_W = dxdy_.tail(n_active_W);
 
         assert(dy2_active_W.size() == n_active_W);
-        assert(dy2_inactive_W_.size() == n_inactive_W);
+        assert(dy2_inactive_W_.size() >= n_inactive_W); // fixed-capacity l, valid prefix n_inactive_W
         assert(active_W.size() == l);
 
-        retrieve_row_order(dy2_active_W, dy2_inactive_W_, active_W, dy2_);
+        // Recover dy2.
+        retrieve_row_order(dy2_active_W, dy2_inactive_W_.head(n_inactive_W), active_W, dy2_);
 
         // ========== Exact linesearch ==========
         auto t0_linesearch = std::chrono::steady_clock::now();
@@ -818,7 +668,7 @@ void SSN<T>::solve_ssn(const T eps) {
 
         // ========== Update x and y2 ==========
         if (tau <= T(0)) { // Linesearch found step size <= 0 with the Newton direction.
-            Vec grad_L = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
+            const Vec& grad_L = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
             T grad_norm = inf_norm(grad_L);
             if (grad_norm <= T(5) * eps) {
                 _opt = 0; // ||∇M|| is small enough to accept optimality.
@@ -840,7 +690,7 @@ void SSN<T>::solve_ssn(const T eps) {
             if (tau <= T(0)) {
                 linesearch_fail++;
                 _opt = 3;
-                std::cout << "[Linesearch] Gradient-descent fallback also failed; exiting SSN loop early.\n";
+                // std::cout << "[Linesearch] Gradient-descent fallback also failed; exiting SSN loop early.\n";
                 break;
             }
         }
@@ -856,7 +706,7 @@ void SSN<T>::solve_ssn(const T eps) {
         }
 
         // Compute gradient of Lagrangian at current (x, y2).
-        grad_L_ = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
+        compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
         tol_achieved = inf_norm(grad_L_);
         // std::cout << "[SSN] Iteration " << _iter << ": ||∇M|| = " << tol_achieved << ", tau = " << tau << "\n";
         _iter++;
@@ -872,16 +722,15 @@ void SSN<T>::solve_ssn(const T eps) {
         }
 
         // Stagnation check: if ||∇M|| fails to meaningfully improve for consecutive iterations,
-        // further Newton steps aren't making real progress (even if the step itself is nonzero) —
-        // stop and let the PMM level adjust penalties rather than burn iterations here.
+        // stop and let the PMM level adjust penalties.
         if (tol_achieved >= T(0.999) * prev_tol_achieved) {
-            ++stagnant_count;
+            ++stagnation;
         } else {
-            stagnant_count = 0;
+            stagnation = 0;
         }
         prev_tol_achieved = tol_achieved;
 
-        if (stagnant_count >= 10) {
+        if (stagnation >= 10) {
             if (tol_achieved < T(5) * eps) {
                 _opt = 0; // Optimality achieved.
                 // std::cout << "[Optimal] ||∇M|| stagnated (" << tol_achieved << "), but ||∇M|| <= 5 * eps, so we accept optimality.\n";
