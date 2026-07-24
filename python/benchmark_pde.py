@@ -55,7 +55,6 @@ import os
 import csv
 import time
 import argparse
-import threading
 import multiprocessing as mp
 from pathlib import Path
 
@@ -85,58 +84,13 @@ try:
 except ModuleNotFoundError:
     sys.exit("Cannot find osqp. Install it with: pip install osqp")
 
-try:
-    import psutil
-    _HAVE_PSUTIL = True
-except ModuleNotFoundError:
-    _HAVE_PSUTIL = False
-    print("Warning: psutil not found — RAM tracking disabled. Install with: pip install psutil")
-
-
-class _PeakRSS:
-    """Polls process RSS in a background thread to capture average memory usage."""
-    def __init__(self, interval: float = 0.05):
-        self._enabled = _HAVE_PSUTIL
-        if self._enabled:
-            self._proc = psutil.Process()
-            self._interval = interval
-            self._total = 0.0
-            self._count = 0
-            self._stop = threading.Event()
-            self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def __enter__(self):
-        if self._enabled:
-            self._thread.start()
-        return self
-
-    def __exit__(self, *_):
-        if self._enabled:
-            self._stop.set()
-            self._thread.join()
-            if self._count == 0:
-                self._total = self._proc.memory_info().rss
-                self._count = 1
-
-    def _run(self):
-        while not self._stop.wait(self._interval):
-            self._total += self._proc.memory_info().rss
-            self._count += 1
-
-    @property
-    def avg_mb(self) -> float:
-        if not self._enabled or self._count == 0:
-            return float("nan")
-        return (self._total / self._count) / (1024 * 1024)
-
-
 # ---------------------------------------------------------------------------
 # Sweep parameters
 # ---------------------------------------------------------------------------
 
-POISSON_VARY_N_NC     = [6, 7, 8, 9]
+POISSON_VARY_N_NC     = [6, 7, 8, 9, 10]
 POISSON_VARY_N_ALPHA1 = [1e-2, 1e-4, 1e-6, 0.0]
-POISSON_VARY_N_ALPHA2 = 0
+POISSON_VARY_N_ALPHA2 = 1e-2
 
 POISSON_VARY_A2_NC     = 8
 POISSON_VARY_A2_ALPHA1 = 1e-6
@@ -144,7 +98,7 @@ POISSON_VARY_A2_ALPHA2 = [1e-2, 1e-4, 1e-6, 0.0]
 
 CONVDIFF_VARY_N_NC     = [6, 7, 8, 9, 10]
 CONVDIFF_VARY_N_ALPHA1 = [1e-2, 1e-4, 1e-6, 0.0]
-CONVDIFF_VARY_N_ALPHA2 = 1e-4
+CONVDIFF_VARY_N_ALPHA2 = 1e-2
 
 CONVDIFF_VARY_A2_NC     = 9
 CONVDIFF_VARY_A2_ALPHA1 = 1e-6
@@ -200,13 +154,6 @@ def _fmt_time(r: dict, key: str, solved_key: str, solved_val) -> str:
     if r.get(solved_key) != solved_val:
         return "—"
     return f"{r[key]:.2f}"
-
-
-def _fmt_ram(r: dict, key: str) -> str:
-    v = r.get(key, float("nan"))
-    if v != v:  # nan → psutil unavailable
-        return "n/a"
-    return f"{v:.0f}"
 
 
 # ---------------------------------------------------------------------------
@@ -332,13 +279,9 @@ def _worker_ssn(problem, nc, alpha1, alpha2, tol, time_limit, max_iter, conn):
     try:
         pd_data = ssn_pmm_bind.generate_pde_problem_params(problem, nc, alpha1, alpha2)
         result["n_vars"] = pd_data["n"]
-        with _PeakRSS() as mem:
-            r  = ssn_pmm_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
-            result["res"] = r
-        result["ram"] = mem.avg_mb
+        result["res"] = ssn_pmm_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
     except Exception as e:
         result["error"] = str(e)
-        result["ram"] = float("nan")
     conn.send(result)
     conn.close()
 
@@ -348,12 +291,9 @@ def _worker_qpalm(problem, nc, alpha1, alpha2, tol, time_limit, conn):
     try:
         pd_data = ssn_pmm_bind.generate_pde_problem_params(problem, nc, alpha1, alpha2)
         qpalm_data = pdpmm_to_qpalm(pd_data)
-        with _PeakRSS() as mem:
-            result["res"] = run_qpalm(qpalm_data, tol, time_limit)
-        result["ram"] = mem.avg_mb
+        result["res"] = run_qpalm(qpalm_data, tol, time_limit)
     except Exception as e:
         result["error"] = str(e)
-        result["ram"] = float("nan")
     conn.send(result)
     conn.close()
 
@@ -363,12 +303,9 @@ def _worker_osqp(problem, nc, alpha1, alpha2, tol, time_limit, conn):
     try:
         pd_data = ssn_pmm_bind.generate_pde_problem_params(problem, nc, alpha1, alpha2)
         qpalm_data = pdpmm_to_qpalm(pd_data)
-        with _PeakRSS() as mem:
-            result["res"] = run_osqp(qpalm_data, tol, time_limit)
-        result["ram"] = mem.avg_mb
+        result["res"] = run_osqp(qpalm_data, tol, time_limit)
     except Exception as e:
         result["error"] = str(e)
-        result["ram"] = float("nan")
     conn.send(result)
     conn.close()
 
@@ -389,8 +326,7 @@ def _run_isolated(target_func, args: tuple) -> dict:
     except EOFError:
         p.join()
         return {"error": f"worker died without result (exitcode={p.exitcode}, "
-                          f"likely OOM-killed or crashed)",
-                "ram": float("nan")}
+                          f"likely OOM-killed or crashed)"}
     p.join()
     return out
 
@@ -419,8 +355,7 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
             print(f"    SSN-PMM  ERROR — {ssn_out['error']}")
             result.update(ssn_status=-99, ssn_solved=0, ssn_time=float("inf"),
                           pmm_iter=-1, ssn_iter=-1, pmm_tol_achieved=float("nan"),
-                          ssn_obj=float("nan"),
-                          ssn_avg_ram_mb=ssn_out.get("ram", float("nan")))
+                          ssn_obj=float("nan"))
         else:
             r = ssn_out["res"]
             result.update(
@@ -428,12 +363,11 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
                 ssn_time=r["run_time"],
                 pmm_iter=r["pmm_iter"], ssn_iter=r["ssn_iter"],
                 pmm_tol_achieved=r["pmm_tol_achieved"],
-                ssn_obj=r["obj_val"], ssn_avg_ram_mb=ssn_out["ram"],
+                ssn_obj=r["obj_val"],
             )
             ok = "OK" if r["status"] == 0 else f"status={r['status']}"
             print(f"    SSN-PMM  {ok:8s}  t={r['run_time']:.2f}s  "
-                  f"{r['pmm_iter']}({r['ssn_iter']})[tol={r['pmm_tol_achieved']:.2e}]  "
-                  f"RAM={ssn_out['ram']:.0f}MB")
+                  f"{r['pmm_iter']}({r['ssn_iter']})[tol={r['pmm_tol_achieved']:.2e}]")
         if cooldown > 0:
             time.sleep(cooldown)
 
@@ -445,8 +379,7 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
             print(f"    QPALM    ERROR — {qpalm_out['error']}")
             result.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=float("inf"),
                           qpalm_iter=-1, qpalm_inner_iter=-1, qpalm_obj=float("nan"),
-                          qpalm_tol_achieved=float("nan"),
-                          qpalm_avg_ram_mb=qpalm_out.get("ram", float("nan")))
+                          qpalm_tol_achieved=float("nan"))
         else:
             r = qpalm_out["res"]
             result.update(
@@ -454,12 +387,10 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
                 qpalm_time=r["run_time"], qpalm_iter=r["outer_iter"],
                 qpalm_inner_iter=r["inner_iter"], qpalm_obj=r["obj_val"],
                 qpalm_tol_achieved=r["tol_achieved"],
-                qpalm_avg_ram_mb=qpalm_out["ram"],
             )
             ok = "OK" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
             print(f"    QPALM    {ok:8s}  t={r['run_time']:.2f}s  "
-                  f"{r['outer_iter']}({r['inner_iter']})[tol={r['tol_achieved']:.2e}]  "
-                  f"RAM={qpalm_out['ram']:.0f}MB")
+                  f"{r['outer_iter']}({r['inner_iter']})[tol={r['tol_achieved']:.2e}]")
         if cooldown > 0:
             time.sleep(cooldown)
 
@@ -471,19 +402,17 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
             print(f"    OSQP     ERROR — {osqp_out['error']}")
             result.update(osqp_status=-99, osqp_solved=0, osqp_time=float("inf"),
                           osqp_iter=-1, osqp_obj=float("nan"),
-                          osqp_tol_achieved=float("nan"),
-                          osqp_avg_ram_mb=osqp_out.get("ram", float("nan")))
+                          osqp_tol_achieved=float("nan"))
         else:
             r = osqp_out["res"]
             result.update(
                 osqp_status=r["status"], osqp_solved=int(r["status"] == OSQP_SOLVED),
                 osqp_time=r["run_time"], osqp_iter=r["outer_iter"], osqp_obj=r["obj_val"],
                 osqp_tol_achieved=r["tol_achieved"],
-                osqp_avg_ram_mb=osqp_out["ram"],
             )
             ok = "OK" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
             print(f"    OSQP     {ok:8s}  t={r['run_time']:.2f}s  iter={r['outer_iter']}  "
-                  f"tol={r['tol_achieved']:.2e}  RAM={osqp_out['ram']:.0f}MB")
+                  f"tol={r['tol_achieved']:.2e}")
         if cooldown > 0:
             time.sleep(cooldown)
 
@@ -495,9 +424,9 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
 
 CSV_FIELDS = [
     "problem", "nc", "n_display", "alpha1", "alpha2",
-    "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter", "pmm_tol_achieved", "ssn_time", "ssn_obj", "ssn_avg_ram_mb",
-    "qpalm_status", "qpalm_solved", "qpalm_iter", "qpalm_inner_iter", "qpalm_tol_achieved", "qpalm_time", "qpalm_obj", "qpalm_avg_ram_mb",
-    "osqp_status",  "osqp_solved",  "osqp_iter",  "osqp_tol_achieved",  "osqp_time",  "osqp_obj",  "osqp_avg_ram_mb",
+    "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter", "pmm_tol_achieved", "ssn_time", "ssn_obj",
+    "qpalm_status", "qpalm_solved", "qpalm_iter", "qpalm_inner_iter", "qpalm_tol_achieved", "qpalm_time", "qpalm_obj",
+    "osqp_status",  "osqp_solved",  "osqp_iter",  "osqp_tol_achieved",  "osqp_time",  "osqp_obj",
 ]
 
 

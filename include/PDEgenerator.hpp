@@ -379,13 +379,13 @@ PDPMMdata<T> make_poisson_L1L2_control(
 
 template <typename T>
 PDPMMdata<T> make_poisson_L1L2_control_default() {
-    return make_poisson_L1L2_control<T>(7, T(1e-4), T(1e-4));
+    return make_poisson_L1L2_control<T>(7, T(1e-4), T(1e-2));
 }
 
 template <typename T>
 PDPMMdata<T> make_convdiff_L1L2_control(
     int nc, T alpha1, T alpha2,
-    T u_lower = T(-2), T u_upper = T(1.5), T eps = T(0.05))
+    T u_lower = T(-2), T u_upper = T(1.5), T eps = T(0.02))
 {
     Grid<T> g(nc);
 
@@ -399,7 +399,7 @@ PDPMMdata<T> make_convdiff_L1L2_control(
             const int p = Grid<T>::idx(i, j, g.n1d);
             const T dx = T(i) * g.h - T(0.5);
             const T dy = T(j) * g.h - T(0.5);
-            yhat(p) = T(1000) * std::exp(T(-64) * (dx*dx + dy*dy));
+            yhat(p) = std::exp(T(-64) * (dx*dx + dy*dy));
         }
 
     return make_problem_from_mats<T>(D, M, rhs, yhat, alpha1, alpha2, u_lower, u_upper);
@@ -407,7 +407,7 @@ PDPMMdata<T> make_convdiff_L1L2_control(
 
 template <typename T>
 PDPMMdata<T> make_convdiff_L1L2_control_default() {
-    return make_convdiff_L1L2_control<T>(9, T(1e-4), T(1e-4));
+    return make_convdiff_L1L2_control<T>(9, T(1e-4), T(1e-2));
 }
 
 } // namespace pdegen

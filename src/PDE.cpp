@@ -55,21 +55,21 @@ int main() {
     PrintWhat what = PrintWhat::TUNING;
 
     // ====== Poisson ======
-    PDPMMdata<T> data1 = pdegen::make_poisson_L1L2_control<T>(8, 1e-2, 1e-6);
-    Problem<T> pb1(data1, tol, max_iter, time_limit, when, what);
-    SSN_PMM<T> solver1(pb1);
+    // PDPMMdata<T> data1 = pdegen::make_poisson_L1L2_control<T>(8, 1e-2, 1e-6);
+    // Problem<T> pb1(data1, tol, max_iter, time_limit, when, what);
+    // SSN_PMM<T> solver1(pb1);
 
-    Solution<T> sol1 = solver1.solve();
-    sol1.print_summary();
+    // Solution<T> sol1 = solver1.solve();
+    // sol1.print_summary();
     // print_feasibility(data1, sol1.x, tol);
 
     // ====== Convection-diffusion ======
-    // PDPMMdata<T> data2 = pdegen::make_convdiff_L1L2_control<T>(10, 1e-6, 0);
-    // Problem<T> pb2(data2, tol, max_iter, time_limit, when, what);
-    // SSN_PMM<T> solver2(pb2);
+    PDPMMdata<T> data2 = pdegen::make_convdiff_L1L2_control<T>(10, 1e-4, 1e-2);
+    Problem<T> pb2(data2, tol, max_iter, time_limit, when, what);
+    SSN_PMM<T> solver2(pb2);
 
-    // Solution<T> sol2 = solver2.solve();
-    // sol2.print_summary();
+    Solution<T> sol2 = solver2.solve();
+    sol2.print_summary();
     // print_feasibility(data2, sol2.x, tol);
 
 }
