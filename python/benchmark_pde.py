@@ -1,19 +1,15 @@
 """
-Benchmark SSN-PMM vs QPALM vs OSQP on PDE-constrained QP problems.
+Benchmark SSN-PMM vs QPALM vs OSQP on L1/L2-regularized PDE-constrained QP problems.
 
 Four named tables are produced:
 
-  poisson_vary_n    Poisson control: varying grid size n and L1 reg alpha1
-                    (alpha2 = 1e-4 fixed)
+  poisson_vary_n    Poisson control: varying grid size n and L1-reg alpha1; alpha2 fixed
 
-  poisson_vary_a2   Poisson control: varying L2 reg alpha2
-                    ((n, alpha1) = (1.32e5, 1e-4) fixed)
+  poisson_vary_a2   Poisson control: varying L2-reg alpha2; n, alpha1 fixed
 
-  convdiff_vary_n   Conv-diff control: varying grid size n and L1 reg alpha1
-                    (alpha2 = 1e-4 fixed)
+  convdiff_vary_n   Conv-diff control: varying grid size n and L1-reg alpha1; alpha2 fixed
 
-  convdiff_vary_a2  Conv-diff control: varying L2 reg alpha2
-                    ((n, alpha1) = (1.32e5, 1e-4) fixed)
+  convdiff_vary_a2  Conv-diff control: varying L2-reg alpha2; n, alpha1 fixed
 
 Outputs
 -------
@@ -271,7 +267,7 @@ def run_osqp(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Subprocess worker functions (each spawned in a fresh process for clean RSS)
+# Subprocess worker functions
 # ---------------------------------------------------------------------------
 
 def _worker_ssn(problem, nc, alpha1, alpha2, tol, time_limit, max_iter, conn):
@@ -335,17 +331,19 @@ def _run_isolated(target_func, args: tuple) -> dict:
 # Core per-problem runner
 # ---------------------------------------------------------------------------
 
-def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
+def run_one(result: dict, problem: str, nc: int, alpha1: float, alpha2: float,
             tol: float, time_limit: float, max_iter: int, solvers: set,
-            cooldown: float = 0.0) -> dict:
-    """Solve one problem with all three solvers in isolated subprocesses."""
+            cooldown: float = 0.0, flush_cb=None) -> dict:
+    """Solve one problem with all three solvers in isolated subprocesses.
+
+    Mutates `result` in place and calls `flush_cb()` (if given) right after
+    each solver finishes, so partial results are persisted immediately
+    instead of waiting for the whole sweep to complete.
+    """
     n_disp = _n_display(nc)
     a2_str = f"{alpha2:.0e}" if alpha2 > 0 else "0"
     print(f"  {problem} nc={nc} (n={n_disp:.2e})  "
           f"alpha1={alpha1:.0e}  alpha2={a2_str}", flush=True)
-
-    result = {"problem": problem, "nc": nc, "n_display": n_disp,
-              "alpha1": alpha1, "alpha2": alpha2}
 
     # --- SSN-PMM ---
     if "ssn-pmm" in solvers:
@@ -368,6 +366,8 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
             ok = "OK" if r["status"] == 0 else f"status={r['status']}"
             print(f"    SSN-PMM  {ok:8s}  t={r['run_time']:.2f}s  "
                   f"{r['pmm_iter']}({r['ssn_iter']})[tol={r['pmm_tol_achieved']:.2e}]")
+        if flush_cb is not None:
+            flush_cb()
         if cooldown > 0:
             time.sleep(cooldown)
 
@@ -391,6 +391,8 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
             ok = "OK" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
             print(f"    QPALM    {ok:8s}  t={r['run_time']:.2f}s  "
                   f"{r['outer_iter']}({r['inner_iter']})[tol={r['tol_achieved']:.2e}]")
+        if flush_cb is not None:
+            flush_cb()
         if cooldown > 0:
             time.sleep(cooldown)
 
@@ -413,6 +415,8 @@ def run_one(problem: str, nc: int, alpha1: float, alpha2: float,
             ok = "OK" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
             print(f"    OSQP     {ok:8s}  t={r['run_time']:.2f}s  iter={r['outer_iter']}  "
                   f"tol={r['tol_achieved']:.2e}")
+        if flush_cb is not None:
+            flush_cb()
         if cooldown > 0:
             time.sleep(cooldown)
 
@@ -431,11 +435,19 @@ CSV_FIELDS = [
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
+    """Rewrite the whole CSV from `rows`. Called after every solver finishes."""
     with open(path, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
-    print(f"  Saved: {path}")
+
+
+def _load_existing_rows(path: Path) -> list[dict]:
+    """Load previously written rows so a rerun appends instead of overwriting."""
+    if not path.exists():
+        return []
+    with open(path, newline="") as fh:
+        return list(csv.DictReader(fh))
 
 
 # ---------------------------------------------------------------------------
@@ -446,16 +458,25 @@ def _run_vary_n(problem: str, nc_list: list[int], alpha1_list: list[float],
                 alpha2: float, tol: float, time_limit: float,
                 max_iter: int, result_dir: Path, solvers: set,
                 cooldown: float = 0.0, name_prefix: str = "") -> list[dict]:
-    rows = []
+    label = f"{problem}_vary_n"
+    csv_path = result_dir / f"{name_prefix}{label}.csv"
+    rows: list[dict] = _load_existing_rows(csv_path)
     n_total = len(nc_list) * len(alpha1_list)
     done = 0
-    label = f"{problem}_vary_n"
+
+    def _flush() -> None:
+        _write_csv(csv_path, rows)
+
     for nc in nc_list:
         for alpha1 in alpha1_list:
             done += 1
             print(f"\n[{label}  {done}/{n_total}]")
-            rows.append(run_one(problem, nc, alpha1, alpha2, tol, time_limit, max_iter, solvers, cooldown))
-    _write_csv(result_dir / f"{name_prefix}{label}.csv", rows)
+            row = {"problem": problem, "nc": nc, "n_display": _n_display(nc),
+                   "alpha1": alpha1, "alpha2": alpha2}
+            rows.append(row)
+            run_one(row, problem, nc, alpha1, alpha2, tol, time_limit, max_iter, solvers,
+                    cooldown, flush_cb=_flush)
+    print(f"  Saved: {csv_path}")
     return rows
 
 
@@ -463,13 +484,22 @@ def _run_vary_a2(problem: str, nc: int, alpha1: float, alpha2_list: list[float],
                  tol: float, time_limit: float, max_iter: int,
                  result_dir: Path, solvers: set, cooldown: float = 0.0,
                  name_prefix: str = "") -> list[dict]:
-    rows = []
-    n_total = len(alpha2_list)
     label = f"{problem}_vary_a2"
+    csv_path = result_dir / f"{name_prefix}{label}.csv"
+    rows: list[dict] = _load_existing_rows(csv_path)
+    n_total = len(alpha2_list)
+
+    def _flush() -> None:
+        _write_csv(csv_path, rows)
+
     for done, alpha2 in enumerate(alpha2_list, 1):
         print(f"\n[{label}  {done}/{n_total}]")
-        rows.append(run_one(problem, nc, alpha1, alpha2, tol, time_limit, max_iter, solvers, cooldown))
-    _write_csv(result_dir / f"{name_prefix}{label}.csv", rows)
+        row = {"problem": problem, "nc": nc, "n_display": _n_display(nc),
+               "alpha1": alpha1, "alpha2": alpha2}
+        rows.append(row)
+        run_one(row, problem, nc, alpha1, alpha2, tol, time_limit, max_iter, solvers,
+                cooldown, flush_cb=_flush)
+    print(f"  Saved: {csv_path}")
     return rows
 
 

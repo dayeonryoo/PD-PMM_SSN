@@ -33,7 +33,7 @@ Step 3 - Run the benchmark
   Optional: override the project root if running from a different directory:
   python3 benchmark_mm.py --root /path/to/PD-PMM_SSN
 
-Settings: tol = 1e-6, time limit = 600 s (10 min), max iterations = infinity.
+Settings: tol = 1e-6, time limit = 60 s (1 min), max iterations = infinity.
 """
 
 import sys
@@ -384,8 +384,12 @@ def compute_performance_profile(times: np.ndarray, tau_vals: np.ndarray) -> np.n
     if n_active == 0:
         return np.zeros((n_s, len(tau_vals)))
 
-    ratios  = np.full_like(times, np.inf)
-    ratios[active] = times[active] / best[active]         # (n_active, n_s)
+    ratios = np.full_like(times, np.inf)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratios[active] = times[active] / best[active]      # (n_active, n_s)
+    # best == 0 (e.g. a solver reports 0 iterations on a trivial problem):
+    # other 0-cost solvers tie for best (ratio 1), the rest stay at inf.
+    ratios[np.isnan(ratios)] = 1.0
 
     profiles = np.zeros((n_s, len(tau_vals)))
     for s in range(n_s):
@@ -622,6 +626,14 @@ def _run_isolated(target_func, args: tuple) -> dict:
 # Main benchmark loop
 # ---------------------------------------------------------------------------
 
+def _load_existing_rows(csv_path: Path) -> list[dict]:
+    """Load previously written rows so a rerun appends instead of overwriting."""
+    if not csv_path.exists():
+        return []
+    with open(csv_path, newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -633,7 +645,7 @@ def main() -> None:
         "--tol",        type=float, default=1e-6,  help="Primal-dual tolerance (default: 1e-6)"
     )
     parser.add_argument(
-        "--time-limit", type=float, default=600.0, help="Per-problem time limit in seconds (default: 600)"
+        "--time-limit", type=float, default=60.0, help="Per-problem time limit in seconds (default: 60)"
     )
     parser.add_argument(
         "--name", default="", help="Prefix for output filenames (e.g. '0508' → '0508_comparison_mm.csv')"
@@ -671,91 +683,96 @@ def main() -> None:
     ]
 
     n_problems = len(QPS)
+    rows: list[dict] = _load_existing_rows(csv_path)
 
-    with open(csv_path, "w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
-        writer.writeheader()
+    def _flush() -> None:
+        """Rewrite the CSV from `rows` — called right after every solver finishes."""
+        with open(csv_path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
 
-        for idx, (name, _ref_obj) in enumerate(QPS.items(), 1):
-            sif_path = str(data_dir / f"{name}.SIF")
-            if not os.path.exists(sif_path):
-                print(f"[{idx:3d}/{n_problems}] SKIP (file not found): {name}")
-                continue
+    for idx, (name, _ref_obj) in enumerate(QPS.items(), 1):
+        sif_path = str(data_dir / f"{name}.SIF")
+        if not os.path.exists(sif_path):
+            print(f"[{idx:3d}/{n_problems}] SKIP (file not found): {name}")
+            continue
 
-            print(f"\n[{idx:3d}/{n_problems}]  {name}")
-            row: dict = {"name": name}
+        print(f"\n[{idx:3d}/{n_problems}]  {name}")
+        row: dict = {"name": name}
+        rows.append(row)
 
-            # ---- SSN-PMM ------------------------------------------------
-            if "ssn-pmm" in solvers:
-                ssn_out = _run_isolated(_worker_ssn_mm, (sif_path, tol, time_limit, max_iter))
-                if "error" in ssn_out:
-                    print(f"  SSN-PMM : ERROR — {ssn_out['error']}")
-                    row.update(ssn_status=-99, ssn_solved=0, ssn_time=np.inf,
-                               pmm_iter=np.inf, ssn_iter=np.inf,
-                               ssn_obj=np.nan, pmm_tol_achieved=np.nan)
-                else:
-                    r = ssn_out["res"]
-                    row["ssn_status"]       = r["status"]
-                    row["ssn_solved"]       = int(r["status"] == 0)
-                    row["ssn_time"]         = r["run_time"]
-                    row["pmm_iter"]         = r["pmm_iter"]
-                    row["ssn_iter"]         = r["ssn_iter"]
-                    row["ssn_obj"]          = r["obj_val"]
-                    row["pmm_tol_achieved"] = r["pmm_tol_achieved"]
-                    status_str = "OPTIMAL" if r["status"] == 0 else f"status={r['status']}"
-                    print(f"  SSN-PMM : {status_str:12s}  t = {r['run_time']:.3f} s  "
-                          f"pmm={r['pmm_iter']} ssn={r['ssn_iter']}  "
-                          f"tol={r['pmm_tol_achieved']:.2e}  obj = {r['obj_val']:.6g}")
-                if cooldown > 0:
-                    time.sleep(cooldown)
+        # ---- SSN-PMM ------------------------------------------------
+        if "ssn-pmm" in solvers:
+            ssn_out = _run_isolated(_worker_ssn_mm, (sif_path, tol, time_limit, max_iter))
+            if "error" in ssn_out:
+                print(f"  SSN-PMM : ERROR — {ssn_out['error']}")
+                row.update(ssn_status=-99, ssn_solved=0, ssn_time=np.inf,
+                           pmm_iter=np.inf, ssn_iter=np.inf,
+                           ssn_obj=np.nan, pmm_tol_achieved=np.nan)
+            else:
+                r = ssn_out["res"]
+                row["ssn_status"]       = r["status"]
+                row["ssn_solved"]       = int(r["status"] == 0)
+                row["ssn_time"]         = r["run_time"]
+                row["pmm_iter"]         = r["pmm_iter"]
+                row["ssn_iter"]         = r["ssn_iter"]
+                row["ssn_obj"]          = r["obj_val"]
+                row["pmm_tol_achieved"] = r["pmm_tol_achieved"]
+                status_str = "OPTIMAL" if r["status"] == 0 else f"status={r['status']}"
+                print(f"  SSN-PMM : {status_str:12s}  t = {r['run_time']:.3f} s  "
+                      f"pmm={r['pmm_iter']} ssn={r['ssn_iter']}  "
+                      f"tol={r['pmm_tol_achieved']:.2e}  obj = {r['obj_val']:.6g}")
+            _flush()
+            if cooldown > 0:
+                time.sleep(cooldown)
 
-            # ---- QPALM --------------------------------------------------
-            if "qpalm" in solvers:
-                qpalm_out = _run_isolated(_worker_qpalm_mm, (sif_path, tol, time_limit))
-                if "error" in qpalm_out:
-                    print(f"  QPALM   : ERROR — {qpalm_out['error']}")
-                    row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf,
-                               qpalm_iter=np.inf, qpalm_inner_iter=np.inf,
-                               qpalm_obj=np.nan, qpalm_tol_achieved=np.nan)
-                else:
-                    r = qpalm_out["res"]
-                    row["qpalm_status"]        = r["status"]
-                    row["qpalm_solved"]        = int(r["status"] == QPALM_SOLVED)
-                    row["qpalm_time"]          = r["run_time"]
-                    row["qpalm_iter"]          = r["outer_iter"]
-                    row["qpalm_inner_iter"]    = r["inner_iter"]
-                    row["qpalm_obj"]           = r["obj_val"]
-                    row["qpalm_tol_achieved"]  = r["tol_achieved"]
-                    status_str = "OPTIMAL" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
-                    print(f"  QPALM   : {status_str:12s}  t = {r['run_time']:.3f} s  "
-                          f"outer={r['outer_iter']} inner={r['inner_iter']}  "
-                          f"tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}")
-                if cooldown > 0:
-                    time.sleep(cooldown)
+        # ---- QPALM --------------------------------------------------
+        if "qpalm" in solvers:
+            qpalm_out = _run_isolated(_worker_qpalm_mm, (sif_path, tol, time_limit))
+            if "error" in qpalm_out:
+                print(f"  QPALM   : ERROR — {qpalm_out['error']}")
+                row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf,
+                           qpalm_iter=np.inf, qpalm_inner_iter=np.inf,
+                           qpalm_obj=np.nan, qpalm_tol_achieved=np.nan)
+            else:
+                r = qpalm_out["res"]
+                row["qpalm_status"]        = r["status"]
+                row["qpalm_solved"]        = int(r["status"] == QPALM_SOLVED)
+                row["qpalm_time"]          = r["run_time"]
+                row["qpalm_iter"]          = r["outer_iter"]
+                row["qpalm_inner_iter"]    = r["inner_iter"]
+                row["qpalm_obj"]           = r["obj_val"]
+                row["qpalm_tol_achieved"]  = r["tol_achieved"]
+                status_str = "OPTIMAL" if r["status"] == QPALM_SOLVED else f"status={r['status']}"
+                print(f"  QPALM   : {status_str:12s}  t = {r['run_time']:.3f} s  "
+                      f"outer={r['outer_iter']} inner={r['inner_iter']}  "
+                      f"tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}")
+            _flush()
+            if cooldown > 0:
+                time.sleep(cooldown)
 
-            # ---- OSQP ---------------------------------------------------
-            if "osqp" in solvers:
-                osqp_out = _run_isolated(_worker_osqp_mm, (sif_path, tol, time_limit))
-                if "error" in osqp_out:
-                    print(f"  OSQP    : ERROR — {osqp_out['error']}")
-                    row.update(osqp_status=-99, osqp_solved=0, osqp_time=np.inf, osqp_iter=np.inf,
-                               osqp_obj=np.nan, osqp_tol_achieved=np.nan)
-                else:
-                    r = osqp_out["res"]
-                    row["osqp_status"]       = r["status"]
-                    row["osqp_solved"]       = int(r["status"] == OSQP_SOLVED)
-                    row["osqp_time"]         = r["run_time"]
-                    row["osqp_iter"]         = r["outer_iter"]
-                    row["osqp_obj"]          = r["obj_val"]
-                    row["osqp_tol_achieved"] = r["tol_achieved"]
-                    status_str = "OPTIMAL" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
-                    print(f"  OSQP    : {status_str:12s}  t = {r['run_time']:.3f} s  "
-                          f"iter = {r['outer_iter']}  tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}")
-                if cooldown > 0:
-                    time.sleep(cooldown)
-
-            writer.writerow(row)
-            fh.flush()
+        # ---- OSQP ---------------------------------------------------
+        if "osqp" in solvers:
+            osqp_out = _run_isolated(_worker_osqp_mm, (sif_path, tol, time_limit))
+            if "error" in osqp_out:
+                print(f"  OSQP    : ERROR — {osqp_out['error']}")
+                row.update(osqp_status=-99, osqp_solved=0, osqp_time=np.inf, osqp_iter=np.inf,
+                           osqp_obj=np.nan, osqp_tol_achieved=np.nan)
+            else:
+                r = osqp_out["res"]
+                row["osqp_status"]       = r["status"]
+                row["osqp_solved"]       = int(r["status"] == OSQP_SOLVED)
+                row["osqp_time"]         = r["run_time"]
+                row["osqp_iter"]         = r["outer_iter"]
+                row["osqp_obj"]          = r["obj_val"]
+                row["osqp_tol_achieved"] = r["tol_achieved"]
+                status_str = "OPTIMAL" if r["status"] == OSQP_SOLVED else f"status={r['status']}"
+                print(f"  OSQP    : {status_str:12s}  t = {r['run_time']:.3f} s  "
+                      f"iter = {r['outer_iter']}  tol={r['tol_achieved']:.2e}  obj = {r['obj_val']:.6g}")
+            _flush()
+            if cooldown > 0:
+                time.sleep(cooldown)
 
     print(f"\nResults written to: {csv_path}")
 

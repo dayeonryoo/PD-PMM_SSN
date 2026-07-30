@@ -766,6 +766,8 @@ Solution<T> SSN_PMM<T>::solve() {
         printable_sol(x, y1, y2, z); // (Modifies x_sol, y1_sol, y2_sol, z_sol.)
         obj_val = objective_value(x_sol);
 
+        pmm_iter++;
+        
         // Print current iteration info.
         print(when, what, pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, new_res_norms, ssn_tol_achieved, mu, rho, ssn_tol, linesearch_fail, NS.krylov_fail);
 
@@ -774,7 +776,6 @@ Solution<T> SSN_PMM<T>::solve() {
             opt = 0; // Optimal solution found
             break;
         }
-        pmm_iter++;
 
         // Update PMM parameters based on the progress of residual norms and SSN solve quality.
         update_PMM_parameters(res_norms, new_res_norms, NS.opt, ssn_tol_achieved, NS.iter);

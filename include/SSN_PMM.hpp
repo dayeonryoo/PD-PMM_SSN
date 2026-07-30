@@ -115,9 +115,9 @@ public:
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e2;
-    T rho = 1e4;
+    T rho = 1e7;
     T ssn_tol = 1e-2;
-    
+     
     // Outputs:
     int opt;
     Vec x, y1, y2, z;

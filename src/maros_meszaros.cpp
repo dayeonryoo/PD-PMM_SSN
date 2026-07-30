@@ -190,7 +190,7 @@ void run_Netlib() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0723netlib.csv";
+    std::string csv_path = root + "results/0727netlib.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : LPs) {
@@ -320,7 +320,7 @@ void run_Netlib_infeas() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0723infeas.csv";
+    std::string csv_path = root + "results/0727infeas.csv";
 
     // Write header
     if (!std::filesystem::exists(std::filesystem::path(csv_path))
@@ -551,7 +551,7 @@ int main() {
     int cooldown_sec = 3;      // seconds to sleep between problems (prevents CPU throttling)
 
     // Solver result
-    std::string csv_path = root + "results/0723mm.csv";
+    std::string csv_path = root + "results/0727mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
