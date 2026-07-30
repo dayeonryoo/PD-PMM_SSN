@@ -86,6 +86,9 @@ public:
     SpMat Q_ruiz, A_ruiz, B_ruiz;
     Vec problem_Q_diag, Q_diag_ruiz, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz, lw_ruiz, uw_ruiz;
     Vec D1A_diag, D1B_diag, D2_diag;
+    Vec D1A_ext, D2_ext; // extended to size N, M
+    Vec D1A_ext_inv, D2_ext_inv, D1B_diag_inv; // precomputed reciprocals
+    Vec c_orig, b_orig, lx_orig, ux_orig, lw_orig, uw_orig; // unscaled problem data for terminataion/infeasibility check
     Vec x_sol, y1_sol, y2_sol, z_sol;
 
     // Pre-allocated scratch vectors for the PMM main loop
@@ -93,6 +96,16 @@ public:
     Vec Ax_old_scratch_, Bx_old_scratch_;           // previous iteration products
     Vec Adx_scratch_, Bdx_scratch_;                 // differences
     Vec x_old_scratch_, y2_old_scratch_;            // previous iterates for infeasibility check
+
+    // Pre-allocated scratch vectors for compute_residual_unscaled_inf_norms
+    Vec A_tr_y1_scratch_, B_tr_y2_scratch_;         // size N
+    Vec num_scratch_;                               // size N
+    Vec proj_K_scratch_, proj_K_unscaled_scratch_;  // size N
+    Vec proj_W_scratch_, proj_W_unscaled_scratch_;  // size l
+    Vec Ax_unscaled_scratch_;                       // size M
+    Vec z_unscaled_scratch_, num_unscaled_scratch_; // size N
+    Vec x_unscaled_scratch_;                        // size N
+    Vec Bx_unscaled_scratch_, y2_unscaled_scratch_; // size l
 
     T inf = std::numeric_limits<T>::infinity();
     T eps_zero = T(100) * std::numeric_limits<T>::epsilon(); // ~2.2e-14 for double
@@ -102,7 +115,7 @@ public:
     int max_iter = 100000000;
     int ssn_max_iter = 100000000;
     int ssn_max_in_iter = 50;
-    T eps_limit = 1e-3*tol;
+    T eps_limit = 1e-3 * tol;
     T mu_limit = 1e9;
     T rho_limit = 1e7;
     T eps_pinf = 1e-1 * tol;
@@ -125,7 +138,10 @@ public:
     int pmm_iter, ssn_iter;
     int krylov_iter = 0, fact = 0, krylov_fail = 0;
     T pmm_tol_achieved, ssn_tol_achieved;
+    ResVec res_norms;
+    ResVec res_norms_scaled;
     bool ldlt_used = false;
+
 
     // Printing
     PrintWhen when = PrintWhen::NEVER;
@@ -171,6 +187,9 @@ public:
     void check_dimensions(const Problem<T>& problem);
     void ruiz_scaling(const Problem<T>& problem, const Vec& Q_diag);
     void set_L_from_LLT(const SpMat& Q);
+    static void build_reformulated_vecs(int n, int m, int N, int M, T inf,
+                                        const Vec& c_in, const Vec& b_in, const Vec& lx_in, const Vec& ux_in,
+                                        Vec& c_out, Vec& b_out, Vec& lx_out, Vec& ux_out);
     void set_default(const Problem<T>& problem);
     void initialize_sols();
     void check_bounds();
@@ -181,10 +200,10 @@ public:
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
     }
-    ResVec compute_residual_norms_inf(const Vec& Ax, const Vec& Bx, const Vec& Qx);
-    T objective_value(const Vec& x_orig);
+    ResVec compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx, ResVec& res_norms_scaled);
+    T objective_value(const Vec& x, const Vec& Qx);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
-    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_tol_arg, int ssn_inner_iters);
+    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_res, int ssn_inner_iters);
     bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
     bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     Solution<T> solve();

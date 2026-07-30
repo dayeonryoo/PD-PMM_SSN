@@ -207,12 +207,12 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         krylov_iter += cg.iterations();
         T err = cg.error();
         if (cg.info() != Eigen::Success) {
-            if (err > T(1e-10)) {
-                std::cout << "[PCG] CG failed to converge with " << err << "\n";
+            if (err > T(1e-8)) {
+                std::cout << "[PCG] CG failed to converge with " << err << ".\n";
                 krylov_fail++;
                 return false;
             }
-            std::cout << "[PCG] CG reached max iterations but error " << err << " <= 1e-10, accepting.\n";
+            std::cout << "[PCG] CG reached max iterations but error " << err << " <= 1e-8, accepting.\n";
         }
         dy_out = std::move(dy_);
         return true;
@@ -283,6 +283,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
 template <typename T> // as a fallback of PCG
 typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2) {
+    std::cout << "[LDLT] solve_using_ldlt is called.\n";
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
 
@@ -686,7 +687,7 @@ void SSN<T>::solve_ssn(const T eps) {
             tau = exact_line_search(x_cur_, y2_cur_, dx, dy2_,
                                     Ax_ssn_, Bx_ssn_, Adx_, Bdx_,
                                     dist_K_u_, dist_W_v_);
-
+            
             if (tau <= T(0)) {
                 linesearch_fail++;
                 _opt = 3;
@@ -749,4 +750,5 @@ void SSN<T>::solve_ssn(const T eps) {
     y2 = y2_cur_;
     opt = _opt;
     iter = _iter;
+    // std::cout << "[SSN result] SSN opt = " << opt << "\n";
 }

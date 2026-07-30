@@ -24,8 +24,11 @@ public:
     const int Q_info;
     const Vec& Q_diag;
     const SpMat& L, A, B;
-    const Vec& D1A_diag, D1B_diag, D2_diag;
+    const Vec& D1A_diag, D1B_diag, D2_ext;
+    const Vec& D2_ext_inv, D1B_diag_inv;
     const Vec& c, b, lx, ux, lw, uw;
+    const Vec& c_orig; // Unscaled objectve vector
+    const T c_scalar; // Global objective constant
     const T obj_const;
     const int n, m, N, M, l;
     Vec x, y1, y2, z;
@@ -135,13 +138,17 @@ public:
 
     SSN(const int Q_info, const Vec& Q_diag, const SpMat& L,
         const SpMat& A, const SpMat& B, const SpMat& A_tr, const SpMat& B_tr,
-        const Vec& c, const Vec& b, const Vec& D1A_diag, const Vec& D1B_diag, const Vec& D2_diag,
-        const Vec& lx, const Vec& ux, const Vec& lw, const Vec& uw, const T obj_const,
+        const Vec& c, const Vec& c_orig, const Vec& b, const T c_scalar, const T obj_const,
+        const Vec& D1A_diag, const Vec& D1B_diag, const Vec& D2_ext,
+        const Vec& D2_ext_inv, const Vec& D1B_diag_inv,
+        const Vec& lx, const Vec& ux, const Vec& lw, const Vec& uw,
         int n, int m, int N, int M, int l,
         T ssn_tol, int ssn_max_in_iter, T eps_pinf, T eps_dinf)
     : Q_info(Q_info), Q_diag(Q_diag), L(L),
       A(A), B(B), A_tr(A_tr), B_tr(B_tr),
-      c(c), b(b), D1A_diag(D1A_diag), D1B_diag(D1B_diag), D2_diag(D2_diag),
+      c(c), b(b), c_orig(c_orig), c_scalar(c_scalar),
+      D1A_diag(D1A_diag), D1B_diag(D1B_diag), D2_ext(D2_ext),
+      D2_ext_inv(D2_ext_inv), D1B_diag_inv(D1B_diag_inv),
       lx(lx), ux(ux), lw(lw), uw(uw), obj_const(obj_const),
       n(n), m(m), N(N), M(M), l(l),
       ssn_tol(ssn_tol), ssn_max_in_iter(ssn_max_in_iter),

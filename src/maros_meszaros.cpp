@@ -27,7 +27,10 @@ using Triplet = Eigen::Triplet<T>;
 int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
-    std::string name = "QCAPRI";
+    // std::string name = "EXDATA";
+    // std::string name = "QGROW7";
+    std::string name = "QSHELL";
+    // std::string name = "UBH1";
     std::string filename = root + name + ".SIF";
 
     std::cout << "==================== Solving " + name << " ====================\n";
