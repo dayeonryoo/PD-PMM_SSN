@@ -44,7 +44,7 @@ public:
     T eps_zero      = T(100)  * std::numeric_limits<T>::epsilon();
     T eps_direction = std::sqrt(std::numeric_limits<T>::epsilon());
     Vec ones_N, ones_M, ones_l;
-    const SpMat& A_tr, B_tr, L_tr;
+    const SpMat& A_tr, B_tr;
     Vec H_diag, H_diag_inv;
     Vec diag_P_K, diag_P_W;
     BoolArr active_W, inactive_W, active_K;
@@ -56,6 +56,10 @@ public:
     RowMajorSpMat B_rm;
     std::vector<Triplet> G_A_trips_;
 
+    // Scratch triplet buffers for rebuild_G() and solve_using_ldlt().
+    std::vector<Triplet> B_act_trips_, B_inact_trips_, G_trips_;
+    std::vector<Triplet> ldlt_trip_;
+
     // Outputs
     int opt, iter, ssn_iter;
     T tol_achieved, obj_val;
@@ -63,23 +67,18 @@ public:
     int linesearch_fail = 0, krylov_fail = 0;
     bool krylov_converged = true;
 
-    // Backtracking linesearch parameters
-    T beta = 0.4995 / 2;
-    T delta = 0.995;
-
     // Conjugate gradient parameters
     T krylov_tol = 1e-12;
-    int krylov_max_in_iter = 200;
+    int krylov_max_in_iter = 100;
 
-    // Iterative refinement of the augmented system solve:
-    // (residual correction on K [dx;dy] = [r1;r2], K = [-H, G^T; G, (1/mu)I]).
+    // Iterative refinement of the augmented system solve.
     int refine_max_iter = 3;
     T refine_rel_tol = 1e-10;
     T refine_abs_tol = 1e-12;
 
-    bool use_ldlt = false;        // Factorize a preconditioner via LDLT
-    int ldlt_decisions_made_ = 0; // choose_ldlt() call count; locked after the first 3 (ratio stabilizes early)
-    bool ldlt_used = false;       // PCG on normal eqn failed so LDLT on KKT system was used at least once
+    bool use_ldlt = false;        // Factorize a preconditioner via LDLT.
+    int ldlt_decisions_made_ = 0; // choose_ldlt() call count; locked after the first 3.
+    bool ldlt_used = false;       // PCG on normal eqn failed so LDLT on KKT system was used at least once.
 
     using CGSolver = Eigen::ConjugateGradient<
         SchurOperator<T>,
@@ -99,25 +98,29 @@ public:
     Vec prev_dx_primal_;
     Vec A_tr_y1_; // cached A^T y1, recomputed once per PMM iteration in update_ssn_system
 
-    // Pre-allocated scratch vectors for solve_ssn / exact_line_search hot loops.
+    // Pre-allocated scratch vectors.
     Vec Ax_ssn_, Bx_ssn_;                     // size M, l (running SpMV products in SSN)
     Vec x_cur_, y2_cur_;                      // size N, l (SSN working iterates)
     Vec u_, v_;                               // size N, l
     Vec new_diag_P_K_, dist_K_u_;             // size N
     Vec new_diag_P_W_, dist_W_v_;             // size l
-    Vec y2_active_W_, y2_inactive_W_;         // size n_active_W, n_inactive_W
-    Vec dist_W_v_active_, dist_W_v_inactive_; // size n_active_W, n_inactive_W
-    Vec dy2_inactive_W_;                      // size n_inactive_W
+    Vec y2_active_W_, y2_inactive_W_;         // size l (set to max size)
+    Vec dist_W_v_active_, dist_W_v_inactive_; // size l (set to max size)
+    Vec dy2_inactive_W_;                      // size l (set to max size)
     Vec r1_, r2_;                             // size N, M+n_active_W
     Vec dxdy_;                                // size N+M+n_active_W
     Vec dy2_;                                 // size l
     Vec Adx_, Bdx_;                           // size M, l
-    Vec grad_;                              // size N+l
-    Vec Qx_unscaled_;                         // size N; Q_diag⊙x_new, Ruiz-unscaled (Q_info != 0 only)
-    Vec A_tr_y1_unscaled_;                    // size N; A_tr_y1_, Ruiz-unscaled
-    Vec grad_x_unscaled_;                   // size N; grad_L's x-block, Ruiz-unscaled
-    Vec grad_y2_unscaled_;                  // size l; grad_L's y2-block, Ruiz-unscaled
+    Vec grad_L_;                              // size N+l
+    Vec grad_dist_K_, grad_res_p_;            // size N, M
+    Vec grad_dist_W_;                         // size l
+    Vec grad_Atr_resp_, grad_Btr_distW_, grad_A_tr_y_, grad_Qx_; // size N
+    Vec ls_s_, ls_dv_;                        // size N, l
+    Vec ls_v_;                                // size l
     std::vector<Breakpoint> breakpoints_;     // reused across exact_line_search calls
+    Vec cg_Hinv_r1_, cg_rhs_;                  // size s = G.rows() (M+n_active_W)
+    Vec cg_dx_;                                // size n = N
+    Vec ldlt_solve_rhs_;                       // size n+s
 
     // Stored LDLT factorization for the KKT system [-H, G^T; G, (1/mu)I].
     // ldlt_pattern_dirty_: true when K's dimension changed (n_active_W changed), requires analyzePattern.
@@ -133,7 +136,7 @@ public:
     SpMat K_ldlt_;
     bool K_ldlt_built_ = false;
 
-    SSN(const int Q_info, const Vec& Q_diag, const SpMat& L, const SpMat& L_tr,
+    SSN(const int Q_info, const Vec& Q_diag, const SpMat& L,
         const SpMat& A, const SpMat& B, const SpMat& A_tr, const SpMat& B_tr,
         const Vec& c, const Vec& c_orig, const Vec& b, const T c_scalar, const T obj_const,
         const Vec& D1A_diag, const Vec& D1B_diag, const Vec& D2_ext,
@@ -141,7 +144,7 @@ public:
         const Vec& lx, const Vec& ux, const Vec& lw, const Vec& uw,
         int n, int m, int N, int M, int l,
         T ssn_tol, int ssn_max_in_iter, T eps_pinf, T eps_dinf)
-    : Q_info(Q_info), Q_diag(Q_diag), L(L), L_tr(L_tr),
+    : Q_info(Q_info), Q_diag(Q_diag), L(L),
       A(A), B(B), A_tr(A_tr), B_tr(B_tr),
       c(c), b(b), c_orig(c_orig), c_scalar(c_scalar),
       D1A_diag(D1A_diag), D1B_diag(D1B_diag), D2_ext(D2_ext),
@@ -158,10 +161,17 @@ public:
         delta_x = Vec::Zero(N);
         delta_y2 = Vec::Zero(l);
 
-        // Convert column-major B to row-major once for efficient row-selective access.
-        B_rm = B;
+        y2_active_W_.resize(l);
+        y2_inactive_W_.resize(l);
+        dist_W_v_active_.resize(l);
+        dist_W_v_inactive_.resize(l);
+        dy2_inactive_W_.resize(l);
 
-        // Cache A's triplets (rows 0..M-1 of G are always A — A is const).
+        grad_L_.resize(N + l);
+
+        B_rm = B; // Row-major B
+
+        // Cache A's triplets for G.
         G_A_trips_.reserve(A.nonZeros());
         for (int col = 0; col < A.outerSize(); ++col)
             for (typename SpMat::InnerIterator it(A, col); it; ++it)
@@ -183,9 +193,9 @@ public:
         this->delta_y1 = delta_y1;
         this->delta_z = delta_z;
 
-        ldlt_numeric_dirty_ = true;    // mu, rho may have changed
-        A_tr_y1_ = A_tr * y1; // y1 is fixed for the entire SSN run; cache A^T y1 once
-        linesearch_fail = 0; // Reset line search failure count for this SSN iteration
+        ldlt_numeric_dirty_ = true;  // mu, rho may have changed.
+        A_tr_y1_ = A_tr * y1;        // y1 is fixed for the entire SSN run; cache A^T y1 once.
+        linesearch_fail = 0;         // Reset line search failure count for this SSN iteration.
         cg.preconditioner().reset_smw_fail_streak(); // Reset SMW suppression
     }
     static inline T inf_norm(const Vec& v) {
@@ -210,18 +220,13 @@ public:
             subgrad[i] = (include_bd ? (ui >= li && ui <= hi) : (ui > li && ui < hi)) ? T(1) : T(0);
         }
     }
-    T compute_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
-    Vec compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new, T& grad_norm);
-    void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
+    const Vec& compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
+    void split_by_mask(const Vec& u, const BoolArr& mask, int t, Vec& u_sel, Vec& u_unsel);
     void rebuild_G();
-    SpMat scale_columns(const SpMat& M, const Vec& d);
     void retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);
-    SpMat stack_rows(const SpMat& A, const SpMat& B);
     bool choose_ldlt(const SpMat& G, const BoolArr& active_K);
     Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool use_ldlt);
     Vec solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
-    T backtracking_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
-                               const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                         const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx,
                         const Vec& dist_K_u, const Vec& dist_W_v);

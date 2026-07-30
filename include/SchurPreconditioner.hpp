@@ -95,8 +95,7 @@ public:
         }
 
         // ---- SMW Application Phase ----
-        // r_pad_ deleted positions are permanently zero (set once at setup); no setZero needed.
-        // A rows: block copy (vectorizable). Retained W rows: scatter.
+
         r_pad_.head(M_rows_) = b.head(M_rows_);
         for (int i = 0; i < static_cast<int>(retained_old_rows_.size()); ++i)
             r_pad_(retained_old_rows_[i]) = b(retained_new_rows_[i]);
@@ -112,18 +111,18 @@ public:
             u_base_ = std::get<CholSolver>(active_solver_).llt.solve(r_pad_);
         }
 
-        // Lambda = g_all - V_all^T u_base, computed structurally without building V_all.
-        //   E_-^T u_base  (h scalar gathers)
+        // Lambda = g_all - V_all^T u_base.
+        //   E_-^T u_base
         for (int k = 0; k < h_; ++k)
             Lambda_all_(k) = -u_base_(deleted_old_rows_[k]);
-        //   U^T u_base  (p sparse dot products with G_old_ columns)
+        //   U^T u_base 
         for (int j = 0; j < p_; ++j) {
             T val = T(0);
             for (typename SpMat::InnerIterator it(G_old_, delta_K_idx_[j]); it; ++it)
                 val += it.value() * u_base_(it.row());
             Lambda_all_(h_ + j) = -val;
         }
-        //   V_+^T u_base - r_2  (dense q-block mat-vec; r_2 = b at added_new_rows_ positions)
+        //   V_+^T u_base - r_2
         for (int j = 0; j < q_; ++j)
             Lambda_all_(h_ + p_ + j) = b(added_new_rows_[j]);
         if (q_ > 0)
@@ -137,7 +136,7 @@ public:
         z_base_  = u_base_;
         z_base_.noalias() -= Y_all_ * Lambda_all_;
 
-        // Assemble z_new. A rows: block copy. Retained W: scatter. Added W: from Lambda.
+        // Assemble z_new.
         z_new_.head(M_rows_) = z_base_.head(M_rows_);
         for (int i = 0; i < static_cast<int>(retained_old_rows_.size()); ++i)
             z_new_(retained_new_rows_[i]) = z_base_(retained_old_rows_[i]);
@@ -155,7 +154,16 @@ public:
     bool used_smw()  const { return use_smw_; }
 
     void force_full_rebuild() { skip_smw_ = true; base_dirty_ = true; }
-    void record_smw_rebuild() { smw_fail_streak_++; smw_fail_total_++; }
+    void record_smw_rebuild() {
+        smw_fail_streak_++;
+        smw_fail_total_++;
+        if (smw_fail_streak_ >= kMaxSmwFailStreak) {
+            SpMat().swap(G_old_);
+            H_diag_old_.resize(0);
+            active_K_old_.resize(0);
+            active_W_old_.resize(0);
+        }
+    }
     void reset_smw_fail_streak() { smw_fail_streak_ = 0; }
     bool smw_suppressed() const {
         if (smw_fail_streak_ >= kMaxSmwFailStreak) return true;
@@ -165,7 +173,7 @@ public:
 
     // Free all factorization/SMW state once the caller has permanently switched away from PCG.
     void release() {
-        active_solver_.template emplace<std::monostate>(); // drops CholSolver/LdltSolver factorizations
+        active_solver_.template emplace<std::monostate>();
 
         SpMat().swap(G_old_);
         H_diag_old_.resize(0);
@@ -178,6 +186,9 @@ public:
         std::vector<int>().swap(added_new_rows_);
         std::vector<int>().swap(added_W_src_);
         std::vector<int>().swap(delta_K_idx_);
+        std::vector<int>().swap(ldlt_act_idx_);
+        std::vector<Triplet>().swap(ldlt_build_trips_);
+        std::vector<Triplet>().swap(chol_build_trips_);
         V_plus_.resize(0, 0);
         Y_all_.resize(0, 0);
         S_lambda_lu_ = Eigen::FullPivLU<Mat>();
@@ -211,10 +222,10 @@ private:
         // Case 1. Skip build() and reuse the cached factorization via low-rank SMW update.
         if (initialized_ && info_ == Eigen::Success && try_build_smw())
             return;
+        V_plus_.resize(0, 0);
+        Y_all_.resize(0, 0);
 
         // Case 2. Full factorization.
-        // Only one of {Cholesky-on-Schur-complement, LDLT-on-augmented-KKT} is needed at a time;
-        // switching alternative frees the other one's memory (emplace destroys the previous one).
         if (use_ldlt_) {
             if (!std::holds_alternative<LdltSolver>(active_solver_))
                 active_solver_.template emplace<LdltSolver>();
@@ -236,36 +247,36 @@ private:
         const Eigen::Index n = G.cols();
 
         // Collect active K indices.
-        std::vector<int> act_idx;
-        act_idx.reserve(n);
+        ldlt_act_idx_.clear();
+        ldlt_act_idx_.reserve(n);
         for (Eigen::Index i = 0; i < n; ++i)
-            if (active_K(i)) act_idx.push_back(static_cast<int>(i));
-        const int n_act = static_cast<int>(act_idx.size());
+            if (active_K(i)) ldlt_act_idx_.push_back(static_cast<int>(i));
+        const int n_act = static_cast<int>(ldlt_act_idx_.size());
 
         // Build P_hat of size (n_act + s) x (n_act + s).
-        std::vector<Triplet> trips;
-        trips.reserve(n_act + 2 * static_cast<int>(G.nonZeros()) + static_cast<int>(s));
+        ldlt_build_trips_.clear();
+        ldlt_build_trips_.reserve(n_act + 2 * static_cast<int>(G.nonZeros()) + static_cast<int>(s));
 
         // Top-left block: -H_act (diagonal, n_act x n_act).
         for (int k = 0; k < n_act; ++k)
-            trips.emplace_back(k, k, -H_diag(act_idx[k]));
+            ldlt_build_trips_.emplace_back(k, k, -H_diag(ldlt_act_idx_[k]));
 
         // Off-diagonal blocks: G_act (s x n_act) and G_act^T (n_act x s).
         for (int k = 0; k < n_act; ++k)
-            for (typename SpMat::InnerIterator it(G, act_idx[k]); it; ++it) {
+            for (typename SpMat::InnerIterator it(G, ldlt_act_idx_[k]); it; ++it) {
                 const int row = static_cast<int>(it.row());
-                trips.emplace_back(n_act + row, k,          it.value()); // G_act
-                trips.emplace_back(k,           n_act + row, it.value()); // G_act^T
+                ldlt_build_trips_.emplace_back(n_act + row, k,          it.value()); // G_act
+                ldlt_build_trips_.emplace_back(k,           n_act + row, it.value()); // G_act^T
             }
 
         // Bottom-right block: (1/mu) I_s.
         for (Eigen::Index i = 0; i < s; ++i)
-            trips.emplace_back(n_act + i, n_act + i, T(1) / mu_);
+            ldlt_build_trips_.emplace_back(n_act + i, n_act + i, T(1) / mu_);
 
         auto& sol = std::get<LdltSolver>(active_solver_);
 
         sol.P_hat.resize(n_act + s, n_act + s);
-        sol.P_hat.setFromTriplets(trips.begin(), trips.end());
+        sol.P_hat.setFromTriplets(ldlt_build_trips_.begin(), ldlt_build_trips_.end());
         sol.P_hat.makeCompressed();
 
         if (pattern_dirty_) {
@@ -282,7 +293,7 @@ private:
         s_current_ = static_cast<int>(s);
         base_dirty_ = false;
 
-        snapshot_state();
+        if (!smw_suppressed()) snapshot_state();
     }
 
     // Build P = G E G^T + (1/mu) I (or shift its mu diagonal), then factorize with Cholesky.
@@ -305,13 +316,13 @@ private:
         if (base_dirty_) {
             // Rebuild G E G^T.
             assert(H_diag.minCoeff() > T(0));
-            std::vector<Triplet> trips;
-            trips.reserve(n);
+            chol_build_trips_.clear();
+            chol_build_trips_.reserve(n);
             for (Eigen::Index i = 0; i < n; ++i)
                 if (active_K(i))
-                    trips.emplace_back(i, i, T(1) / H_diag(i));
+                    chol_build_trips_.emplace_back(i, i, T(1) / H_diag(i));
             SpMat E(n, n);
-            E.setFromTriplets(trips.begin(), trips.end());
+            E.setFromTriplets(chol_build_trips_.begin(), chol_build_trips_.end());
             E.makeCompressed();
 
             sol.P = G * E * G_tr;
@@ -322,9 +333,6 @@ private:
             sol.P.makeCompressed();
         } else {
             // G E G^T unchanged; only mu changed: shift the (1/mu) I diagonal by delta.
-            // Relies on sol.P already holding the prior build; base_dirty_ is always set when
-            // active_solver_ switches alternative (see build()), so this only skips a rebuild
-            // when sol.P is genuinely the matrix built last time, not a freshly emplaced shell.
             assert(sol.P.rows() == s && sol.P.cols() == s);
             const T delta = (mu_at_last_fact_ - mu_) / (mu_ * mu_at_last_fact_);
             for (Eigen::Index i = 0; i < s; ++i)
@@ -343,7 +351,8 @@ private:
         use_ldlt_at_last_fact_ = false;
         s_current_ = static_cast<int>(s);
 
-        snapshot_state();
+        if (!smw_suppressed())
+            snapshot_state();
     }
 
     // ------ SMW low-rank update ------
@@ -398,7 +407,7 @@ private:
 
         h_ = h; p_ = p; q_ = q; s_old_ = s_old;
 
-        // ---- Build V_plus_ (s_old × q) via sparse column accumulation ----
+        // ---- Build V_plus_ (s_old × q) ----
         // For each added W constraint j:
         //   V_plus_[:,j] = sum_{i in B_j, active_K[i]} (b_ji / H_diag[i]) * G_old_[:,i].
         V_plus_.setZero(s_old, q);
@@ -432,7 +441,6 @@ private:
         }
 
         // Block 3: W_+ = B_+ E_new B_+^T + (1/mu) I  (q×q).
-        // For each row j, build E_new*b_j^T in e_new_b (scratch), then dot with all k >= j rows.
         {
             Vec e_new_b = Vec::Zero(N);
             std::vector<int> touched;
@@ -476,7 +484,7 @@ private:
                 }
             };
 
-            // Cols 0..h-1: P_old^-1 e_{del_k}  (unit-vector RHS)
+            // Cols 0..h-1: P_old^-1 e_{del_k}
             for (int k = 0; k < h; ++k) {
                 if (k > 0) tmp(deleted_old_rows_[k - 1]) = T(0);
                 tmp(deleted_old_rows_[k]) = T(1);
@@ -484,7 +492,7 @@ private:
             }
             if (h > 0) tmp(deleted_old_rows_[h - 1]) = T(0);
 
-            // Cols h..h+p-1: P_old^-1 G_old_col_j  (sparse RHS, set/clear nonzeros only)
+            // Cols h..h+p-1: P_old^-1 G_old_col_j 
             for (int j = 0; j < p; ++j) {
                 for (typename SpMat::InnerIterator it(G_old_, delta_K_idx_[j]); it; ++it)
                     tmp(it.row()) = it.value();
@@ -493,7 +501,7 @@ private:
                     tmp(it.row()) = T(0);
             }
 
-            // Cols h+p..rank-1: P_old^-1 V_plus_  (dense block multi-RHS)
+            // Cols h+p..rank-1: P_old^-1 V_plus_ 
             if (q > 0) {
                 if (use_ldlt_) {
                     Mat padded_V = Mat::Zero(n_act_ + s_old, q);
@@ -505,19 +513,19 @@ private:
             }
         }
 
-        // ---- Capacitance matrix S_Lambda = M_sub - V_all^T Y_all, structured ----
+        // ---- Capacitance matrix S_Lambda = M_sub - V_all^T Y_all ----
         Mat S_Lambda = M_sub;
 
-        // Rows 0..h-1: -(E_-)^T Y_all_ = -Y_all_.row(del_k)  (row extractions, O(h*rank))
+        // Rows 0..h-1: -(E_-)^T Y_all_ = -Y_all_.row(del_k)
         for (int k = 0; k < h; ++k)
             S_Lambda.row(k) -= Y_all_.row(deleted_old_rows_[k]);
 
-        // Rows h..h+p-1: -(G_old_col_j)^T Y_all_  (sparse accumulation, O(nnz_col * rank))
+        // Rows h..h+p-1: -(G_old_col_j)^T Y_all_
         for (int j = 0; j < p; ++j)
             for (typename SpMat::InnerIterator it(G_old_, delta_K_idx_[j]); it; ++it)
                 S_Lambda.row(h + j) -= it.value() * Y_all_.row(it.row());
 
-        // Rows h+p..rank-1: -V_plus_^T Y_all_  (dense q×rank block product)
+        // Rows h+p..rank-1: -V_plus_^T Y_all_
         if (q > 0)
             S_Lambda.bottomRows(q).noalias() -= V_plus_.transpose() * Y_all_;
 
@@ -526,9 +534,9 @@ private:
         if (S_lambda_lu_.rank() < rank)
             return false;  // near-singular capacitance matrix; fall back to full rebuild
 
-        // ---- Pre-allocate hot-loop vectors; set deleted r_pad_ positions to zero once ----
+        // ---- Pre-allocate hot-loop vectors ----
         const int s_new = s_old - h + q;
-        r_pad_.setZero(s_old);       // deleted positions stay 0 permanently
+        r_pad_.setZero(s_old);
         u_base_.resize(s_old);
         Lambda_all_.resize(rank);
         lambda_work_.resize(rank);
@@ -556,8 +564,8 @@ private:
     const BoolArr*       active_W_ = nullptr;
     const RowMajorSpMat* B_rm_     = nullptr;
     T mu_ = T(1);
-    int M_rows_    = -1;  // number of equality-constraint rows; constant once set
-    int s_current_ = -1;  // current row count of G (tracks dimension changes)
+    int M_rows_    = -1;  // number of equality-constraint rows
+    int s_current_ = -1;  // current row count of G
 
     // ------ Formation state ------
     bool initialized_      = false;
@@ -569,11 +577,8 @@ private:
 
     // ------ Cholesky factorization ------
     bool use_ldlt_ = false;
-    bool use_ldlt_at_last_fact_ = false; // which alternative of active_solver_ is currently valid
+    bool use_ldlt_at_last_fact_ = false;
 
-    // Only one of {Cholesky-on-Schur-complement, LDLT-on-augmented-KKT} is ever needed at a time;
-    // holding them in a variant means switching factorization method frees the other one's memory
-    // automatically (emplace<T>() destroys whatever alternative was previously active).
     struct CholSolver {
         SpMat P;
         Eigen::SimplicialLLT<SpMat> llt;
@@ -588,6 +593,10 @@ private:
     Eigen::ComputationInfo info_ = Eigen::Success;
     int fact_count_ = 0;
 
+    std::vector<int> ldlt_act_idx_;
+    std::vector<Triplet> ldlt_build_trips_;
+    std::vector<Triplet> chol_build_trips_;
+
     // ------ SMW low-rank update ------
     // Control & failure tracking
     bool skip_smw_        = false;
@@ -596,11 +605,13 @@ private:
     int  smw_fail_streak_ = 0;
     int  smw_fail_total_  = 0;
     static constexpr int    kMaxSmwFailStreak = 5;
+
     // Snapshots from last full rebuild (input to try_build_smw)
     SpMat   G_old_;
     Vec     H_diag_old_;
     BoolArr active_K_old_;
     BoolArr active_W_old_;
+
     // Setup results (output of try_build_smw, consumed by solve)
     int s_old_ = 0, h_ = 0, p_ = 0, q_ = 0;
     std::vector<int> deleted_old_rows_;
@@ -613,7 +624,7 @@ private:
     Mat Y_all_;
     Eigen::FullPivLU<Mat> S_lambda_lu_;
 
-    // ------ Application: solve-time working storage (mutable for const solve) ------
+    // ------ Application: solve-time working storage ------
     mutable Vec r_pad_, u_base_, Lambda_all_, lambda_work_, z_base_, z_new_, direct_result_;
     mutable Vec ldlt_rhs_;
 };

@@ -40,8 +40,8 @@ int main() {
     PDPMMdata<T> pd = parser.to_pdpmm(model);
 
     T tol = 1e-6;
-    int max_iter = 800;
-    double time_limit = 30.0; // in seconds
+    int max_iter = 1000;
+    double time_limit = 60.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
@@ -76,21 +76,11 @@ int main() {
 }
 */
 
+
 // ----------------------- Running Netlib problems -----------------------
 void run_Netlib() {
 
     // Filenames and objective values of Netlib LPs
-    // std::map<std::string,double> LPs = {
-    //     // {"DFL001", 1.12664E+07},
-    //     // {"FIT2P", 6.8464293232E+04},
-    //     // {"GREENBEA", -7.2462405908E+07},
-    //     // {"LOTFI", -2.5264706062E+01},
-    //     // {"MAROS-R7", 1.4971851665E+06},
-    //     {"PILOT87", 3.0171072827E+02},
-    //     {"SC205", -5.2202061212E+01}
-    //     // {"SCFXM2", 3.6660261565E+04}
-    // };
-
     std::map<std::string,double> LPs = {
         {"25FV47", 5.5018458883E+03},
         {"80BAU3B", 9.8723216072E+05},
@@ -197,13 +187,13 @@ void run_Netlib() {
     // Parameters in common
     T tol = 1e-6;
     int max_iter = 1000000000;
-    double time_limit = 600.0; // in seconds
+    double time_limit = 60.0; // in seconds
 
-    PrintWhen when = PrintWhen::EVERY10;
+    PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0505netlib.csv";
+    std::string csv_path = root + "results/0727netlib.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : LPs) {
@@ -229,27 +219,23 @@ void run_Netlib() {
             std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
-            // Chosen system:
-            std::string system = "S";
-            // std::string system = "M"; // MINRES
-
             // Solve the LP
             Solution<T> sol = solver.solve();
-            sol.print_summary();
+            // sol.print_summary();
 
             // Check convergence
             bool diverged = false;
-            if (sol.opt == 0) {
-                std::cout << "Solver converged!\n";
-            } else if (sol.opt == 3) {
-                std::cout << "Lineserach failed. Solver terminated.\n";
-            } else {
-                std::cout << "Solver hit the max iteration before converging.\n";
-            }
-            if (sol.pmm_tol_achieved > 1e0) {
-                diverged = true;
-                std::cout << "Solver possibly diverged.\n";
-            }
+            // if (sol.opt == 0) {
+            //     std::cout << "Solver converged!\n";
+            // } else if (sol.opt == 3) {
+            //     std::cout << "Lineserach failed. Solver terminated.\n";
+            // } else {
+            //     std::cout << "Solver hit the max iteration before converging.\n";
+            // }
+            // if (sol.pmm_tol_achieved > 1e0) {
+            //     diverged = true;
+            //     std::cout << "Solver possibly diverged.\n";
+            // }
 
             // Compare
             T abs_err = std::abs(sol.obj_val - ref_obj_val);
@@ -258,8 +244,10 @@ void run_Netlib() {
             bool abs_agree = abs_err < err_tol;
             bool rel_agree = rel_err < err_tol;
             bool agree = abs_agree || rel_agree;
-            if (agree) std::cout << "\nCORRECT! Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n";
-            else std::cout << "\nIncorrect Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n";
+            // if (agree) std::cout << "\nCORRECT! Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n";
+            // else std::cout << "\nIncorrect Absolute error = " << abs_err << ", Relative error = " << rel_err << "\n";
+
+            std::string system = solver.ldlt_used? "L" : "S";
 
             // Store result
             TestResult<T> result = {
@@ -268,7 +256,7 @@ void run_Netlib() {
                 abs_err, rel_err, sol.obj_val,
                 sol.pmm_iter, sol.ssn_iter, sol.krylov_iter, sol.fact, sol.smw_count,
                 sol.pmm_tol_achieved, sol.ssn_tol_achieved,
-                sol.run_time, sol.linesearch_fail
+                sol.run_time, sol.linesearch_fail, sol.krylov_fail
             };
             append_csv_result(csv_path, result);
 
@@ -277,9 +265,10 @@ void run_Netlib() {
             TestResult<T> result = {
                 e.what(),
                 false, -1, false, name,
+                -1.0, -1.0, -1.0,
+                -1, -1, -1, -1, -1,
                 -1.0, -1.0,
-                -1.0, -1, -1, -1, -1, -1,
-                -1.0, -1.0, -1.0
+                -1.0, -1, -1
             };
             append_csv_result(csv_path, result);
         }
@@ -330,11 +319,11 @@ void run_Netlib_infeas() {
     int max_iter = 10000000;
     double time_limit = 60.0; // in seconds
 
-    PrintWhen when = PrintWhen::EVERY10;
+    PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0513infeas.csv";
+    std::string csv_path = root + "results/0727infeas.csv";
 
     // Write header
     if (!std::filesystem::exists(std::filesystem::path(csv_path))
@@ -386,7 +375,7 @@ void run_Netlib_infeas() {
                 << name << "," << sol.pmm_iter << "," << sol.ssn_iter << ","
                 << sol.krylov_iter << "," << sol.fact << ","
                 << sol.pmm_tol_achieved << "," << sol.ssn_tol_achieved << ","
-                << sol.run_time << "," << sol.linesearch_fail << "\n";
+                << sol.run_time << "," << sol.linesearch_fail << "," << sol.krylov_fail << "\n";
             csv.close();
 
         } catch (const std::exception& e) {
@@ -395,7 +384,7 @@ void run_Netlib_infeas() {
             csv << e.what() << "," << 0 << "," << -1 << ","
                 << name << "," << -1 << "," << -1 << ","
                 << -1 << "," << -1 << ","
-                << -1.0 << "," << -1.0 << "," << -1.0 << "," << 0 << "\n";
+                << -1.0 << "," << -1.0 << "," << -1.0 << "," << 0 << 0 << "\n";
             csv.close();
         }
     }
@@ -406,8 +395,8 @@ void run_Netlib_infeas() {
 
 int main() {
 
-    // run_Netlib_infeas();
-    // run_Netlib();
+    run_Netlib_infeas();
+    run_Netlib();
 
     // Filenames and objective values of Maros/Meszaros QPs
     static const std::map<std::string, double> QPs = {
@@ -557,7 +546,7 @@ int main() {
     // Parameters
     T tol = 1e-6;
     int max_iter = 100000;
-    double time_limit = 30.0; // in seconds
+    double time_limit = 60.0; // in seconds
 
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
@@ -565,7 +554,7 @@ int main() {
     int cooldown_sec = 3;      // seconds to sleep between problems (prevents CPU throttling)
 
     // Solver result
-    std::string csv_path = root + "results/0716mm.csv";
+    std::string csv_path = root + "results/0727mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
