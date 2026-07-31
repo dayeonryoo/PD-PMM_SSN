@@ -438,7 +438,9 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
 
     // Set up scaled and unscaled data, reformulated in case of general non-diagonal Q.
     build_reformulated_vecs(n, m, N, M, inf, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz, c, b, lx, ux);
-    build_reformulated_vecs(n, m, N, M, inf, problem.c, problem.b, problem.lx, problem.ux, c_orig, b_orig, lx_orig, ux_orig);
+    // c_orig is set in the constructor.
+    Vec place_holder;
+    build_reformulated_vecs(n, m, N, M, inf, problem.c, problem.b, problem.lx, problem.ux, place_holder, b_orig, lx_orig, ux_orig);
 
     // lw, uw remain the same for any Q
     if (problem.lw.size() == 0) {
@@ -463,8 +465,6 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
     D2_ext_inv = D2_ext.cwiseInverse();
     D1B_diag_inv = D1B_diag.cwiseInverse();
 
-    std::cout << "[Ruiz] ||c_orig|| = " << c_orig.norm() << ", ||c_ruiz|| = " << c_ruiz.norm() << "\n";
-    std::cout << "[Ruiz] ||D1A_diag|| = " << D1A_diag.norm() << ", ||D1B_diag|| = " << D1B_diag.norm() << ", ||D2_diag|| = " << D2_diag.norm() << "\n";
 }
 
 template <typename T>
@@ -590,8 +590,8 @@ typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_unscaled_inf_norms(cons
     num_unscaled.noalias() = num.cwiseProduct(D2_ext_inv);
     T denom_unscaled = std::max(inf_norm(c_orig), inf_norm(z_unscaled));
     if (Q_info != 0) denom_unscaled = std::max(denom_unscaled, inf_norm(Qx.cwiseProduct(D2_ext_inv)));
-    if (M != 0)      denom_unscaled = std::max(denom_unscaled, (T(1) / c_scalar) * inf_norm(A_tr_y1.cwiseProduct(D2_ext_inv)));
-    if (l != 0)      denom_unscaled = std::max(denom_unscaled, (T(1) / c_scalar) * inf_norm(B_tr_y2.cwiseProduct(D2_ext_inv)));
+    if (M != 0)      denom_unscaled = std::max(denom_unscaled, inf_norm(A_tr_y1.cwiseProduct(D2_ext_inv)));
+    if (l != 0)      denom_unscaled = std::max(denom_unscaled, inf_norm(B_tr_y2.cwiseProduct(D2_ext_inv)));
     denom_unscaled += T(1);
     T res_d_unscaled = inf_norm(num_unscaled) / denom_unscaled;
 
@@ -609,7 +609,7 @@ typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_unscaled_inf_norms(cons
         Vec& Bx_unscaled = Bx_unscaled_scratch_;
         Vec& y2_unscaled = y2_unscaled_scratch_;
         Bx_unscaled.noalias() = Bx.cwiseProduct(D1B_diag_inv);
-        y2_unscaled.noalias() = (T(1) / c_scalar) * y2.cwiseProduct(D1B_diag);
+        y2_unscaled.noalias() = y2.cwiseProduct(D1B_diag);
         Vec& proj_W_unscaled = proj_W_unscaled_scratch_;
         proj_W_unscaled.noalias() = proj(Bx_unscaled - y2_unscaled, lw_orig, uw_orig);
         compl_w_unscaled = inf_norm(Bx_unscaled - proj_W_unscaled) / (T(1) + std::max(inf_norm(y2_unscaled), inf_norm(proj_W_unscaled)));
@@ -624,7 +624,8 @@ template <typename T>
 T SSN_PMM<T>::objective_value(const Vec& x_orig) {
     T obj_val = obj_const + c_orig.dot(x_orig);
     if (Q_info != 0) {
-        obj_val += T(0.5) * x_orig.dot(Q * x_orig);
+        Vec Qx = Q.template selfadjointView<Eigen::Lower>() * x_orig;
+        obj_val += T(0.5) * x_orig.dot(Qx);
     }
     return obj_val;
 }
@@ -781,11 +782,11 @@ Solution<T> SSN_PMM<T>::solve() {
     auto solving_start = std::chrono::steady_clock::now();
 
     // Build the Newton system
-    SSN<T> NS(Q_info, Q_diag, L, L_tr,
-            A, B, A_tr, B_tr, c, c_orig, b,
-            c_scalar, obj_const, D1A_diag, D1B_diag, D2_ext,
+    SSN<T> NS(Q_info, Q_diag, L,
+            A, B, A_tr, B_tr, c, b,
             D2_ext_inv, D1B_diag_inv,
-            lx, ux, lw, uw, n, m, N, M, l,
+            lx, ux, lw, uw,
+            n, m, N, M, l,
             ssn_tol, ssn_max_in_iter,
             eps_pinf, eps_dinf);
 
@@ -829,7 +830,7 @@ Solution<T> SSN_PMM<T>::solve() {
 
         // Compute Ax, Bx, Qx for the new x.
         if (M > 0) Ax_scratch_.noalias() = A * x; else Ax_scratch_.setZero();
-        if (l  > 0) Bx_scratch_.noalias() = B * x; else Bx_scratch_.setZero();
+        if (l > 0) Bx_scratch_.noalias() = B * x; else Bx_scratch_.setZero();
         if (Q_info != 0) Qx_scratch_.noalias() = Q_diag.cwiseProduct(x); else Qx_scratch_.setZero();
         Adx_scratch_.noalias() = Ax_scratch_ - Ax_old_scratch_;
         Bdx_scratch_.noalias() = Bx_scratch_ - Bx_old_scratch_;

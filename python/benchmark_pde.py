@@ -209,7 +209,7 @@ def pdpmm_to_qpalm(pd: dict):
 # Solver wrappers
 # ---------------------------------------------------------------------------
 
-def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
+def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
     Q_upper, q, C, bmin, bmax, n, m_total = qpalm_data
 
     data      = qpalm.Data(n, m_total)
@@ -233,7 +233,9 @@ def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
     info = solver.info
     return {
         "status":       int(info.status_val),
-        "obj_val":      float(info.objective),
+        # QPALM's Data has no constant-term field; it only ever reports 0.5 x'Qx + q'x,
+        # so obj_const must be added back explicitly to compare against SSN-PMM's obj_val.
+        "obj_val":      float(info.objective) + obj_const,
         "run_time":     float(info.run_time),
         "outer_iter":   int(info.iter_out),
         "inner_iter":   int(info.iter),
@@ -241,7 +243,7 @@ def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
     }
 
 
-def run_osqp(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
+def run_osqp(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
     Q_upper, q, C, bmin, bmax, *_ = qpalm_data
 
     prob = osqp.OSQP()
@@ -258,7 +260,8 @@ def run_osqp(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
 
     return {
         "status":       int(res.info.status_val),
-        "obj_val":      float(res.info.obj_val),
+        # OSQP's setup() has no constant-term argument either; same fix as run_qpalm.
+        "obj_val":      float(res.info.obj_val) + obj_const,
         "run_time":     float(res.info.run_time),
         "outer_iter":   int(res.info.iter),
         "inner_iter":   0,
@@ -287,7 +290,7 @@ def _worker_qpalm(problem, nc, alpha1, alpha2, tol, time_limit, conn):
     try:
         pd_data = ssn_pmm_bind.generate_pde_problem_params(problem, nc, alpha1, alpha2)
         qpalm_data = pdpmm_to_qpalm(pd_data)
-        result["res"] = run_qpalm(qpalm_data, tol, time_limit)
+        result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)
@@ -299,7 +302,7 @@ def _worker_osqp(problem, nc, alpha1, alpha2, tol, time_limit, conn):
     try:
         pd_data = ssn_pmm_bind.generate_pde_problem_params(problem, nc, alpha1, alpha2)
         qpalm_data = pdpmm_to_qpalm(pd_data)
-        result["res"] = run_osqp(qpalm_data, tol, time_limit)
+        result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)

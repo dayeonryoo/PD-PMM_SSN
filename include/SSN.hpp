@@ -24,12 +24,8 @@ public:
     const int Q_info;
     const Vec& Q_diag;
     const SpMat& L, A, B;
-    const Vec& D1A_diag, D1B_diag, D2_ext;
-    const Vec& D2_ext_inv, D1B_diag_inv;
+    const Vec& D2_ext_inv, D1B_diag_inv; // for unscaling the SSN termination criterion
     const Vec& c, b, lx, ux, lw, uw;
-    const Vec& c_orig; // Unscaled objectve vector
-    const T c_scalar; // Global objective constant
-    const T obj_const;
     const int n, m, N, M, l;
     Vec x, y1, y2, z;
     Vec delta_x, delta_y1, delta_y2, delta_z;
@@ -39,11 +35,10 @@ public:
 
     // Useful vectors and matrices
     T inf = std::numeric_limits<T>::infinity();
-    // eps_zero: relative tolerance for boundary/slope checks.
-    // eps_direction: threshold for skipping near-zero Newton step components.
-    T eps_zero      = T(100)  * std::numeric_limits<T>::epsilon();
-    T eps_direction = std::sqrt(std::numeric_limits<T>::epsilon());
+    T eps_zero      = T(100)  * std::numeric_limits<T>::epsilon();  // relative tolerance for boundary/slope checks.
+    T eps_direction = std::sqrt(std::numeric_limits<T>::epsilon()); // threshold for skipping near-zero Newton step components.
     Vec ones_N, ones_M, ones_l;
+
     const SpMat& A_tr, B_tr;
     Vec H_diag, H_diag_inv;
     Vec diag_P_K, diag_P_W;
@@ -51,10 +46,8 @@ public:
     int n_active_W, n_inactive_W;
     SpMat B_active_W, B_inactive_W, G, G_tr;
 
-    // B_rm: Row-major B for O(nnz_row) active-row access when rebuilding G.
-    // G_A_trips_: A's contribution to G (rows 0..M-1), computed once (A is const).
-    RowMajorSpMat B_rm;
-    std::vector<Triplet> G_A_trips_;
+    RowMajorSpMat B_rm; // Row-major B for O(nnz_row) active-row access when rebuilding G.
+    std::vector<Triplet> G_A_trips_; // A's contribution to G (rows 0..M-1), computed once (A is const).
 
     // Scratch triplet buffers for rebuild_G() and solve_using_ldlt().
     std::vector<Triplet> B_act_trips_, B_inact_trips_, G_trips_;
@@ -118,9 +111,9 @@ public:
     Vec ls_s_, ls_dv_;                        // size N, l
     Vec ls_v_;                                // size l
     std::vector<Breakpoint> breakpoints_;     // reused across exact_line_search calls
-    Vec cg_Hinv_r1_, cg_rhs_;                  // size s = G.rows() (M+n_active_W)
-    Vec cg_dx_;                                // size n = N
-    Vec ldlt_solve_rhs_;                       // size n+s
+    Vec cg_Hinv_r1_, cg_rhs_;                 // size s = G.rows() (M+n_active_W)
+    Vec cg_dx_;                               // size n = N
+    Vec ldlt_solve_rhs_;                      // size n+s
 
     // Stored LDLT factorization for the KKT system [-H, G^T; G, (1/mu)I].
     // ldlt_pattern_dirty_: true when K's dimension changed (n_active_W changed), requires analyzePattern.
@@ -138,18 +131,15 @@ public:
 
     SSN(const int Q_info, const Vec& Q_diag, const SpMat& L,
         const SpMat& A, const SpMat& B, const SpMat& A_tr, const SpMat& B_tr,
-        const Vec& c, const Vec& c_orig, const Vec& b, const T c_scalar, const T obj_const,
-        const Vec& D1A_diag, const Vec& D1B_diag, const Vec& D2_ext,
+        const Vec& c, const Vec& b,
         const Vec& D2_ext_inv, const Vec& D1B_diag_inv,
         const Vec& lx, const Vec& ux, const Vec& lw, const Vec& uw,
         int n, int m, int N, int M, int l,
         T ssn_tol, int ssn_max_in_iter, T eps_pinf, T eps_dinf)
     : Q_info(Q_info), Q_diag(Q_diag), L(L),
-      A(A), B(B), A_tr(A_tr), B_tr(B_tr),
-      c(c), b(b), c_orig(c_orig), c_scalar(c_scalar),
-      D1A_diag(D1A_diag), D1B_diag(D1B_diag), D2_ext(D2_ext),
+      A(A), B(B), A_tr(A_tr), B_tr(B_tr), c(c), b(b),
       D2_ext_inv(D2_ext_inv), D1B_diag_inv(D1B_diag_inv),
-      lx(lx), ux(ux), lw(lw), uw(uw), obj_const(obj_const),
+      lx(lx), ux(ux), lw(lw), uw(uw),
       n(n), m(m), N(N), M(M), l(l),
       ssn_tol(ssn_tol), ssn_max_in_iter(ssn_max_in_iter),
       eps_pinf(eps_pinf), eps_dinf(eps_dinf)
@@ -221,6 +211,7 @@ public:
         }
     }
     const Vec& compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
+    T compute_grad_Lagrangian_unscaled_inf_norm(const Vec& grad_L);
     void split_by_mask(const Vec& u, const BoolArr& mask, int t, Vec& u_sel, Vec& u_unsel);
     void rebuild_G();
     void retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);

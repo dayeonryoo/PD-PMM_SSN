@@ -290,7 +290,7 @@ def pdpmm_to_qpalm(pd: dict):
 # ---------------------------------------------------------------------------
 QPALM_SOLVED = qpalm.Info.SOLVED   # == 1
 
-def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
+def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
     """Run QPALM on a problem already converted via pdpmm_to_qpalm.
 
     Returns dict with: status, obj_val, run_time, outter_iter, inner_iter.
@@ -318,7 +318,9 @@ def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
     info = solver.info
     return {
         "status":       int(info.status_val),
-        "obj_val":      float(info.objective),
+        # QPALM's Data has no constant-term field; it only ever reports 0.5 x'Qx + q'x,
+        # so obj_const must be added back explicitly to compare against SSN-PMM's obj_val.
+        "obj_val":      float(info.objective) + obj_const,
         "run_time":     float(info.run_time),
         "outer_iter":   int(info.iter_out),
         "inner_iter":   int(info.iter),
@@ -331,7 +333,7 @@ def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
 # ---------------------------------------------------------------------------
 OSQP_SOLVED = 1   # osqp.constant("OSQP_SOLVED")
 
-def run_osqp(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
+def run_osqp(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
     """Run OSQP on a problem already converted via pdpmm_to_qpalm.
 
     Returns dict with: status, obj_val, run_time, outer_iter, inner_iter=0.
@@ -353,7 +355,8 @@ def run_osqp(qpalm_data: tuple, tol: float, time_limit: float) -> dict:
     info = res.info
     return {
         "status":       int(info.status_val),
-        "obj_val":      float(info.obj_val),
+        # OSQP's setup() has no constant-term argument either; same fix as run_qpalm.
+        "obj_val":      float(info.obj_val) + obj_const,
         "run_time":     float(info.run_time),
         "outer_iter":   int(info.iter),
         "inner_iter":   int(0),
@@ -592,7 +595,7 @@ def _worker_qpalm_mm(sif_path, tol, time_limit, conn):
     try:
         pd_data = ssn_pmm_bind.parse_sif(sif_path)
         qpalm_data = pdpmm_to_qpalm(pd_data)
-        result["res"] = run_qpalm(qpalm_data, tol, time_limit)
+        result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)
@@ -604,7 +607,7 @@ def _worker_osqp_mm(sif_path, tol, time_limit, conn):
     try:
         pd_data = ssn_pmm_bind.parse_sif(sif_path)
         qpalm_data = pdpmm_to_qpalm(pd_data)
-        result["res"] = run_osqp(qpalm_data, tol, time_limit)
+        result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)

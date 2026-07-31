@@ -27,10 +27,7 @@ using Triplet = Eigen::Triplet<T>;
 int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
-    // std::string name = "EXDATA";
-    // std::string name = "QGROW7";
-    std::string name = "QSHELL";
-    // std::string name = "UBH1";
+    std::string name = "HUESTIS";
     std::string filename = root + name + ".SIF";
 
     std::cout << "==================== Solving " + name << " ====================\n";
@@ -193,7 +190,7 @@ void run_Netlib() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0727netlib.csv";
+    std::string csv_path = root + "results/0730netlib.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : LPs) {
@@ -225,17 +222,6 @@ void run_Netlib() {
 
             // Check convergence
             bool diverged = false;
-            // if (sol.opt == 0) {
-            //     std::cout << "Solver converged!\n";
-            // } else if (sol.opt == 3) {
-            //     std::cout << "Lineserach failed. Solver terminated.\n";
-            // } else {
-            //     std::cout << "Solver hit the max iteration before converging.\n";
-            // }
-            // if (sol.pmm_tol_achieved > 1e0) {
-            //     diverged = true;
-            //     std::cout << "Solver possibly diverged.\n";
-            // }
 
             // Compare
             T abs_err = std::abs(sol.obj_val - ref_obj_val);
@@ -323,7 +309,7 @@ void run_Netlib_infeas() {
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + "results/0727infeas.csv";
+    std::string csv_path = root + "results/0730infeas.csv";
 
     // Write header
     if (!std::filesystem::exists(std::filesystem::path(csv_path))
@@ -358,17 +344,15 @@ void run_Netlib_infeas() {
             std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
-            // Chosen system:
-            std::string system = "S";
-
             // Solve the LP
             auto t0 = std::chrono::steady_clock::now();
             Solution<T> sol = solver.solve();
             auto t1 = std::chrono::steady_clock::now();
             double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
-            std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
+            // std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
 
             // Store the result
+            std::string system = solver.ldlt_used? "L" : "S";
             bool infeas_detected = (sol.opt == -2 || sol.opt == -3);
             std::ofstream csv(csv_path, std::ios::out | std::ios::app);
             csv << system << "," << infeas_detected << "," << sol.opt << ","
@@ -554,7 +538,7 @@ int main() {
     int cooldown_sec = 3;      // seconds to sleep between problems (prevents CPU throttling)
 
     // Solver result
-    std::string csv_path = root + "results/0727mm.csv";
+    std::string csv_path = root + "results/0730mm.csv";
     write_csv_header(csv_path);
 
     for (const auto& [name, ref_obj_val] : QPs) {
@@ -579,6 +563,9 @@ int main() {
             // Construct the problem and solver
             Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
             SSN_PMM<T> solver(prob);
+            
+            std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            std::cout << "Compuation started at " << std::ctime(&curr_time);
 
             // Solve the QP
             Solution<T> sol = solver.solve();
@@ -586,19 +573,6 @@ int main() {
             
             // Check convergence
             bool diverged = false;
-            // if (sol.opt == 0) {
-            //     std::cout << "Solver converged!\n";
-            // } else if (sol.opt == 3) {
-            //     std::cout << "Lineserach failed. Solver terminated.\n";
-            // } else if (sol.opt == 4) {
-            //     std::cout << "Solver terminated by time limit.\n";
-            // } else if (sol.opt == 1 || sol.opt == 2) {
-            //     std::cout << "Solver hit the max iteration before converging.\n";
-            // }
-            // if (sol.pmm_tol_achieved > 1e0) {
-            //     diverged = true;
-            //     std::cout << "Solver possibly diverged.\n"; 
-            // }
 
             // Compare
             T abs_err = std::abs(sol.obj_val - ref_obj_val);

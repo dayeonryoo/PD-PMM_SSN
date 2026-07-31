@@ -194,7 +194,7 @@ def _worker_qpalm(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, wx,
     try:
         pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, wx, wy, k_param)
         qpalm_data = pdpmm_to_qpalm(pd_data)
-        result["res"] = run_qpalm(qpalm_data, tol, time_limit)
+        result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)
@@ -207,7 +207,7 @@ def _worker_osqp(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, wx, 
     try:
         pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, wx, wy, k_param)
         qpalm_data = pdpmm_to_qpalm(pd_data)
-        result["res"] = run_osqp(qpalm_data, tol, time_limit)
+        result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)

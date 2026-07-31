@@ -61,20 +61,22 @@ int main() {
     // ============ L1/L2 ============
     // ----- Poisson -----
     std::cout << "========== Solving L1/L2 Poisson ==========\n";
-    tol = 1e-6;
-    PDPMMdata<T> data = pdegen::make_poisson_L1L2_control<T>(9, 1e-2, 1e-2);
-    Problem<T> pb(data, tol, max_iter, time_limit, when, what);
-    SSN_PMM<T> solver(pb);
-    Solution<T> sol = solver.solve();
-    sol.print_summary();
-
-    // ----- Convection-diffusion -----
-    // std::cout << "========== Solving L1/L2 ConvDiff ==========\n";
-    // PDPMMdata<T> data = pdegen::make_convdiff_L1L2_control<T>(8, 1e-2, 1e-2);
+    // tol = 1e-6;
+    // PDPMMdata<T> data = pdegen::make_poisson_L1L2_control<T>(6, 1e-2, 1e-2);
     // Problem<T> pb(data, tol, max_iter, time_limit, when, what);
     // SSN_PMM<T> solver(pb);
     // Solution<T> sol = solver.solve();
     // sol.print_summary();
+
+    // ----- Convection-diffusion -----
+    std::cout << "========== Solving L1/L2 ConvDiff ==========\n";
+    tol = 1e-10;
+    PDPMMdata<T> data = pdegen::make_convdiff_L1L2_control<T>(6, 1e-2, 1e-2);
+    Problem<T> pb(data, tol, max_iter, time_limit, when, what);
+    SSN_PMM<T> solver(pb);
+    Solution<T> sol = solver.solve();
+    sol.print_summary();
+    std::cout << "obj_val - obj_const = " << sol.obj_val - solver.obj_const << "\n";
 
 
     // ============ L2 ============

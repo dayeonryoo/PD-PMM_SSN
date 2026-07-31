@@ -32,6 +32,13 @@ const typename SSN<T>::Vec& SSN<T>::compute_grad_Lagrangian(const Vec& x_new, co
 }
 
 template <typename T>
+T SSN<T>::compute_grad_Lagrangian_unscaled_inf_norm(const Vec& grad_L) {
+    T x_block  = inf_norm(grad_L.head(N).cwiseProduct(D2_ext_inv));
+    T y2_block = inf_norm(grad_L.tail(l).cwiseProduct(D1B_diag_inv));
+    return std::max(x_block, y2_block);
+}
+
+template <typename T>
 void SSN<T>::split_by_mask(const Vec& u, const BoolArr& mask, int t, Vec& u_sel, Vec& u_unsel) {
     int i_sel = 0;
     int i_unsel = 0;
@@ -106,7 +113,7 @@ template <typename T>
 bool SSN<T>::choose_ldlt(const SpMat& G, const BoolArr& active_K) {
     /*
     Compare the estimated total work required to factorize the KKT matrix K and the Schur complement S.
-     Ratio = (s / (s+t)) * (|K|^2 / |S|^2), where s = G.rows() and t = n_act_K.
+    Ratio = (s / (s+t)) * (|K|^2 / |S|^2), where s = G.rows() and t = n_act_K.
     |K| = nnz in the KKT matrix [-H_act_K, G_act_K^T; G_act_K, (1/mu)I] (active_K columns only).
     |S| is overestimated via the densest active_K column and the pigeonhole principle.
     Returns true (prefer LDLT on K) when ratio < 0.1.
@@ -165,7 +172,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     const int s = G.rows();
     const int n = G.cols();
 
-    // Schur complement system: S dy = G H_inv G^T dy + (1/mu) dy = G H_inv r1 + r2
+    // Schur complement system: S dy = G H_inv G^T dy + (1/mu) dy = G H_inv r1 + r2.
     SchurOperator<T> S(G, G_tr, H_diag_inv, mu);
     cg_Hinv_r1_.noalias() = H_diag_inv.cwiseProduct(r1);
     cg_rhs_.noalias() = G * cg_Hinv_r1_ + r2;
@@ -207,12 +214,12 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         krylov_iter += cg.iterations();
         T err = cg.error();
         if (cg.info() != Eigen::Success) {
-            if (err > T(1e-8)) {
-                std::cout << "[PCG] CG failed to converge with " << err << ".\n";
+            if (err > T(1e-10)) {
+                // std::cout << "[PCG] CG failed to converge with " << err << ".\n";
                 krylov_fail++;
                 return false;
             }
-            std::cout << "[PCG] CG reached max iterations but error " << err << " <= 1e-8, accepting.\n";
+            // std::cout << "[PCG] CG reached max iterations but error " << err << " <= 1e-10, accepting.\n";
         }
         dy_out = std::move(dy_);
         return true;
@@ -283,7 +290,6 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
 template <typename T> // as a fallback of PCG
 typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2) {
-    std::cout << "[LDLT] solve_using_ldlt is called.\n";
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
 
@@ -670,7 +676,7 @@ void SSN<T>::solve_ssn(const T eps) {
         // ========== Update x and y2 ==========
         if (tau <= T(0)) { // Linesearch found step size <= 0 with the Newton direction.
             const Vec& grad_L = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
-            T grad_norm = inf_norm(grad_L);
+            T grad_norm = compute_grad_Lagrangian_unscaled_inf_norm(grad_L);
             if (grad_norm <= T(5) * eps) {
                 _opt = 0; // ||∇M|| is small enough to accept optimality.
                 // std::cout << "[Optimal] Linesearch failed but ||∇M|| = " << grad_norm << " <= 5 * eps, so we accept optimality.\n";
@@ -708,7 +714,7 @@ void SSN<T>::solve_ssn(const T eps) {
 
         // Compute gradient of Lagrangian at current (x, y2).
         compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
-        tol_achieved = inf_norm(grad_L_);
+        tol_achieved = compute_grad_Lagrangian_unscaled_inf_norm(grad_L_);
         // std::cout << "[SSN] Iteration " << _iter << ": ||∇M|| = " << tol_achieved << ", tau = " << tau << "\n";
         _iter++;
 

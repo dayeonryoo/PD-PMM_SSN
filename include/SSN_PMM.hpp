@@ -1,5 +1,6 @@
 #pragma once
 #include <limits>
+#include <vector>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include "Problem.hpp"
@@ -72,9 +73,6 @@ public:
     Vec c, b;
     Vec lx, ux, lw, uw;
     T obj_const;
-
-    // Original (unscaled, un-lifted) c.
-    Vec c_orig;
 
     int n, m, l;
     int N, M;
@@ -159,6 +157,19 @@ public:
         }
         check_dimensions(problem);
         Q = problem.Q;
+        // problem.Q may already be lower-only or full symmetric; Q only stores the lower-triangular part.
+        if (Q.nonZeros() > 0) {
+            std::vector<Eigen::Triplet<T>> Q_lower_trip;
+            Q_lower_trip.reserve(Q.nonZeros());
+            for (int k = 0; k < Q.outerSize(); ++k) {
+                for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
+                    if (it.row() >= it.col()) Q_lower_trip.emplace_back(it.row(), it.col(), it.value());
+                }
+            }
+            Q.resize(Q.rows(), Q.cols());
+            Q.setFromTriplets(Q_lower_trip.begin(), Q_lower_trip.end());
+            Q.makeCompressed();
+        }
         c_orig = (problem.c.size() == 0) ? Vec::Zero(n) : problem.c;
         ruiz_scaling(problem, problem_Q_diag);
         set_default(problem);
@@ -201,7 +212,7 @@ public:
         return v.cwiseAbs().maxCoeff();
     }
     ResVec compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx, ResVec& res_norms_scaled);
-    T objective_value(const Vec& x, const Vec& Qx);
+    T objective_value(const Vec& x_orig);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
     void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_res, int ssn_inner_iters);
     bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
