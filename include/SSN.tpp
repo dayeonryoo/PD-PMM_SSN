@@ -184,15 +184,23 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     // Set up preconditioner and call cg.compute(). 
     // force_rebuild=true skips SMW and recomputes G E G^T from scratch.
     auto setup_prec = [&](bool force_rebuild) {
+        SSN_TIMER_BLOCK(timer_prec_setup);
         cg.preconditioner().setData(G, G_tr, H_diag, active_K, active_W, B_rm, mu,
                                     update_prec || force_rebuild, prec_pattern_changed);
         cg.preconditioner().set_use_ldlt(use_ldlt); // Factorization method for a preconditioner
         if (force_rebuild || cg.preconditioner().smw_suppressed())
             cg.preconditioner().force_full_rebuild();
         int prec_fact_before = cg.preconditioner().fact_count();
+        // TIMER: snapshot SchurPreconditioner's cumulative phase timers so we can diff after compute().
+        const double prec_assembly_before  = cg.preconditioner().assembly_time();
+        const double prec_analyze_before   = cg.preconditioner().analyze_time();
+        const double prec_factorize_before = cg.preconditioner().factorize_time();
         cg.compute(S);
         fact      += cg.preconditioner().fact_count() - prec_fact_before;
         smw_count  = cg.preconditioner().smw_count();
+        timer_prec_assembly  += cg.preconditioner().assembly_time()  - prec_assembly_before;
+        timer_prec_analyze   += cg.preconditioner().analyze_time()   - prec_analyze_before;
+        timer_prec_factorize += cg.preconditioner().factorize_time() - prec_factorize_before;
     };
 
     // Run preconditioned CG.
@@ -207,10 +215,13 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
         Vec dy_;
         bool warm_start = (prev_dy_.size() == s); // prev_dy_ is empty on the first SSN iteration or if the active set changed.
-        if (warm_start) {
-            dy_ = cg.solveWithGuess(rhs, prev_dy_);
-        } else {
-            dy_ = cg.solve(rhs);
+        {
+            SSN_TIMER_BLOCK(timer_krylov_solve);
+            if (warm_start) {
+                dy_ = cg.solveWithGuess(rhs, prev_dy_);
+            } else {
+                dy_ = cg.solve(rhs);
+            }
         }
         krylov_iter += cg.iterations();
 
@@ -331,6 +342,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
             K_ldlt_built_ = true;
 
             if (ldlt_pattern_dirty_) {
+                SSN_TIMER_BLOCK(timer_ldlt_analyze);
                 ldlt_.analyzePattern(K_ldlt_);
                 ldlt_pattern_dirty_ = false;
             }
@@ -344,14 +356,21 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
                 K_ldlt_.coeffRef(n + i, n + i) = mu_inv;
         }
 
-        ldlt_.factorize(K_ldlt_);
+        {
+            SSN_TIMER_BLOCK(timer_ldlt_factorize);
+            ldlt_.factorize(K_ldlt_);
+        }
         if (ldlt_.info() != Eigen::Success)
             throw std::runtime_error("LDLT factorization of the augmented Lagrangian system failed.");
         ldlt_numeric_dirty_ = false;
         fact++;
     }
 
-    Vec result = ldlt_.solve(ldlt_solve_rhs_);
+    Vec result;
+    {
+        SSN_TIMER_BLOCK(timer_ldlt_solve);
+        result = ldlt_.solve(ldlt_solve_rhs_);
+    }
     if (ldlt_.info() != Eigen::Success)
         throw std::runtime_error("Solving the augmented Lagrangian system via LDLT failed.");
     return result;
@@ -511,19 +530,19 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
     T prev_tol_achieved = inf;
     int stagnation = 0;
 
-#if SSN_ENABLE_TIMERS
-    // TIMER: reset per-phase accumulators for this solve_ssn() call.
-    timer_subgrad_dist = timer_pk_update = timer_rebuild_g = timer_rhs_build = 0.0;
-    timer_choose_ldlt  = timer_linear_solve = timer_linesearch = timer_state_update = 0.0;
-    timer_n_iters = 0;
-#endif
-
     // Useful matvecs
     Ax_ssn_.noalias() = A * x_cur_;
     Bx_ssn_.noalias() = B * x_cur_;
 
     // SSN main loop
     while (_iter < ssn_max_in_iter) {
+#if SSN_ENABLE_TIMERS
+        // TIMER: reset per-phase accumulators for this SSN iteration.
+        timer_prep = timer_linear_solve = timer_prec_setup = timer_krylov_solve = 0.0;
+        timer_prec_assembly = timer_prec_analyze = timer_prec_factorize = 0.0;
+        timer_ldlt_analyze = timer_ldlt_factorize = timer_ldlt_solve = 0.0;
+        timer_linesearch = timer_state_update = 0.0;
+#endif
         // ----------------------------------------------
         // Structure:
         // Let M(u), with u = (x, y2), be the proximal augmented Lagrangian associated with the subproblem of interest.
@@ -538,9 +557,9 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
         // End
         // ----------------------------------------------
 
-        // ========== Preporation for Cholesky decomposition ==========
+        // ========== Preporation for linear solve ==========
         {
-        SSN_TIMER_BLOCK(timer_subgrad_dist);
+        SSN_TIMER_BLOCK(timer_prep);
         u_.noalias() = z / mu + x_cur_;
         v_ = Bx_ssn_ + ((1 - alpha) * y2_cur_ - y2) / mu;
 
@@ -561,7 +580,7 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
         bool pw_changed = first_ssn_iter || (diag_P_W.array() != new_diag_P_W_.array()).any();
 
         if (pk_changed) {
-            SSN_TIMER_BLOCK(timer_pk_update);
+            SSN_TIMER_BLOCK(timer_prep);
             update_prec = true;
             prec_pattern_changed = true;
             ldlt_numeric_dirty_ = true;
@@ -580,7 +599,7 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
         }
 
         if (pw_changed) {
-            SSN_TIMER_BLOCK(timer_rebuild_g);
+            SSN_TIMER_BLOCK(timer_prep);
             update_prec = true;
             prec_pattern_changed = true;
             ldlt_pattern_dirty_ = true;
@@ -599,7 +618,7 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
 
         // Compute dy2 in inactive_W: dy2_inactive_W = - (mu / alpha) * dist_W(v)(inactive_W) - y2(inactive_W).
         {
-        SSN_TIMER_BLOCK(timer_rhs_build);
+        SSN_TIMER_BLOCK(timer_prep);
         split_by_mask(y2_cur_, active_W, n_active_W, y2_active_W_, y2_inactive_W_);
         split_by_mask(dist_W_v_, active_W, n_active_W, dist_W_v_active_, dist_W_v_inactive_);
         dy2_inactive_W_.head(n_inactive_W).noalias() =
@@ -622,7 +641,7 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
 
         // Determines the factorization method for a preconditioner; locked after the first 3 decisions.
         if ((pk_changed || pw_changed) && ldlt_decisions_made_ < 3) {
-            SSN_TIMER_BLOCK(timer_choose_ldlt);
+            SSN_TIMER_BLOCK(timer_prep);
             use_ldlt = choose_ldlt(G, active_K);
             ++ldlt_decisions_made_;
         }
@@ -727,14 +746,50 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
         }
 
         _iter++;
-#if SSN_ENABLE_TIMERS
-        timer_n_iters++;
-#endif
+
         if (what == PrintWhat::SSN) {
             print(when, what, 0, ssn_iter + _iter, krylov_iter, fact,
                   T(0), Vec(), tol_achieved, mu, rho, ssn_tol, linesearch_fail, krylov_fail,
                   /*show_pmm_iter=*/false);
         }
+
+#if SSN_ENABLE_TIMERS
+        // TIMER: phase-by-phase wall-clock breakdown for this SSN iteration.
+        {
+            const double total = timer_prep + timer_linear_solve + timer_linesearch + timer_state_update;
+            fprintf(stderr,
+                "[SSN_TIMER] ssn_iter=%d total=%.4fs | prep=%.4f "
+                "linear_solve=%.4f (prec_setup=%.4f [assembly=%.4f analyze=%.4f factorize=%.4f] krylov_solve=%.4f) "
+                "linesearch=%.4f state_update=%.4f\n",
+                ssn_iter + _iter, total, timer_prep, timer_linear_solve, timer_prec_setup,
+                timer_prec_assembly, timer_prec_analyze, timer_prec_factorize, timer_krylov_solve,
+                timer_linesearch, timer_state_update);
+
+            // If a full preconditioner rebuild (not SMW) happened this iteration, report its size,
+            // so cost-vs-dimension scaling of the SchurPreconditioner factorization can be tracked.
+            if (timer_prec_factorize > 0.0) {
+                fprintf(stderr,
+                    "[SSN_TIMER] prec_rebuild rows=%d nnz=%lld method=%s\n",
+                    cg.preconditioner().last_build_rows(), cg.preconditioner().last_build_nnz(),
+                    cg.preconditioner().last_build_used_ldlt() ? "ldlt(P_hat)" : "chol(G*E*G^T)");
+
+                // A full rebuild only happens because try_build_smw() rejected the update; report why.
+                fprintf(stderr,
+                    "[SSN_TIMER]   smw_rejected reason=\"%s\" h=%d p=%d q=%d rank=%d threshold=5\n",
+                    cg.preconditioner().smw_reject_reason(), cg.preconditioner().smw_last_h(),
+                    cg.preconditioner().smw_last_p(), cg.preconditioner().smw_last_q(),
+                    cg.preconditioner().smw_last_rank());
+            }
+
+            // If PCG fell back to solve_using_ldlt() at any point this iteration, break down its cost too.
+            const double ldlt_total = timer_ldlt_analyze + timer_ldlt_factorize + timer_ldlt_solve;
+            if (ldlt_total > 0.0) {
+                fprintf(stderr,
+                    "[SSN_TIMER]   ldlt_fallback total=%.4fs | analyzePattern=%.4f factorize=%.4f solve=%.4f\n",
+                    ldlt_total, timer_ldlt_analyze, timer_ldlt_factorize, timer_ldlt_solve);
+            }
+        }
+#endif
 
         // Check termination criterion.
         if (tol_achieved < ssn_tol) {
@@ -768,17 +823,4 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
     y2 = y2_cur_;
     opt = _opt;
     iter = _iter;
-
-#if SSN_ENABLE_TIMERS
-    // TIMER: phase-by-phase wall-clock breakdown for this solve_ssn() call (one call per PMM iteration).
-    {
-        const double total = timer_subgrad_dist + timer_pk_update + timer_rebuild_g + timer_rhs_build
-                            + timer_choose_ldlt + timer_linear_solve + timer_linesearch + timer_state_update;
-        fprintf(stderr,
-            "[SSN_TIMER] iters=%d total=%.4fs | subgrad_dist=%.4f pk_update=%.4f rebuild_g=%.4f "
-            "rhs_build=%.4f choose_ldlt=%.4f linear_solve=%.4f linesearch=%.4f state_update=%.4f\n",
-            timer_n_iters, total, timer_subgrad_dist, timer_pk_update, timer_rebuild_g,
-            timer_rhs_build, timer_choose_ldlt, timer_linear_solve, timer_linesearch, timer_state_update);
-    }
-#endif
 }

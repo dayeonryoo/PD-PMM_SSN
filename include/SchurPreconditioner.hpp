@@ -1,5 +1,6 @@
 #pragma once
 #include <cassert>
+#include <chrono>
 #include <Eigen/Core>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
@@ -10,6 +11,15 @@
 #include <algorithm>
 #include <stdexcept>
 #include <variant>
+
+// TIMER: RAII scoped timer; accumulates elapsed wall-clock seconds into `acc` on scope exit.
+// Mirrors SsnScopedTimer in SSN.hpp but kept local so this header has no dependency on SSN.hpp.
+struct SchurPrecScopedTimer {
+    std::chrono::steady_clock::time_point t0;
+    double& acc;
+    explicit SchurPrecScopedTimer(double& acc_) : t0(std::chrono::steady_clock::now()), acc(acc_) {}
+    ~SchurPrecScopedTimer() { acc += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
+};
 
 template <typename T>
 class SchurPreconditioner {
@@ -151,7 +161,29 @@ public:
     Eigen::ComputationInfo info() const { return info_; }
     int fact_count() const { return fact_count_; }
     int smw_count()  const { return smw_count_; }
+
+    // Outcome of the most recent try_build_smw() call: why it was rejected (or "accepted"),
+    // and the active-set delta (h = deleted W rows, p = active_K flips, q = added W rows) it
+    // was evaluated against. h/p/q/rank are -1 if try_build_smw() returned before computing them.
+    const char* smw_reject_reason() const { return smw_reject_reason_; }
+    int smw_last_h()    const { return smw_last_h_; }
+    int smw_last_p()    const { return smw_last_p_; }
+    int smw_last_q()    const { return smw_last_q_; }
+    int smw_last_rank() const { return smw_last_rank_; }
     bool used_smw()  const { return use_smw_; }
+
+    // TIMER: cumulative wall-clock seconds spent in build(), broken down by phase.
+    // Callers should diff these against a "before" snapshot around compute() to get
+    // the incremental cost of a single call (build() may be a no-op if SMW engages).
+    double assembly_time()  const { return assembly_time_; }
+    double analyze_time()   const { return analyze_time_; }
+    double factorize_time() const { return factorize_time_; }
+
+    // Size of the matrix factorized on the most recent full rebuild (Case 2 in build());
+    // stale/meaningless if the most recent build() call was serviced by SMW instead.
+    int      last_build_rows() const { return last_build_rows_; }
+    long long last_build_nnz() const { return last_build_nnz_; }
+    bool     last_build_used_ldlt() const { return last_build_used_ldlt_; }
 
     void force_full_rebuild() { skip_smw_ = true; base_dirty_ = true; }
     void record_smw_rebuild() {
@@ -247,51 +279,62 @@ private:
         const Eigen::Index s = G.rows();
         const Eigen::Index n = G.cols();
 
-        // Collect active K indices.
-        ldlt_act_idx_.clear();
-        ldlt_act_idx_.reserve(n);
-        for (Eigen::Index i = 0; i < n; ++i)
-            if (active_K(i)) ldlt_act_idx_.push_back(static_cast<int>(i));
-        const int n_act = static_cast<int>(ldlt_act_idx_.size());
-
-        // Build P_hat of size (n_act + s) x (n_act + s).
-        ldlt_build_trips_.clear();
-        ldlt_build_trips_.reserve(n_act + 2 * static_cast<int>(G.nonZeros()) + static_cast<int>(s));
-
-        // Top-left block: -H_act (diagonal, n_act x n_act).
-        for (int k = 0; k < n_act; ++k)
-            ldlt_build_trips_.emplace_back(k, k, -H_diag(ldlt_act_idx_[k]));
-
-        // Off-diagonal blocks: G_act (s x n_act) and G_act^T (n_act x s).
-        for (int k = 0; k < n_act; ++k)
-            for (typename SpMat::InnerIterator it(G, ldlt_act_idx_[k]); it; ++it) {
-                const int row = static_cast<int>(it.row());
-                ldlt_build_trips_.emplace_back(n_act + row, k,           it.value()); // G_act
-                ldlt_build_trips_.emplace_back(k,           n_act + row, it.value()); // G_act^T
-            }
-
-        // Bottom-right block: (1/mu) I_s.
-        for (Eigen::Index i = 0; i < s; ++i)
-            ldlt_build_trips_.emplace_back(n_act + i, n_act + i, T(1) / mu_);
-
         auto& sol = std::get<LdltSolver>(active_solver_);
+        int n_act;
+        {
+            SchurPrecScopedTimer timer(assembly_time_);
 
-        sol.P_hat.resize(n_act + s, n_act + s);
-        sol.P_hat.setFromTriplets(ldlt_build_trips_.begin(), ldlt_build_trips_.end());
-        sol.P_hat.makeCompressed();
+            // Collect active K indices.
+            ldlt_act_idx_.clear();
+            ldlt_act_idx_.reserve(n);
+            for (Eigen::Index i = 0; i < n; ++i)
+                if (active_K(i)) ldlt_act_idx_.push_back(static_cast<int>(i));
+            n_act = static_cast<int>(ldlt_act_idx_.size());
+
+            // Build P_hat of size (n_act + s) x (n_act + s).
+            ldlt_build_trips_.clear();
+            ldlt_build_trips_.reserve(n_act + 2 * static_cast<int>(G.nonZeros()) + static_cast<int>(s));
+
+            // Top-left block: -H_act (diagonal, n_act x n_act).
+            for (int k = 0; k < n_act; ++k)
+                ldlt_build_trips_.emplace_back(k, k, -H_diag(ldlt_act_idx_[k]));
+
+            // Off-diagonal blocks: G_act (s x n_act) and G_act^T (n_act x s).
+            for (int k = 0; k < n_act; ++k)
+                for (typename SpMat::InnerIterator it(G, ldlt_act_idx_[k]); it; ++it) {
+                    const int row = static_cast<int>(it.row());
+                    ldlt_build_trips_.emplace_back(n_act + row, k,           it.value()); // G_act
+                    ldlt_build_trips_.emplace_back(k,           n_act + row, it.value()); // G_act^T
+                }
+
+            // Bottom-right block: (1/mu) I_s.
+            for (Eigen::Index i = 0; i < s; ++i)
+                ldlt_build_trips_.emplace_back(n_act + i, n_act + i, T(1) / mu_);
+
+            sol.P_hat.resize(n_act + s, n_act + s);
+            sol.P_hat.setFromTriplets(ldlt_build_trips_.begin(), ldlt_build_trips_.end());
+            sol.P_hat.makeCompressed();
+        }
 
         if (pattern_dirty_) {
+            SchurPrecScopedTimer timer(analyze_time_);
             sol.ldlt.analyzePattern(sol.P_hat);
             pattern_analyzed_ = true;
             pattern_dirty_ = false;
         }
-        sol.ldlt.factorize(sol.P_hat);
+        {
+            SchurPrecScopedTimer timer(factorize_time_);
+            sol.ldlt.factorize(sol.P_hat);
+        }
         info_ = sol.ldlt.info();
         fact_count_++;
         mu_at_last_fact_       = mu_;
         use_ldlt_at_last_fact_ = true;
         n_act_     = n_act;
         s_current_ = static_cast<int>(s);
+        last_build_rows_       = n_act + static_cast<int>(s);
+        last_build_nnz_        = static_cast<long long>(sol.P_hat.nonZeros());
+        last_build_used_ldlt_  = true;
         base_dirty_ = false;
 
         if (!smw_suppressed()) snapshot_state();
@@ -314,43 +357,53 @@ private:
 
         auto& sol = std::get<CholSolver>(active_solver_);
 
-        if (base_dirty_) {
-            // Rebuild G E G^T.
-            assert(H_diag.minCoeff() > T(0));
-            chol_build_trips_.clear();
-            chol_build_trips_.reserve(n);
-            for (Eigen::Index i = 0; i < n; ++i)
-                if (active_K(i))
-                    chol_build_trips_.emplace_back(i, i, T(1) / H_diag(i));
-            SpMat E(n, n);
-            E.setFromTriplets(chol_build_trips_.begin(), chol_build_trips_.end());
-            E.makeCompressed();
+        {
+            SchurPrecScopedTimer timer(assembly_time_);
+            if (base_dirty_) {
+                // Rebuild G E G^T.
+                assert(H_diag.minCoeff() > T(0));
+                chol_build_trips_.clear();
+                chol_build_trips_.reserve(n);
+                for (Eigen::Index i = 0; i < n; ++i)
+                    if (active_K(i))
+                        chol_build_trips_.emplace_back(i, i, T(1) / H_diag(i));
+                SpMat E(n, n);
+                E.setFromTriplets(chol_build_trips_.begin(), chol_build_trips_.end());
+                E.makeCompressed();
 
-            sol.P = G * E * G_tr;
-            base_dirty_ = false;
+                sol.P = G * E * G_tr;
+                base_dirty_ = false;
 
-            for (Eigen::Index i = 0; i < s; ++i)
-                sol.P.coeffRef(i, i) += T(1) / mu_;
-            sol.P.makeCompressed();
-        } else {
-            // G E G^T unchanged; only mu changed: shift the (1/mu) I diagonal by delta.
-            assert(sol.P.rows() == s && sol.P.cols() == s);
-            const T delta = (mu_at_last_fact_ - mu_) / (mu_ * mu_at_last_fact_);
-            for (Eigen::Index i = 0; i < s; ++i)
-                sol.P.coeffRef(i, i) += delta;
+                for (Eigen::Index i = 0; i < s; ++i)
+                    sol.P.coeffRef(i, i) += T(1) / mu_;
+                sol.P.makeCompressed();
+            } else {
+                // G E G^T unchanged; only mu changed: shift the (1/mu) I diagonal by delta.
+                assert(sol.P.rows() == s && sol.P.cols() == s);
+                const T delta = (mu_at_last_fact_ - mu_) / (mu_ * mu_at_last_fact_);
+                for (Eigen::Index i = 0; i < s; ++i)
+                    sol.P.coeffRef(i, i) += delta;
+            }
         }
 
         if (pattern_dirty_) {
+            SchurPrecScopedTimer timer(analyze_time_);
             sol.llt.analyzePattern(sol.P);
             pattern_analyzed_ = true;
             pattern_dirty_ = false;
         }
-        sol.llt.factorize(sol.P);
+        {
+            SchurPrecScopedTimer timer(factorize_time_);
+            sol.llt.factorize(sol.P);
+        }
         info_ = sol.llt.info();
         fact_count_++;
         mu_at_last_fact_       = mu_;
         use_ldlt_at_last_fact_ = false;
         s_current_ = static_cast<int>(s);
+        last_build_rows_       = static_cast<int>(s);
+        last_build_nnz_        = static_cast<long long>(sol.P.nonZeros());
+        last_build_used_ldlt_  = false;
 
         if (!smw_suppressed())
             snapshot_state();
@@ -360,15 +413,16 @@ private:
 
     // SMW Setup Phase. Returns true and arms use_smw_ iff 0 < h+p+q <= threshold.
     bool try_build_smw() {
-        if (skip_smw_) { skip_smw_ = false; return false; }
-        if (smw_fail_streak_ >= kMaxSmwFailStreak) return false;
-        if (!active_W_ || !B_rm_ || M_rows_ < 0) return false;
+        smw_last_h_ = smw_last_p_ = smw_last_q_ = smw_last_rank_ = -1; // -1 = not computed this call
+        if (skip_smw_) { skip_smw_ = false; smw_reject_reason_ = "skip_smw_ (forced full rebuild requested by caller)"; return false; }
+        if (smw_fail_streak_ >= kMaxSmwFailStreak) { smw_reject_reason_ = "smw_suppressed (fail streak >= kMaxSmwFailStreak)"; return false; }
+        if (!active_W_ || !B_rm_ || M_rows_ < 0) { smw_reject_reason_ = "missing active_W_/B_rm_/M_rows_ data"; return false; }
         // If the factorization method changed since last full rebuild, do refactorization instead of SMW.
-        if (use_ldlt_ != use_ldlt_at_last_fact_) return false;
-        if (!has_snapshot_) return false;
+        if (use_ldlt_ != use_ldlt_at_last_fact_) { smw_reject_reason_ = "factorization method (use_ldlt_) changed since last full rebuild"; return false; }
+        if (!has_snapshot_) { smw_reject_reason_ = "no snapshot yet (first factorization)"; return false; }
 
         const int s_old = static_cast<int>(G_old_.rows());
-        if (s_old == 0) return false;
+        if (s_old == 0) { smw_reject_reason_ = "s_old == 0"; return false; }
         const int N = static_cast<int>(G_old_.cols());
         const int l = static_cast<int>(active_W_->size());
 
@@ -405,7 +459,9 @@ private:
         const int p = static_cast<int>(delta_K_idx_.size());
         const int rank = h + p + q;
         const int threshold = 5;
-        if (rank == 0 || rank > threshold) return false;
+        smw_last_h_ = h; smw_last_p_ = p; smw_last_q_ = q; smw_last_rank_ = rank;
+        if (rank == 0) { smw_reject_reason_ = "rank == 0 (active set unchanged, but rebuild was requested)"; return false; }
+        if (rank > threshold) { smw_reject_reason_ = "rank(h+p+q) exceeds threshold"; return false; }
 
         h_ = h; p_ = p; q_ = q; s_old_ = s_old;
 
@@ -533,8 +589,11 @@ private:
 
         S_lambda_lu_.setThreshold(std::sqrt(std::numeric_limits<T>::epsilon()));
         S_lambda_lu_.compute(S_Lambda);
-        if (S_lambda_lu_.rank() < rank)
-            return false;  // near-singular capacitance matrix; fall back to full rebuild.
+        if (S_lambda_lu_.rank() < rank) {
+            smw_reject_reason_ = "near-singular capacitance matrix";
+            return false;  // fall back to full rebuild.
+        }
+        smw_reject_reason_ = "accepted";
 
         // ---- Pre-allocate hot-loop vectors ----
         const int s_new = s_old - h + q;
@@ -578,6 +637,14 @@ private:
     bool base_dirty_       = true;
     T    mu_at_last_fact_  = T(-1);
 
+    // TIMER: cumulative wall-clock seconds spent in build(), by phase (see getters above).
+    double assembly_time_  = 0.0;
+    double analyze_time_   = 0.0;
+    double factorize_time_ = 0.0;
+    int       last_build_rows_      = 0;
+    long long last_build_nnz_       = 0;
+    bool      last_build_used_ldlt_ = false;
+
     // ------ Cholesky factorization ------
     bool use_ldlt_ = false;
     bool use_ldlt_at_last_fact_ = false;
@@ -608,6 +675,13 @@ private:
     int  smw_fail_streak_ = 0;
     int  smw_fail_total_  = 0;
     static constexpr int    kMaxSmwFailStreak = 5;
+
+    // Diagnostics: outcome of the most recent try_build_smw() call (see getters above).
+    const char* smw_reject_reason_ = "not attempted";
+    int smw_last_h_    = -1;
+    int smw_last_p_    = -1;
+    int smw_last_q_    = -1;
+    int smw_last_rank_ = -1;
 
     // Snapshots from last full rebuild (input to try_build_smw)
     bool    has_snapshot_ = false; // true once snapshot_state() has run at least once

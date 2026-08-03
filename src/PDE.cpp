@@ -25,7 +25,7 @@ int main() {
     int max_iter = 1000;
     double time_limit = 1000.0; // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
-    PrintWhat what = PrintWhat::SSN;
+    PrintWhat what = PrintWhat::TUNING;
     double inf =  std::numeric_limits<double>::infinity();
 
     std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -61,7 +61,7 @@ int main() {
     // sol.print_summary();
 
     std::cout << "========== Solving L2 ConvDiff ==========\n";
-    PDPMMdata<T> data = pdegen::make_convdiff_l2_control<T>(6, 1e-1, 0.0, 0.2, -0.75, 0.75);
+    PDPMMdata<T> data = pdegen::make_convdiff_l2_control<T>(7, 1e-1, 0.0, 0.2, -0.75, 0.75);
     Problem<T> pb(data, tol, max_iter, time_limit, when, what);
     SSN_PMM<T> solver(pb);
     Solution<T> sol = solver.solve();
