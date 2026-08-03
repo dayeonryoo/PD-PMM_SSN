@@ -1,6 +1,8 @@
 #pragma once
 #include <limits>
 #include <vector>
+#include <stdexcept>
+#include <iostream>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include "Problem.hpp"
@@ -9,11 +11,11 @@
 #include "Printing.hpp"
 
 // =============================================================
-//      min  c^T x + (1/2) x^T Q x + obj_const,
+//      min  c^T x + 0.5 x^T Q x + obj_const,
 //      s.t. A x = b,
 //           B x = w,
 //           lx <= x <= ux,
-//           lw <= w <= uw
+//           lw <= w <= uw.
 // =============================================================
 // INPUT: Problem
 // --------------------------------------------------------------
@@ -21,7 +23,7 @@
 //    .Q         -> n x n sparse symmetric positive semidefinite quadratic coefficient matrix
 //                  (given as a full matrix or a lower triangular matrix)
 //    .A         -> m x n sparse linear equality constraint matrix
-//    .B         -> l x n sparse box constraint matrix on Bx
+//    .B         -> l x n sparse linear inequality constraint matrix
 //    .b         -> m-dim right-hand side vector for linear equality constraints
 //    .c         -> n-dim coefficient vector
 //    .lx        -> n-dim lower bound vector for box constraints on x
@@ -54,9 +56,11 @@
 //    .krylov_iter -> number of Krylov iterations performed to terminate
 //    .fact        -> number of factorizations performed to terminate
 //    .smw_count   -> number of SMW preconditioner applications performed to terminate
-//    .pmm_tol_achieved -> tolerance achieved by PMM
-//    .ssn_tol_achieved -> tolerance achieved by SSN
-//    .solving_time     -> total time in seconds taken to solve the problem
+//    .pmm_tol_achieved -> final tolerance achieved by PMM
+//    .ssn_tol_achieved -> final tolerance achieved by SSN
+//    .setup_time       -> wall-clock time in seconds spent in the SSN_PMM constructor
+//    .solve_time       -> wall-clock time in seconds spent in solve()
+//    .run_time         -> setup_time + solve_time
 //    .linesearch_fail  -> number of linesearch failures
 //    .krylov_fail      -> number of Krylov failures
 // --------------------------------------------------------------
@@ -75,7 +79,7 @@ public:
     T obj_const;
 
     int n, m, l;
-    int N, M;
+    int N, M; // extended dimensions for general Q (N = n + m + l, M = m + l)
     int Q_info; // 0 = zero; 1 = diagonal; 2 = general
     Vec Q_diag;
     SpMat L;
@@ -110,8 +114,8 @@ public:
 
     // Constant parameters
     T tol = 1e-6;
-    int max_iter = 100000000;
-    int ssn_max_iter = 100000000;
+    int max_iter = 3000;
+    int ssn_max_iter = 120000;
     int ssn_max_in_iter = 50;
     T eps_limit = 1e-3 * tol;
     T mu_limit = 1e9;
@@ -125,12 +129,12 @@ public:
     // Updated parameters
     T mu0 = 1e0;
     T rho0 = 1e0;
-    T mu = 1e2;
+    T mu = 1e1;
     T rho = 1e7;
     T ssn_tol = 1e-2;
      
     // Outputs:
-    int opt;
+    int opt = -1;
     Vec x, y1, y2, z;
     T obj_val;
     int pmm_iter, ssn_iter;
@@ -139,7 +143,8 @@ public:
     ResVec res_norms;
     ResVec res_norms_scaled;
     bool ldlt_used = false;
-
+    double setup_time = 0.0;   // wall-clock time spent in this constructor, in seconds
+    bool setup_failed = false; // true if an error occurred during setup
 
     // Printing
     PrintWhen when = PrintWhen::NEVER;
@@ -151,46 +156,59 @@ public:
       n(problem.n), m(problem.m), l(problem.l), obj_const(problem.obj_const),
       when(problem.when), what(problem.what)
     {
-        get_Q_info(problem.Q);
-        if (n == 0 && m == 0 && l == 0) {
-            determine_dimensions(problem);
-        }
-        check_dimensions(problem);
-        Q = problem.Q;
-        // problem.Q may already be lower-only or full symmetric; Q only stores the lower-triangular part.
-        if (Q.nonZeros() > 0) {
-            std::vector<Eigen::Triplet<T>> Q_lower_trip;
-            Q_lower_trip.reserve(Q.nonZeros());
-            for (int k = 0; k < Q.outerSize(); ++k) {
-                for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
-                    if (it.row() >= it.col()) Q_lower_trip.emplace_back(it.row(), it.col(), it.value());
-                }
+        auto setup_start = std::chrono::steady_clock::now();
+
+        try {
+            get_Q_info(problem.Q);
+            if (n == 0 && m == 0 && l == 0) {
+                determine_dimensions(problem);
             }
-            Q.resize(Q.rows(), Q.cols());
-            Q.setFromTriplets(Q_lower_trip.begin(), Q_lower_trip.end());
-            Q.makeCompressed();
+            check_dimensions(problem);
+            Q = problem.Q;
+            std::cout << "Q info: " << Q_info << "\n";
+            // problem.Q may already be lower-only or full symmetric; Q only stores the lower-triangular part.
+            if (Q.nonZeros() > 0) {
+                std::vector<Eigen::Triplet<T>> Q_lower_trip;
+                Q_lower_trip.reserve(Q.nonZeros());
+                for (int k = 0; k < Q.outerSize(); ++k) {
+                    for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
+                        if (it.row() >= it.col()) Q_lower_trip.emplace_back(it.row(), it.col(), it.value());
+                    }
+                }
+                Q.resize(Q.rows(), Q.cols());
+                Q.setFromTriplets(Q_lower_trip.begin(), Q_lower_trip.end());
+                Q.makeCompressed();
+            }
+            c_orig = (problem.c.size() == 0) ? Vec::Zero(n) : problem.c;
+            ruiz_scaling(problem, problem_Q_diag);
+            set_default(problem);
+
+            // Clear temporary data to save memory.
+            SpMat().swap(Q_ruiz);
+            SpMat().swap(A_ruiz);
+            SpMat().swap(B_ruiz);
+            Vec().swap(problem_Q_diag);
+            Vec().swap(Q_diag_ruiz);
+            Vec().swap(c_ruiz);
+            Vec().swap(b_ruiz);
+            Vec().swap(lx_ruiz);
+            Vec().swap(ux_ruiz);
+            Vec().swap(lw_ruiz);
+            Vec().swap(uw_ruiz);
+
+            initialize_sols();
+            check_bounds();
+
+            A_tr = A.transpose();
+            B_tr = B.transpose();
+        } catch (const std::exception& e) {
+            std::cerr << "[SSN_PMM] Setup error: " << e.what() << "\n";
+            setup_failed = true;
+            opt = -1;
         }
-        c_orig = (problem.c.size() == 0) ? Vec::Zero(n) : problem.c;
-        ruiz_scaling(problem, problem_Q_diag);
-        set_default(problem);
 
-        SpMat().swap(Q_ruiz);
-        SpMat().swap(A_ruiz);
-        SpMat().swap(B_ruiz);
-        Vec().swap(problem_Q_diag);
-        Vec().swap(Q_diag_ruiz);
-        Vec().swap(c_ruiz);
-        Vec().swap(b_ruiz);
-        Vec().swap(lx_ruiz);
-        Vec().swap(ux_ruiz);
-        Vec().swap(lw_ruiz);
-        Vec().swap(uw_ruiz);
-
-        initialize_sols();
-        check_bounds();
-
-        A_tr = A.transpose();
-        B_tr = B.transpose();
+        auto setup_end = std::chrono::steady_clock::now();
+        setup_time = time_diff_s(setup_start, setup_end); // in seconds
     }
 
     void get_Q_info(const SpMat& Q);

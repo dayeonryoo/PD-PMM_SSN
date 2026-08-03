@@ -48,7 +48,7 @@ int main() {
     auto t0 = std::chrono::steady_clock::now();
     Solution<T> sol = solver.solve();
     auto t1 = std::chrono::steady_clock::now();
-    double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
+    double solving_time_sec = time_diff_s(t0, t1);
     sol.print_summary();
     std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
     T obj_val = sol.obj_val;
@@ -225,7 +225,7 @@ int main() {
             auto t0 = std::chrono::steady_clock::now();
             Solution<T> sol = solver.solve();
             auto t1 = std::chrono::steady_clock::now();
-            double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
+            double solving_time_sec = time_diff_s(t0, t1);
             std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
 
             // Check convergence
@@ -366,7 +366,7 @@ int main() {
             auto t0 = std::chrono::steady_clock::now();
             Solution<T> sol = solver.solve();
             auto t1 = std::chrono::steady_clock::now();
-            double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
+            double solving_time_sec = time_diff_s(t0, t1);
             std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
 
             // Store the result
@@ -427,7 +427,7 @@ int main() {
     auto t0 = std::chrono::steady_clock::now();
     Solution<T> sol = solver.solve();
     auto t1 = std::chrono::steady_clock::now();
-    double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
+    double solving_time_sec = time_diff_s(t0, t1);
     sol.print_summary();
     std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
     T obj_val = sol.obj_val;

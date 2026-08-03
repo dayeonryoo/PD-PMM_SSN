@@ -179,6 +179,7 @@ public:
         H_diag_old_.resize(0);
         active_K_old_.resize(0);
         active_W_old_.resize(0);
+        has_snapshot_ = false;
 
         std::vector<int>().swap(deleted_old_rows_);
         std::vector<int>().swap(retained_old_rows_);
@@ -265,7 +266,7 @@ private:
         for (int k = 0; k < n_act; ++k)
             for (typename SpMat::InnerIterator it(G, ldlt_act_idx_[k]); it; ++it) {
                 const int row = static_cast<int>(it.row());
-                ldlt_build_trips_.emplace_back(n_act + row, k,          it.value()); // G_act
+                ldlt_build_trips_.emplace_back(n_act + row, k,           it.value()); // G_act
                 ldlt_build_trips_.emplace_back(k,           n_act + row, it.value()); // G_act^T
             }
 
@@ -363,15 +364,15 @@ private:
         if (smw_fail_streak_ >= kMaxSmwFailStreak) return false;
         if (!active_W_ || !B_rm_ || M_rows_ < 0) return false;
         // If the factorization method changed since last full rebuild, do refactorization instead of SMW.
-        if (use_ldlt_ != use_ldlt_at_last_fact_) return false; 
-        if (active_W_old_.size() == 0 || active_K_old_.size() == 0) return false;
+        if (use_ldlt_ != use_ldlt_at_last_fact_) return false;
+        if (!has_snapshot_) return false;
 
         const int s_old = static_cast<int>(G_old_.rows());
         if (s_old == 0) return false;
         const int N = static_cast<int>(G_old_.cols());
         const int l = static_cast<int>(active_W_->size());
 
-        // Classify W and K changes
+        // Classify W and K changes.
         deleted_old_rows_.clear();
         retained_old_rows_.clear();
         retained_new_rows_.clear();
@@ -394,6 +395,7 @@ private:
                 }
             }
         }
+
         for (int i = 0; i < N; ++i)
             if (active_K_old_(i) != (*active_K_)(i))
                 delta_K_idx_.push_back(i);
@@ -532,7 +534,7 @@ private:
         S_lambda_lu_.setThreshold(std::sqrt(std::numeric_limits<T>::epsilon()));
         S_lambda_lu_.compute(S_Lambda);
         if (S_lambda_lu_.rank() < rank)
-            return false;  // near-singular capacitance matrix; fall back to full rebuild
+            return false;  // near-singular capacitance matrix; fall back to full rebuild.
 
         // ---- Pre-allocate hot-loop vectors ----
         const int s_new = s_old - h + q;
@@ -548,12 +550,13 @@ private:
         return true;
     }
 
-    // Helper: snapshot last full-rebuild state for next SMW attempt
+    // Helper: snapshot last full-rebuild state for next SMW attempt.
     void snapshot_state() {
         G_old_        = *G_;
         H_diag_old_   = *H_diag_;
         active_K_old_ = *active_K_;
         if (active_W_) active_W_old_ = *active_W_;
+        has_snapshot_ = true;
     }
 
     // ------ Setup: external data ------
@@ -607,6 +610,7 @@ private:
     static constexpr int    kMaxSmwFailStreak = 5;
 
     // Snapshots from last full rebuild (input to try_build_smw)
+    bool    has_snapshot_ = false; // true once snapshot_state() has run at least once
     SpMat   G_old_;
     Vec     H_diag_old_;
     BoolArr active_K_old_;

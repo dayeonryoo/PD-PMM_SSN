@@ -17,9 +17,9 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
     }
 
     if (Q.nonZeros() == 0 || Q.rows() == 0) {
-        Q_info = 0; // Q is zero
+        Q_info = 0; // Q is zero.
     } else {
-        Q_info = 1; // Q is diagonal until proven otherwise
+        Q_info = 1; // Q is diagonal until proven otherwise.
         for (int k = 0; k < Q.outerSize() && Q_info < 2; ++k) {
             for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
                 if (it.row() != it.col() && it.value() != T(0)) {
@@ -37,7 +37,7 @@ void SSN_PMM<T>::get_Q_info(const SpMat& Q) {
 
 template <typename T>
 void SSN_PMM<T>::determine_dimensions(const Problem<T>& problem) {
-    // Determine n
+    // Determine n.
     if (Q_info == 0) {
         if (problem.c.size() != 0) {
             n = problem.c.size();
@@ -58,7 +58,7 @@ void SSN_PMM<T>::determine_dimensions(const Problem<T>& problem) {
         n = Q.rows();
     }
 
-    // Determine m
+    // Determine m.
     if (problem.A.rows() != 0) {
         m = problem.A.rows();
     } else if (problem.b.size() != 0) {
@@ -67,7 +67,7 @@ void SSN_PMM<T>::determine_dimensions(const Problem<T>& problem) {
         m = 0;
     }
 
-    // Determine l
+    // Determine l.
     if (problem.B.rows() != 0) {
         l = problem.B.rows();
     } else if (problem.lw.size() != 0) {
@@ -82,7 +82,7 @@ void SSN_PMM<T>::determine_dimensions(const Problem<T>& problem) {
 template <typename T>
 void SSN_PMM<T>::check_dimensions(const Problem<T>& problem) {
 
-    // Check dimensions consistency
+    // Check dimensions consistency.
     if (Q_info == 1 && problem_Q_diag.size() != n) {
         throw std::invalid_argument("Dimension mismatch: Q diagonal should be a vector of size n.");
     }
@@ -271,7 +271,6 @@ void SSN_PMM<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_di
         if (l > 0) D1B_diag.array() *= drB_inv.array();
         D2_diag.array() *= dc_inv.array();
 
-        // std::cout << "[Ruiz] " << k << " iter done: row_dev = " << row_dev << ", col_dev = " << col_dev << "\n";
     }
 }
 
@@ -375,7 +374,7 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
         Q_diag.resize(N);
         Q_diag << Vec::Zero(n), Vec::Ones(n);
 
-        // A = [A_ruiz 0; L^T -I]
+        // A = [A_ruiz, 0; L^T, -I]
         A.resize(M, N);
         {
             std::vector<Triplet> trip;
@@ -402,7 +401,7 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
             A.setFromTriplets(trip.begin(), trip.end());
         }
 
-        // B = [B_ruiz 0]
+        // B = [B_ruiz, 0]
         B.resize(l, N);
         {
             std::vector<Triplet> trip;
@@ -418,7 +417,7 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
             B.setFromTriplets(trip.begin(), trip.end());
         }
 
-    } else { // Q is diagonal or zero
+    } else { // Q is diagonal or zero; no reformulation needed.
         N = n; M = m;
 
         Q_diag = Q_diag_ruiz;
@@ -505,7 +504,7 @@ void SSN_PMM<T>::initialize_sols() { // using 0 vectors
 
 template <typename T>
 void SSN_PMM<T>::check_bounds() {
-    // Check lower and upper bounds
+    // Check lower and upper bounds.
     for (int i = 0; i < n; ++i) {
         if (lx_orig(i) > ux_orig(i)) {
             throw std::invalid_argument("Problem is infeasible: lx should be <= ux.");
@@ -520,7 +519,8 @@ void SSN_PMM<T>::check_bounds() {
 
 template <typename T>
 typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx, ResVec& res_norms_scaled) {
-
+    // Return the unscaled residual norms (primal, dual, complementarity for x, complementarity for Bx),
+    // and update the scaled norms in-place.
     Vec& A_tr_y1 = A_tr_y1_scratch_;
     Vec& B_tr_y2 = B_tr_y2_scratch_;
 
@@ -528,7 +528,6 @@ typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_unscaled_inf_norms(cons
     T res_p; // Primal residual norm
     if (M == 0) res_p = T(0);
     else {
-        // T denom = 1 + inf_norm(b); // original denominator based only on a constant term b
         T denom = 1 + std::max(inf_norm(Ax), inf_norm(b));
         res_p = inf_norm(Ax - b) / denom;
     }
@@ -536,7 +535,6 @@ typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_unscaled_inf_norms(cons
     // Dual residual norm
     Vec& num = num_scratch_;
     num.noalias() = c + z;
-    // T denom = 1 + inf_norm(c); // original denominator based only on a constant term c
     T denom = std::max(inf_norm(c), inf_norm(z));
     if (Q_info != 0) {
         num += Qx;
@@ -552,7 +550,7 @@ typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_unscaled_inf_norms(cons
         num -= B_tr_y2;
         denom = std::max(denom, inf_norm(B_tr_y2));
     }
-    denom += T(1);
+    denom += T(1); // denom = 1 + max(||c||_inf, ||z||_inf, ||Qx||_inf, ||A^T y1||_inf, ||B^T y2||_inf)
     T res_d = inf_norm(num) / denom;
 
     // Complementarity residual norm for box constraints on x
@@ -571,7 +569,7 @@ typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_unscaled_inf_norms(cons
         compl_w /= (T(1) + std::max(inf_norm(y2), inf_norm(proj_W)));
     }
 
-    res_norms_scaled << res_p, res_d, compl_x, compl_w;
+    res_norms_scaled << res_p, res_d, compl_x, compl_w; // Update scaled residual norms in-place.
 
     // ===== Unscaled residual norms =====
     T res_p_unscaled; // Primal residual norm
@@ -615,7 +613,7 @@ typename SSN_PMM<T>::ResVec SSN_PMM<T>::compute_residual_unscaled_inf_norms(cons
         compl_w_unscaled = inf_norm(Bx_unscaled - proj_W_unscaled) / (T(1) + std::max(inf_norm(y2_unscaled), inf_norm(proj_W_unscaled)));
     }
 
-    ResVec res_norms_unscaled;
+    ResVec res_norms_unscaled; // Return unscaled residual norms.
     res_norms_unscaled << res_p_unscaled, res_d_unscaled, compl_x_unscaled, compl_w_unscaled;
     return res_norms_unscaled;
 }
@@ -651,10 +649,10 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
 
     T worst_res = new_res_norms.maxCoeff();
     
-    if (ssn_opt == 0) { // SSN optimal or algorithm is close to convergence.
+    if (ssn_opt == 0) { // SSN optimal
         mu = std::min(mu_limit, T(1.3) * mu);
         rho = std::min(rho_limit, T(1.3) * rho);
-        ssn_tol = std::max(eps_limit, T(0.8) * ssn_tol);
+        ssn_tol = std::max(eps_limit, T(0.1) * ssn_tol);
 
     } else if (ssn_opt == 3 || ((ssn_opt == 2 || ssn_opt == 5) && ssn_res > T(100) * worst_res)) {
         // Linesearch failed, or SSN residual is too large compared to PMM tolerance achieved.
@@ -762,12 +760,23 @@ bool SSN_PMM<T>::dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx)
 
 template <typename T>
 Solution<T> SSN_PMM<T>::solve() {
-    
-    // Initialize variables
+    auto solving_start = std::chrono::steady_clock::now();
+
+    // If an error occurred during setup, exit immediately with opt = -1.
+    if (setup_failed) {
+        auto solving_end = std::chrono::steady_clock::now();
+        double solve_time = time_diff_s(solving_start, solving_end); // in seconds
+        return Solution<T>(opt, Vec::Zero(n), Vec::Zero(m), Vec::Zero(l), Vec::Zero(n),
+                            T(1e20), 0, 0, 0, 0, 0, T(1e20), T(1e20),
+                            setup_time, solve_time, 0, 0);
+    }
+
+    // Initialize variables.
     opt = -1;
     pmm_iter = 0;
     ssn_iter = 0;
     ssn_tol_achieved = T(0);
+    bool solve_error = false;
 
     Vec delta_y1 = Vec::Zero(M);
     Vec delta_z = Vec::Zero(N);
@@ -779,36 +788,33 @@ Solution<T> SSN_PMM<T>::solve() {
     ResVec res_norms = compute_residual_unscaled_inf_norms(Ax_old_scratch_, Bx_old_scratch_, Qx_scratch_, res_norms_scaled);
     pmm_tol_achieved = res_norms.maxCoeff();
 
-    auto solving_start = std::chrono::steady_clock::now();
-
-    // Build the Newton system
+    // Build the Newton system.
     SSN<T> NS(Q_info, Q_diag, L,
             A, B, A_tr, B_tr, c, b,
             D2_ext_inv, D1B_diag_inv,
             lx, ux, lw, uw,
             n, m, N, M, l,
             ssn_tol, ssn_max_in_iter,
-            eps_pinf, eps_dinf);
+            eps_pinf, eps_dinf,
+            when, what);
 
     // Print header
     print_header(when, what);
 
+    try {
     // SSN-PMM main loop
     while (pmm_iter < max_iter) {
         // ----------------------------------------------
         // Structure:
         // Until (primal infeasibility, dual infeasibility, complementarity) < tol, do:
         //     1) Call Semismooth Newton method to approximately minimize the augmented Lagrangian w.r.t. x and y2;
-        //     2) Update multipliers y1, z;
+        //     2) Update multipliers y1, z if SSN solve is accurate enough;
         //     3) Update penalty parameters mu, rho;
         //     k = k + 1;
         // End
         // ----------------------------------------------
 
-        // Timer for PMM iteration
-        auto t0_pmm = std::chrono::steady_clock::now();
-
-        // Call semismooth Newton method
+        // Call semismooth Newton method.
         x_old_scratch_  = x;
         y2_old_scratch_ = y2;
         NS.update_ssn_system(x, y1, y2, z, delta_y1, delta_z, mu, rho, alpha, ssn_iter);
@@ -846,15 +852,13 @@ Solution<T> SSN_PMM<T>::solve() {
         }
 
         // Update multipliers y1, z if SSN solve is accurate enough.
-        if (ssn_tol_achieved <= T(100) * pmm_tol_achieved) {
+        if (NS.opt == 0 || ssn_tol_achieved <= T(100) * pmm_tol_achieved) {
             delta_y1 = -mu * (Ax_scratch_ - b);
             y1 += delta_y1;
             delta_z = mu * (x - proj(z / mu + x, lx, ux));
             z += delta_z;
-        } else {
-            // std::cout << "[SSN] SSN solve is not accurate enough (SSN res = " << ssn_tol_achieved << ").\n";
-            // Keep y1, z from previous PMM iteration
-        }
+        } 
+        // else, keep y1, z from previous PMM iteration
 
         // Compute new residual norms.
         ResVec new_res_norms = compute_residual_unscaled_inf_norms(Ax_scratch_, Bx_scratch_, Qx_scratch_, res_norms_scaled);
@@ -868,15 +872,14 @@ Solution<T> SSN_PMM<T>::solve() {
         
         // Print current iteration info.
         print(when, what, pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, new_res_norms, ssn_tol_achieved, mu, rho, ssn_tol, linesearch_fail, NS.krylov_fail);
-        // std::cout << "[PMM] Scaled PMM residual norms: res_p = " << res_norms_scaled(0) << ", res_d = " << res_norms_scaled(1) << ", compl_x = " << res_norms_scaled(2) << ", compl_Bx = " << res_norms_scaled(3) << "\n";
         
         // Check termination criterion.
         if (pmm_tol_achieved < tol) {
-            opt = 0; // Optimal solution found
+            opt = 0; // Optimal solution found.
             break;
         }
 
-        // Update PMM parameters based on the progress of residual norms and SSN solve quality.
+        // Update PMM parameters based on SSN solve quality.
         update_PMM_parameters(res_norms, new_res_norms, NS.opt, ssn_tol_achieved, NS.iter);
         res_norms = new_res_norms; // for next iteration
 
@@ -884,26 +887,25 @@ Solution<T> SSN_PMM<T>::solve() {
         Ax_old_scratch_.swap(Ax_scratch_);
         Bx_old_scratch_.swap(Bx_scratch_);
 
-        // Timer for PMM iteration
-        auto t1_pmm = std::chrono::steady_clock::now();
-        double timer_pmm = time_diff_ms(t0_pmm, t1_pmm);
-        // std::cout << "PMM iteration took " << timer_pmm << " ms.\n";
-        // std::cout << "=====================================================\n";
-
         auto solving_current = std::chrono::steady_clock::now();
-        double solving_current_time = time_diff_ms(solving_start, solving_current) * 1e-3; // in seconds
+        double solving_current_time = time_diff_s(solving_start, solving_current); // in seconds
         if (solving_current_time > time_limit) {
-            opt = 4; // Time limit reached
+            opt = 4; // Time limit reached.
             break;
         }
 
     }
+    } catch (const std::exception& e) {
+        std::cerr << "[SSN_PMM] Solve error: " << e.what() << "\n";
+        opt = -1;
+        solve_error = true;
+    }
 
     // Check if max number of PMM iterations is reached.
-    if (opt == -1) { opt = 1; }
+    if (opt == -1 && !solve_error) { opt = 1; }
 
-    // Check if infeasiblity is detected.
-    if (opt == -2 || opt == -3) {
+    // Check if infeasiblity or a numerical error is detected.
+    if (opt == -2 || opt == -3 || solve_error) {
         obj_val = 1e20;
         res_norms = ResVec::Constant(1e20);
         pmm_tol_achieved = 1e20;
@@ -915,13 +917,12 @@ Solution<T> SSN_PMM<T>::solve() {
     }
 
     auto solving_end = std::chrono::steady_clock::now();
-    double solving_time = time_diff_ms(solving_start, solving_end) * 1e-3; // in seconds
+    double solve_time = time_diff_s(solving_start, solving_end); // in seconds
 
     krylov_iter = NS.krylov_iter;
     fact = NS.fact;
     krylov_fail = NS.krylov_fail;
     ldlt_used = NS.ldlt_used;
 
-    // std::cout << "[PMM] Scaled PMM residual norms: res_p = " << res_norms_scaled(0) << ", res_d = " << res_norms_scaled(1) << ", compl_x = " << res_norms_scaled(2) << ", compl_Bx = " << res_norms_scaled(3) << "\n";
-    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, pmm_iter, ssn_iter, krylov_iter, fact, NS.smw_count, pmm_tol_achieved, ssn_tol_achieved, solving_time, linesearch_fail, krylov_fail);
+    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, pmm_iter, ssn_iter, krylov_iter, fact, NS.smw_count, pmm_tol_achieved, ssn_tol_achieved, setup_time, solve_time, linesearch_fail, krylov_fail);
 }

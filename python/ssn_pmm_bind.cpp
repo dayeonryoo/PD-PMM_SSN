@@ -15,9 +15,9 @@ using T      = double;
 using Vec    = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 using SpMat  = Eigen::SparseMatrix<T>;
 
-// -----------------------------------------------------------------------
-// Helper: Eigen compressed sparse (CSC) → Python dict of numpy arrays
-// -----------------------------------------------------------------------
+/*-----------------------------------------------------------------------
+Helper: Eigen compressed sparse (CSC) → Python dict of numpy arrays
+-----------------------------------------------------------------------*/
 static py::dict eigen_sparse_to_dict(const SpMat& M_in, const std::string& key) {
     SpMat M = M_in;
     M.makeCompressed();
@@ -45,9 +45,9 @@ static py::dict eigen_sparse_to_dict(const SpMat& M_in, const std::string& key) 
     return out;
 }
 
-// -----------------------------------------------------------------------
-// Helper: Eigen vector → 1D numpy array
-// -----------------------------------------------------------------------
+/*-----------------------------------------------------------------------
+Helper: Eigen vector → 1D numpy array
+-----------------------------------------------------------------------*/
 static py::array_t<double> eigen_vec_to_array(const Vec& v) {
     py::array_t<double> arr(v.size());
     auto p = arr.mutable_unchecked<1>();
@@ -55,18 +55,18 @@ static py::array_t<double> eigen_vec_to_array(const Vec& v) {
     return arr;
 }
 
-// -----------------------------------------------------------------------
-// parse_sif: parse a SIF/MPS file and return problem data as numpy arrays.
-//
-// Returned dict keys:
-//   n, m, l                      – problem dimensions
-//   Q_data/indices/indptr/shape  – CSC sparse Q (may be full symmetric)
-//   A_data/indices/indptr/shape  – CSC sparse equality matrix
-//   B_data/indices/indptr/shape  – CSC sparse general-inequality matrix
-//   c, b                         – 1-D arrays
-//   lx, ux, lw, uw               – 1-D bound arrays
-//   obj_const                    – scalar constant in objective
-// -----------------------------------------------------------------------
+/*-----------------------------------------------------------------------
+parse_sif: parse a SIF/MPS file and return problem data as numpy arrays.
+
+Returned dict keys:
+  n, m, l                      – problem dimensions
+  Q_data/indices/indptr/shape  – CSC sparse Q (may be full symmetric)
+  A_data/indices/indptr/shape  – CSC sparse equality matrix
+  B_data/indices/indptr/shape  – CSC sparse general-inequality matrix
+  c, b                         – 1D arrays
+  lx, ux, lw, uw               – 1D bound arrays
+  obj_const                    – scalar constant in objective
+-----------------------------------------------------------------------*/
 py::dict parse_sif(const std::string& filename) {
     PDPMMdata<T> pd;
     {
@@ -100,23 +100,25 @@ py::dict parse_sif(const std::string& filename) {
     return out;
 }
 
-// -----------------------------------------------------------------------
-// solve_from_sif: parse a SIF/MPS file and run the SSN-PMM solver.
-//
-// Returns dict:
-//   status            – opt field (0 = optimal, <0 = infeasible, >0 = limit hit)
-//   obj_val           – primal objective value
-//   run_time          – wall-clock solving time in seconds
-//   pmm_iter          – PMM outer iterations
-//   ssn_iter          – total SSN inner iterations
-//   pmm_tol_achieved  – tolerance achieved by PMM at termination
-// -----------------------------------------------------------------------
+/*-----------------------------------------------------------------------
+solve_from_sif: parse a SIF/MPS file and run the SSN-PMM solver.
+
+Returns dict:
+  status            – opt field (0 = optimal, <0 = infeasible, >0 = limit hit)
+  obj_val           – primal objective value
+  setup_time        – wall-clock time in seconds spent in the SSN_PMM constructor
+  solve_time        – wall-clock time in seconds spent in solve()
+  run_time          – setup_time + solve_time
+  pmm_iter          – PMM outer iterations
+  ssn_iter          – total SSN inner iterations
+  pmm_tol_achieved  – tolerance achieved by PMM at termination
+-----------------------------------------------------------------------*/
 py::dict solve_from_sif(const std::string& filename,
                         double tol        = 1e-6,
                         long long max_iter = 1'000'000'000LL,
                         double time_limit  = 600.0) {
     int opt, pmm_iter, ssn_iter;
-    double obj_val, run_time, pmm_tol_achieved;
+    double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
     {
         py::gil_scoped_release release;
         MpsParser<T>   parser;
@@ -129,6 +131,8 @@ py::dict solve_from_sif(const std::string& filename,
         Solution<T> sol = solver.solve();
         opt              = sol.opt;
         obj_val          = (double)sol.obj_val;
+        setup_time       = sol.setup_time;
+        solve_time       = sol.solve_time;
         run_time         = sol.run_time;
         pmm_iter         = sol.pmm_iter;
         ssn_iter         = sol.ssn_iter;
@@ -138,6 +142,8 @@ py::dict solve_from_sif(const std::string& filename,
     py::dict out;
     out["status"]           = opt;
     out["obj_val"]          = obj_val;
+    out["setup_time"]       = setup_time;
+    out["solve_time"]       = solve_time;
     out["run_time"]         = run_time;
     out["pmm_iter"]         = pmm_iter;
     out["ssn_iter"]         = ssn_iter;
@@ -145,9 +151,9 @@ py::dict solve_from_sif(const std::string& filename,
     return out;
 }
 
-// -----------------------------------------------------------------------
-// Helper: reconstruct PDPMMdata<T> from a parse_sif dict.
-// -----------------------------------------------------------------------
+/*-----------------------------------------------------------------------
+Helper: reconstruct PDPMMdata<T> from a parse_sif dict.
+-----------------------------------------------------------------------*/
 static PDPMMdata<T> dict_to_pdpmm(const py::dict& d) {
     PDPMMdata<T> pd;
     pd.n         = d["n"].cast<int>();
@@ -196,11 +202,11 @@ static PDPMMdata<T> dict_to_pdpmm(const py::dict& d) {
     return pd;
 }
 
-// -----------------------------------------------------------------------
-// solve_from_data: run the SSN-PMM solver on already-parsed problem data.
-// Takes a dict as returned by parse_sif.
-// Returns dict with the same keys as solve_from_sif.
-// -----------------------------------------------------------------------
+/*-----------------------------------------------------------------------
+solve_from_data: run the SSN-PMM solver on already-parsed problem data.
+Takes a dict as returned by parse_sif.
+Returns dict with the same keys as solve_from_sif.
+-----------------------------------------------------------------------*/
 py::dict solve_from_data(const py::dict& pd_dict,
                          double tol         = 1e-6,
                          long long max_iter = 1'000'000'000LL,
@@ -208,7 +214,7 @@ py::dict solve_from_data(const py::dict& pd_dict,
     PDPMMdata<T> pd = dict_to_pdpmm(pd_dict); // reads Python objects
 
     int opt, pmm_iter, ssn_iter;
-    double obj_val, run_time, pmm_tol_achieved;
+    double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
     {
         py::gil_scoped_release release;
         Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
@@ -217,6 +223,8 @@ py::dict solve_from_data(const py::dict& pd_dict,
         Solution<T> sol = solver.solve();
         opt              = sol.opt;
         obj_val          = (double)sol.obj_val;
+        setup_time       = sol.setup_time;
+        solve_time       = sol.solve_time;
         run_time         = sol.run_time;
         pmm_iter         = sol.pmm_iter;
         ssn_iter         = sol.ssn_iter;
@@ -226,6 +234,8 @@ py::dict solve_from_data(const py::dict& pd_dict,
     py::dict out;
     out["status"]           = opt;
     out["obj_val"]          = obj_val;
+    out["setup_time"]       = setup_time;
+    out["solve_time"]       = solve_time;
     out["run_time"]         = run_time;
     out["pmm_iter"]         = pmm_iter;
     out["ssn_iter"]         = ssn_iter;
@@ -233,9 +243,9 @@ py::dict solve_from_data(const py::dict& pd_dict,
     return out;
 }
 
-// -----------------------------------------------------------------------
-// Helper: PDPMMdata<T> → Python dict (same format as parse_sif output)
-// -----------------------------------------------------------------------
+/*-----------------------------------------------------------------------
+Helper: PDPMMdata<T> → Python dict (same format as parse_sif output)
+-----------------------------------------------------------------------*/
 static py::dict pdpmm_to_dict(const PDPMMdata<T>& pd) {
     py::dict out;
     out["n"] = pd.n;
@@ -258,116 +268,75 @@ static py::dict pdpmm_to_dict(const PDPMMdata<T>& pd) {
     return out;
 }
 
-// -----------------------------------------------------------------------
-// generate_pde_problem: build a PDE-constrained QP from the C++ generators.
-//
-// choice = "poisson"  – Poisson control with L1/L2 regularisation
-// choice = "convdiff" – Convection-diffusion control with L1/L2 regularisation
-//
-// Returns the same dict format as parse_sif(), so it can be passed directly
-// to solve_from_data() and pdpmm_to_qpalm() in benchmark_pde.py.
-// -----------------------------------------------------------------------
-py::dict generate_pde_problem(const std::string& choice) {
+/*-----------------------------------------------------------------------
+Generate L1/L2-regularised PDE-constrained QPs from (Gondzio, Pougkakiotis & Pearson 2022).
+
+choice  = "poisson"  or  "convdiff"
+nc      = grid exponent (grid size = 2^nc + 1 per direction)
+alpha1  = L1 regularisation weight
+alpha2  = L2 regularisation weight
+y_lower/y_upper = state bounds (default ±inf)
+-----------------------------------------------------------------------*/
+py::dict generate_pde_l1l2_qp(const std::string& choice,
+                              int nc, double alpha1, double alpha2,
+                              double y_lower = -std::numeric_limits<double>::infinity(),
+                              double y_upper =  std::numeric_limits<double>::infinity()) {
     if (choice != "poisson" && choice != "convdiff")
         throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
 
     PDPMMdata<T> pd;
     {
-        // Problem generation is pure C++; release the GIL so other Python threads
-        // (e.g. a background RSS sampler) can run while this executes.
-        py::gil_scoped_release release;
-        pd = (choice == "poisson") ? pdegen::make_poisson_L1L2_control_default<T>()
-                                   : pdegen::make_convdiff_L1L2_control_default<T>();
-    }
-    return pdpmm_to_dict(pd);
-}
-
-// -----------------------------------------------------------------------
-// generate_pde_problem_params: parametric Poisson problem generator.
-//
-// choice  = "poisson"
-// nc      = grid exponent (grid size = 2^nc + 1 per direction)
-// alpha1  = L1 regularisation weight
-// alpha2  = L2 regularisation weight (0 is valid)
-// -----------------------------------------------------------------------
-py::dict generate_pde_problem_params(const std::string& choice,
-                                      int nc, double alpha1, double alpha2) {
-    if (choice != "poisson" && choice != "convdiff")
-        throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
-
-    PDPMMdata<T> pd;
-    {
-        // Problem generation is pure C++; release the GIL so other Python threads
-        // (e.g. a background RSS sampler) can run while this executes.
         py::gil_scoped_release release;
         pd = (choice == "poisson")
-               ? pdegen::make_poisson_L1L2_control<T>(nc, (T)alpha1, (T)alpha2)
-               : pdegen::make_convdiff_L1L2_control<T>(nc, (T)alpha1, (T)alpha2);
+               ? pdegen::make_poisson_l1l2_control<T>(nc, (T)alpha1, (T)alpha2, T(-2), T(1.5),
+                                                       (T)y_lower, (T)y_upper)
+               : pdegen::make_convdiff_l1l2_control<T>(nc, (T)alpha1, (T)alpha2, T(-2), T(1.5), T(0.02),
+                                                        (T)y_lower, (T)y_upper);
     }
     return pdpmm_to_dict(pd);
 }
 
-// -----------------------------------------------------------------------
-// generate_pde_control_qp: PDE QPs from (Pearson & Gondzio 2017).
-//
-// Pure L2-regularisation, x = [y; u] (no split control variables, l = 0)
-// with independent box bounds on state y and control u.
-//
-// choice = "poisson"       - 2D Poisson control (Table 1: control-constrained)
-// choice = "poisson_state" - 2D Poisson control (Table 2: state-constrained)
-// choice = "convdiff"      - 2D convection-diffusion control (Table 5)
-// choice = "poisson3d"     - 3D Poisson control (Table 6)
-// choice = "helmholtz"     - 2D Helmholtz control (Table 4: state-constrained)
-//
-// y_lower/y_upper/u_lower/u_upper default to ±inf (unconstrained).
-// eps/wx/wy only apply to "convdiff" (diffusion coefficient / constant wind).
-// k_param only applies to "helmholtz" (Helmholtz wavenumber).
-//
-// Returns the same dict format as parse_sif(), so it can be passed directly
-// to solve_from_data() and pdpmm_to_qpalm() in the benchmark scripts.
-// -----------------------------------------------------------------------
-py::dict generate_pde_control_qp(const std::string& choice,
-                                  int nc, double beta,
-                                  double y_lower = -std::numeric_limits<double>::infinity(),
-                                  double y_upper =  std::numeric_limits<double>::infinity(),
-                                  double u_lower = -std::numeric_limits<double>::infinity(),
-                                  double u_upper =  std::numeric_limits<double>::infinity(),
-                                  double eps = 0.01,
-                                  double wx  = -0.70710678118654752440,
-                                  double wy  =  0.70710678118654752440,
-                                  double k_param = 20.0) {
-    if (choice != "poisson" && choice != "poisson_state" &&
-        choice != "convdiff" && choice != "poisson3d" && choice != "helmholtz")
+/*-----------------------------------------------------------------------
+Generate L2-regularised PDE-constrained QPs from (Pearson & Gondzio 2017).
+
+choice = "poisson"       - 2D Poisson control (control-constrained)
+choice = "poisson_state" - 2D Poisson control (state-constrained)
+choice = "convdiff"      - 2D convection-diffusion control
+
+y_lower/y_upper/u_lower/u_upper default to ±inf (unconstrained).
+eps applies to "convdiff" only (diffusion coefficient).
+-----------------------------------------------------------------------*/
+py::dict generate_pde_l2_qp(const std::string& choice,
+                                     int nc, double beta,
+                                     double y_lower = -std::numeric_limits<double>::infinity(),
+                                     double y_upper =  std::numeric_limits<double>::infinity(),
+                                     double u_lower = -std::numeric_limits<double>::infinity(),
+                                     double u_upper =  std::numeric_limits<double>::infinity(),
+                                     double eps = 0.01) {
+    if (choice != "poisson" && choice != "poisson_state" && choice != "convdiff")
         throw std::invalid_argument(
-            "choice must be one of 'poisson', 'poisson_state', 'convdiff', 'poisson3d', 'helmholtz'");
+            "choice must be one of 'poisson', 'poisson_state', 'convdiff'");
 
     PDPMMdata<T> pd;
     {
         py::gil_scoped_release release;
         if (choice == "poisson") {
-            pd = pdegen::make_poisson_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                  (T)u_lower, (T)u_upper);
-        } else if (choice == "poisson_state") {
-            pd = pdegen::make_poisson_state_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                        (T)u_lower, (T)u_upper);
-        } else if (choice == "convdiff") {
-            pd = pdegen::make_convdiff_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                   (T)u_lower, (T)u_upper,
-                                                   (T)eps, (T)wx, (T)wy);
-        } else if (choice == "poisson3d") {
-            pd = pdegen::make_poisson_control_3d<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                     (T)u_lower, (T)u_upper);
-        } else {
-            pd = pdegen::make_helmholtz_control<T>(nc, (T)beta, (T)k_param, (T)y_lower, (T)y_upper,
+            pd = pdegen::make_poisson_l2_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
                                                     (T)u_lower, (T)u_upper);
+        } else if (choice == "poisson_state") {
+            pd = pdegen::make_poisson_l2_state_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
+                                                        (T)u_lower, (T)u_upper);
+        } else { // convdiff
+            pd = pdegen::make_convdiff_l2_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
+                                                    (T)u_lower, (T)u_upper, (T)eps);
         }
     }
     return pdpmm_to_dict(pd);
 }
 
-// -----------------------------------------------------------------------
-// Module
-// -----------------------------------------------------------------------
+/*-----------------------------------------------------------------------
+Module
+-----------------------------------------------------------------------*/
 PYBIND11_MODULE(ssn_pmm_bind, m) {
     m.doc() = "Python bindings for the SSN-PMM quadratic programming solver";
 
@@ -385,56 +354,45 @@ The sparse matrices are in CSC format (data / indices / indptr / shape).)");
           py::arg("time_limit") = 600.0,
           R"(Parse a SIF/MPS file and solve it with the SSN-PMM solver.
 
-Returns a dict with keys: status, obj_val, run_time, pmm_iter, ssn_iter, pmm_tol_achieved.
+Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter, pmm_tol_achieved.
 status == 0  → optimal solution found
 status <  0  → infeasibility detected
 status >  0  → iteration / time limit reached)");
 
-    m.def("generate_pde_problem", &generate_pde_problem,
-          py::arg("choice"),
-          R"(Generate a PDE-constrained QP using the built-in C++ problem generators.
-
-choice = 'poisson'  – Poisson control with L1/L2 regularisation and control bounds
-choice = 'convdiff' – Convection-diffusion control with L1/L2 regularisation and control bounds
-
-Returns the same dict format as parse_sif(), so the result can be passed
-directly to solve_from_data() and used with pdpmm_to_qpalm().)");
-
-    m.def("generate_pde_problem_params", &generate_pde_problem_params,
+    m.def("generate_pde_l1l2_qp", &generate_pde_l1l2_qp,
           py::arg("choice"), py::arg("nc"), py::arg("alpha1"), py::arg("alpha2"),
-          R"(Generate a parametric PDE-constrained QP with explicit parameters.
+          py::arg("y_lower") = -std::numeric_limits<double>::infinity(),
+          py::arg("y_upper") =  std::numeric_limits<double>::infinity(),
+          R"(Generate a L1/L2-regularized PDE-constrained QP via split control variables.
 
 choice = 'poisson'  or  'convdiff'
 nc     = grid exponent (grid size = 2^nc + 1 per direction; n_display = 2*(2^nc+1)^2)
 alpha1 = L1 regularisation weight
-alpha2 = L2 regularisation weight (0 is valid))");
+alpha2 = L2 regularisation weight (0 is valid)
+y_lower/y_upper = state bounds (default ±inf, i.e. control-constrained only;
+                  pass finite bounds for a state- or jointly-constrained problem)
 
-    m.def("generate_pde_control_qp", &generate_pde_control_qp,
+Uses Q1 finite-element discretisation with the consistent mass matrix.
+
+Returns the same dict format as parse_sif(), so the result can be passed
+directly to solve_from_data() and used with pdpmm_to_qpalm().)");
+
+    m.def("generate_pde_l2_qp", &generate_pde_l2_qp,
           py::arg("choice"), py::arg("nc"), py::arg("beta"),
           py::arg("y_lower") = -std::numeric_limits<double>::infinity(),
           py::arg("y_upper") =  std::numeric_limits<double>::infinity(),
           py::arg("u_lower") = -std::numeric_limits<double>::infinity(),
           py::arg("u_upper") =  std::numeric_limits<double>::infinity(),
           py::arg("eps") = 0.01,
-          py::arg("wx")  = -0.70710678118654752440,
-          py::arg("wy")  =  0.70710678118654752440,
-          py::arg("k_param") = 20.0,
           R"(Generate a L2-regularized PDE-constrained QP.
 
-Pure L2-regularisation, x = [y; u] (no split control variables, l = 0)
-with independent box bounds on state y and control u.
+choice = 'poisson' (control-constrained)  or  'poisson_state' (state-constrained)  or  'convdiff' (control- and state-constrained)
+nc     = grid exponent (grid size = 2^nc + 1 per direction)
+beta   = L2 regularisation weight
+y_lower/y_upper/u_lower/u_upper = box bounds on state/control (default ±inf)
+eps = diffusion coefficient, 'convdiff' only.
 
-choice = 'poisson'       - 2D Poisson control
-choice = 'poisson_state' - 2D Poisson control
-choice = 'convdiff'      - 2D convection-diffusion control
-choice = 'poisson3d'     - 3D Poisson control
-choice = 'helmholtz'     - 2D Helmholtz control
-
-nc = grid exponent (grid size = 2^nc + 1 per direction)
-beta = L2 regularisation weight
-y_lower/y_upper/u_lower/u_upper = box bounds on state/control (default +-inf)
-eps/wx/wy = diffusion coefficient / constant wind, 'convdiff' only
-k_param = Helmholtz wavenumber, 'helmholtz' only (k=20 or k=50)
+Uses Q1 finite-element discretisation with the consistent mass matrix.
 
 Returns the same dict format as parse_sif(), so the result can be passed
 directly to solve_from_data() and used with pdpmm_to_qpalm().)");
@@ -446,5 +404,5 @@ directly to solve_from_data() and used with pdpmm_to_qpalm().)");
           py::arg("time_limit") = 600.0,
           R"(Solve with SSN-PMM using already-parsed problem data (dict from parse_sif).
 
-Returns a dict with keys: status, obj_val, pmm_iter, ssn_iter, pmm_tol_achieved.)");
+Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter, pmm_tol_achieved.)");
 }

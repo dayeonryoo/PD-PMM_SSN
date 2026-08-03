@@ -8,6 +8,29 @@
 #include "SchurOperator.hpp"
 #include "SchurPreconditioner.hpp"
 
+// TIMER: master switch for per-step SSN-loop timing instrumentation.
+// Set to 1 (here, or via -DSSN_ENABLE_TIMERS=1) to accumulate and print a phase-by-phase
+// wall-clock breakdown of solve_ssn() to stderr; 0 compiles the timers out entirely (no overhead).
+#ifndef SSN_ENABLE_TIMERS
+#define SSN_ENABLE_TIMERS 0
+#endif
+
+#if SSN_ENABLE_TIMERS
+#include <chrono>
+#include <cstdio>
+
+// TIMER: RAII scoped timer; accumulates elapsed wall-clock seconds into `acc` on scope exit.
+struct SsnScopedTimer {
+    std::chrono::steady_clock::time_point t0;
+    double& acc;
+    explicit SsnScopedTimer(double& acc_) : t0(std::chrono::steady_clock::now()), acc(acc_) {}
+    ~SsnScopedTimer() { acc += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
+};
+#define SSN_TIMER_BLOCK(acc) SsnScopedTimer _ssn_scoped_timer(acc)
+#else
+#define SSN_TIMER_BLOCK(acc) do {} while (0)
+#endif
+
 
 template <typename T>
 class SSN {
@@ -46,12 +69,16 @@ public:
     int n_active_W, n_inactive_W;
     SpMat B_active_W, B_inactive_W, G, G_tr;
 
-    RowMajorSpMat B_rm; // Row-major B for O(nnz_row) active-row access when rebuilding G.
-    std::vector<Triplet> G_A_trips_; // A's contribution to G (rows 0..M-1), computed once (A is const).
+    RowMajorSpMat B_rm;              // Row-major B for rebuilding G.
+    std::vector<Triplet> G_A_trips_; // A's contribution to G, computed once since A is const.
 
     // Scratch triplet buffers for rebuild_G() and solve_using_ldlt().
     std::vector<Triplet> B_act_trips_, B_inact_trips_, G_trips_;
     std::vector<Triplet> ldlt_trip_;
+
+    // Printing
+    PrintWhen when = PrintWhen::NEVER;
+    PrintWhat what = PrintWhat::NONE;
 
     // Outputs
     int opt, iter, ssn_iter;
@@ -59,6 +86,20 @@ public:
     int krylov_iter = 0, fact = 0, smw_count = 0;
     int linesearch_fail = 0, krylov_fail = 0;
     bool krylov_converged = true;
+
+#if SSN_ENABLE_TIMERS
+    // TIMER: cumulative wall-clock seconds per SSN-loop phase; reset at the top of each solve_ssn() call
+    // and printed to stderr just before it returns. See solve_ssn() in SSN.tpp for what each phase covers.
+    double timer_subgrad_dist = 0.0; // Clarke subgradient/distance for K and W (u_, v_, compute_subgrad_and_dist)
+    double timer_pk_update    = 0.0; // active_K / H_diag rebuild when P_K changes
+    double timer_rebuild_g    = 0.0; // rebuild_G() when P_W changes
+    double timer_rhs_build    = 0.0; // split_by_mask + r1_/r2_ assembly
+    double timer_choose_ldlt  = 0.0; // choose_ldlt() heuristic
+    double timer_linear_solve = 0.0; // solve_using_cg() + iterative refinement (factorization + Krylov)
+    double timer_linesearch   = 0.0; // exact_line_search() (incl. gradient-descent retry)
+    double timer_state_update = 0.0; // x_cur_/y2_cur_/Ax_ssn_/Bx_ssn_ update + gradient/termination check
+    int    timer_n_iters      = 0;   // number of SSN iterations covered by the above (this solve_ssn() call)
+#endif
 
     // Conjugate gradient parameters
     T krylov_tol = 1e-12;
@@ -135,14 +176,16 @@ public:
         const Vec& D2_ext_inv, const Vec& D1B_diag_inv,
         const Vec& lx, const Vec& ux, const Vec& lw, const Vec& uw,
         int n, int m, int N, int M, int l,
-        T ssn_tol, int ssn_max_in_iter, T eps_pinf, T eps_dinf)
+        T ssn_tol, int ssn_max_in_iter, T eps_pinf, T eps_dinf,
+        PrintWhen when = PrintWhen::NEVER, PrintWhat what = PrintWhat::NONE)
     : Q_info(Q_info), Q_diag(Q_diag), L(L),
       A(A), B(B), A_tr(A_tr), B_tr(B_tr), c(c), b(b),
       D2_ext_inv(D2_ext_inv), D1B_diag_inv(D1B_diag_inv),
       lx(lx), ux(ux), lw(lw), uw(uw),
       n(n), m(m), N(N), M(M), l(l),
       ssn_tol(ssn_tol), ssn_max_in_iter(ssn_max_in_iter),
-      eps_pinf(eps_pinf), eps_dinf(eps_dinf)
+      eps_pinf(eps_pinf), eps_dinf(eps_dinf),
+      when(when), what(what)
     {
         ones_N = Vec::Ones(N);
         ones_M = Vec::Ones(M);
@@ -221,7 +264,7 @@ public:
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                         const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx,
                         const Vec& dist_K_u, const Vec& dist_W_v);
-    void solve_ssn(const T eps);
+    void solve_ssn(const T ssn_tol);
 
 };
 

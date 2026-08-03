@@ -4,12 +4,6 @@
 #include <functional>
 #include <chrono>
 
-inline double time_diff_ms(const std::chrono::steady_clock::time_point& start,
-                           const std::chrono::steady_clock::time_point& end) {
-    using namespace std::chrono;
-    return duration<double, std::milli>(end - start).count();
-}
-
 enum class PrintWhen {
     NEVER,
     EVERY10,
@@ -19,14 +13,16 @@ enum class PrintWhen {
 enum class PrintWhat {
     NONE,
     MINIMAL, // iter, tol
-    TUNING, // iter, tol, params, lineserach failures
-    FULL, // iter, obj_val, tol, params, linesearch failures
+    SSN,     // iter, tol, params, linesearch and Krylov failures; printed at every SSN iteration
+    TUNING,  // iter, tol, params, lineserach and Krylov failures
+    FULL,    // iter, obj_val, tol, params, linesearch and Krylov failures
 };
 
-enum class PrintLabel {
-    SSN,
-    PMM
-};
+inline double time_diff_s(const std::chrono::steady_clock::time_point& start,
+                          const std::chrono::steady_clock::time_point& end) {
+    using namespace std::chrono;
+    return duration<double>(end - start).count();
+}
 
 void print_header(PrintWhen when, PrintWhat what) {
     if (when == PrintWhen::NEVER || what == PrintWhat::NONE) return;
@@ -35,28 +31,28 @@ void print_header(PrintWhen when, PrintWhat what) {
     const int w_val  = 14;
 
     std::cout << std::setw(w_iter) << "PMM" << std::setw(w_iter) << "SSN";
-    if (what == PrintWhat::TUNING) {
+    if (what == PrintWhat::TUNING || what == PrintWhat::SSN) {
         std::cout << std::setw(w_iter) << "Krylov" << std::setw(w_iter) << "fact";
     }
     if (what == PrintWhat::FULL) {
-        std::cout << std::setw(w_val)  << "Objective";
+        std::cout << std::setw(w_val) << "Objective";
     }
     std::cout << std::setw(w_val)  << "PrimalRes"
-                << std::setw(w_val)  << "DualRes"
-                << std::setw(w_val)  << "Comp_x"
-                << std::setw(w_val)  << "Comp_Bx"
-                << std::setw(w_val)  << "SSN_res";
-    if (what == PrintWhat::TUNING || what == PrintWhat::FULL) {
+              << std::setw(w_val)  << "DualRes"
+              << std::setw(w_val)  << "Comp_x"
+              << std::setw(w_val)  << "Comp_Bx"
+              << std::setw(w_val)  << "SSN_res";
+    if (what == PrintWhat::TUNING || what == PrintWhat::FULL || what == PrintWhat::SSN) {
         std::cout << std::setw(w_val) << "mu" << std::setw(w_val)  << "rho"  << std::setw(w_val) << "eps";
         std::cout << std::setw(w_val) << "l.f.";
     }
-    if (what == PrintWhat::TUNING) {
+    if (what == PrintWhat::TUNING || what == PrintWhat::SSN) {
         std::cout << std::setw(w_val) << "k.f.";
     }
     std::cout << "\n";
 
     std::cout << std::string(w_iter*2 + w_val*5, '-');
-    if (what == PrintWhat::TUNING) {
+    if (what == PrintWhat::TUNING || what == PrintWhat::SSN) {
         std::cout << std::string(w_iter*2 + w_val*5, '-');
     } else if (what == PrintWhat::FULL) {
         std::cout << std::string(w_val*4, '-');
@@ -65,31 +61,38 @@ void print_header(PrintWhen when, PrintWhat what) {
 }
 
 template <typename T, typename Vec>
-void print(PrintWhen when, PrintWhat what, int pmm_iter, int ssn_iter, int krylov_iter, int fact, T obj_val, const Vec& res_norms, T ssn_res, T mu, T rho, T eps, int linesearch_failures, int krylov_fail) {
+void print(PrintWhen when, PrintWhat what, int pmm_iter, int ssn_iter, int krylov_iter, int fact, T obj_val, const Vec& res_norms, T ssn_res, T mu, T rho, T eps, int linesearch_failures, int krylov_fail, bool show_pmm_iter = true) {
     if (when == PrintWhen::NEVER || what == PrintWhat::NONE) return;
     if (when == PrintWhen::EVERY10 && pmm_iter % 10 != 0) return;
 
     const int w_iter = 8;
     const int w_val  = 14;
 
-    std::cout << std::setw(w_iter) << pmm_iter << std::setw(w_iter) << ssn_iter;
-    if (what == PrintWhat::TUNING) {
+    if (show_pmm_iter) std::cout << std::setw(w_iter) << pmm_iter;
+    else std::cout << std::setw(w_iter) << "";
+    std::cout << std::setw(w_iter) << ssn_iter;
+    if (what == PrintWhat::TUNING || what == PrintWhat::SSN) {
         std::cout << std::setw(w_iter) << krylov_iter << std::setw(w_iter) << fact;
     }
     if (what == PrintWhat::FULL) {
         std::cout << std::setw(w_val)  << std::scientific << obj_val;
     }
-    T max_res = res_norms.maxCoeff();
-    for (T res : res_norms) {
-        if (res == max_res) std::cout << "\033[1m" << std::setw(w_val)  << res << "\033[0m";
-        else std::cout << std::setw(w_val)  << res;
+    if (res_norms.size() == 0) {
+        // Residuals unavailable (e.g. printed from inside the SSN inner loop): leave blank.
+        for (int i = 0; i < 4; ++i) std::cout << std::setw(w_val) << "";
+    } else {
+        T max_res = res_norms.maxCoeff();
+        for (T res : res_norms) {
+            if (res == max_res) std::cout << "\033[1m" << std::setw(w_val)  << res << "\033[0m";
+            else std::cout << std::setw(w_val)  << res;
+        }
     }
     std::cout << std::setw(w_val)  << ssn_res;
-    if (what == PrintWhat::TUNING || what == PrintWhat::FULL) {
+    if (what == PrintWhat::TUNING || what == PrintWhat::FULL || what == PrintWhat::SSN) {
         std::cout << std::setw(w_val)  << mu << std::setw(w_val)  << rho << std::setw(w_val) << eps;
         std::cout << std::setw(w_val) << linesearch_failures;
     }
-    if (what == PrintWhat::TUNING) {
+    if (what == PrintWhat::TUNING || what == PrintWhat::SSN) {
         std::cout << std::setw(w_val) << krylov_fail;
     }
     std::cout << "\n";

@@ -1,282 +1,355 @@
 #pragma once
+/*-----------------------------------------------------------------------
+Q1 bilinear finite-element assembly and PDE-constrained QP generation.
+
+The global assembly and boundary-condition routines here are C++
+translations of the corresponding IFISS MATLAB functions:
+  femq1_diff.m        - IFISS function: DJS; 4 March 2005
+  femq1_cd.m          - IFISS function: DJS; 5 March 2005
+Copyright (c) 2005 D.J. Silvester, H.C. Elman, A. Ramage
+
+  nonzerobc_input.m  - IFISS function: DJS, JWP; 27 June 2012
+Copyright (c) 2012 D.J. Silvester, H.C. Elman, A. Ramage, J.W. Pearson
+
+See also FemQ1.hpp for the element-level kernels (shape/deriv/gauss_*)
+and its own IFISS citations.
+-----------------------------------------------------------------------*/
 #include <Eigen/Sparse>
 #include <Eigen/Dense>
 #include <vector>
+#include <array>
 #include <cmath>
 #include <limits>
-#include <cstdint>
+#include "FemQ1.hpp"
 #include "Problem.hpp"
 
 namespace pdegen {
-
-template <typename T>
-struct Grid {
-    int nc;          // exponent: n = 2^nc + 1
-    int n1d;         // nodes per direction
-    int np;          // total nodes
-    T h;             // mesh size = 1 / (n1d - 1)
-
-    // node index from (i,j)
-    static int idx(int i, int j, int n1d) { return i + j * n1d; }
-
-    explicit Grid(int nc_in)
-        : nc(nc_in),
-          n1d((1 << nc) + 1),
-          np(n1d * n1d),
-          h(T(1) / T(n1d - 1)) {}
-};
 
 template <typename T>
 static inline bool is_boundary_node(int i, int j, int n1d) {
     return (i == 0 || j == 0 || i == n1d - 1 || j == n1d - 1);
 }
 
-/*
-===========================================================================
-Assemble Poisson operator:
-    D = -Δ
-    
-    D: 5-point Laplacian stiffness (FD approximation)
-    M_lump: lumped mass as diagonal (area weights)
- 
-Dirichlet boundary:
-    For boundary nodes p: enforce y_p = bc(p) by setting D(p,p)=1, D(p,*)=0, rhs(p)=bc(p).
-===========================================================================
-*/
+/*-----------------------------------------------------------------------
+Q1 finite-element mesh on a uniform rectangular tensor-product grid over
+the unit square. Element connectivity is generated directly from (ei,ej)
+since we assume the mesh is always structured.
+-----------------------------------------------------------------------*/
 template <typename T>
-static void assemble_poisson_fd_lumped_mass(
-    const Grid<T>& g,
-    Eigen::SparseMatrix<T>& D,
-    Eigen::SparseMatrix<T>& M_lump,
-    Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
-    T bc_value
-) {
-    using Trip = Eigen::Triplet<T>;
-    std::vector<Trip> Dt;
-    std::vector<Trip> Mt;
-    Dt.reserve(std::size_t(g.np) * 5);
-    Mt.reserve(std::size_t(g.np));
+struct GridQ1 {
+    int nc;
+    int n1d;    // nodes per direction
+    int np;     // total nodes
+    int nel1d;  // elements per direction
+    int nel;    // total elements
+    std::vector<T> x1d; // n1d physical node coordinates along one axis (shared by both axes)
 
-    rhs = Eigen::Matrix<T, Eigen::Dynamic, 1>::Zero(g.np);
+    static int idx(int i, int j, int n1d_in) { return i + j * n1d_in; }
 
-    const T inv_h2 = T(1) / (g.h * g.h);
-    const T area   = g.h * g.h;
+    explicit GridQ1(int nc_in)
+        : nc(nc_in),
+          n1d((1 << nc_in) + 1),
+          np(n1d * n1d),
+          nel1d(n1d - 1),
+          nel(nel1d * nel1d),
+          x1d(fem::uniform_1d_coords<T>(n1d)) {}
 
-    for (int j = 0; j < g.n1d; ++j) {
-        for (int i = 0; i < g.n1d; ++i) {
-            const int p = Grid<T>::idx(i, j, g.n1d);
+    // Global node ids of element (ei,ej)'s 4 vertices, CCW order matching
+    // fem::shape's convention: (ei,ej), (ei+1,ej), (ei+1,ej+1), (ei,ej+1).
+    std::array<int, 4> element_nodes(int ei, int ej) const {
+        return { idx(ei, ej, n1d), idx(ei + 1, ej, n1d),
+                 idx(ei + 1, ej + 1, n1d), idx(ei, ej + 1, n1d) };
+    }
+};
 
-            // lumped mass diagonal weight (set to 0 on boundary)
-            if (is_boundary_node<T>(i, j, g.n1d)) {
-                Mt.emplace_back(p, p, T(0));
-            } else {
-                Mt.emplace_back(p, p, area);
+/*-----------------------------------------------------------------------
+Q1 diffusion assembly: stiffness A_stiff, consistent mass M_cons, and
+source load f_rhs. Translation of femq1_diff.m.
+
+  A_stiff_{ij} = \int_Ω  ∇(phi_i) ⋅ ∇(phi_j)  dΩ
+  M_cons_{ij}  = \int_Ω  phi_i * phi_j        dΩ
+  f_rhs_i      = \int_Ω  phi_i * source(x)    dΩ
+
+where {phi_i} are the Q1 bilinear nodal basis functions on the element,
+evaluated at 2x2 Gauss points (dv.phi, dv.dphidx, dv.dphidy below).
+-----------------------------------------------------------------------*/
+template <typename T>
+struct FemQ1DiffResult {
+    Eigen::SparseMatrix<T> A_stiff;
+    Eigen::SparseMatrix<T> M_cons;
+    Eigen::Matrix<T, Eigen::Dynamic, 1> f_rhs;
+};
+
+template <typename T>
+FemQ1DiffResult<T> assemble_femq1_diff(const GridQ1<T>& g) {
+    using SpMat = Eigen::SparseMatrix<T>;
+    using Vec   = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using Trip  = Eigen::Triplet<T>;
+
+    std::vector<Trip> At, Mt;
+    At.reserve(std::size_t(g.nel) * 16);
+    Mt.reserve(std::size_t(g.nel) * 16);
+    Vec f_rhs = Vec::Zero(g.np);
+
+    const auto gpts = fem::gauss_2x2<T>();
+
+    for (int ej = 0; ej < g.nel1d; ++ej) {
+        for (int ei = 0; ei < g.nel1d; ++ei) {
+            const auto nodes = g.element_nodes(ei, ej);
+            const T x0 = g.x1d[ei],   x1 = g.x1d[ei + 1];
+            const T y0 = g.x1d[ej],   y1 = g.x1d[ej + 1];
+            const T xl[4] = { x0, x1, x1, x0 };
+            const T yl[4] = { y0, y0, y1, y1 };
+
+            T ae[4][4] = {};
+            T me[4][4] = {};
+            T fe[4]    = {};
+
+            for (const auto& gp : gpts) {
+                const auto dv = fem::deriv<T>(gp.s, gp.t, xl, yl);
+                const T scale = dv.jac * gp.wt;
+                const T src   = fem::gauss_source<T>(dv.phi, xl, yl);
+
+                for (int jl = 0; jl < 4; ++jl) {
+                    for (int il = 0; il < 4; ++il) {
+                        ae[il][jl] += (dv.dphidx[il] * dv.dphidx[jl] +
+                                       dv.dphidy[il] * dv.dphidy[jl]) * scale;
+                        me[il][jl] += dv.phi[il] * dv.phi[jl] * scale;
+                    }
+                    fe[jl] += src * dv.phi[jl] * scale;
+                }
             }
 
-            if (is_boundary_node<T>(i, j, g.n1d)) {
-                // Dirichlet y = bc_value
-                Dt.emplace_back(p, p, T(1));
-                rhs(p) = bc_value;
-                continue;
+            for (int il = 0; il < 4; ++il) {
+                f_rhs(nodes[il]) += fe[il];
+                for (int jl = 0; jl < 4; ++jl) {
+                    At.emplace_back(nodes[il], nodes[jl], ae[il][jl]);
+                    Mt.emplace_back(nodes[il], nodes[jl], me[il][jl]);
+                }
             }
-
-            // Interior: -Δ discretization (SPD)
-            // D y ~ (4 y_p - y_E - y_W - y_N - y_S)/h^2
-            Dt.emplace_back(p, p, T(4) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i - 1, j, g.n1d), T(-1) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i + 1, j, g.n1d), T(-1) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i, j - 1, g.n1d), T(-1) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i, j + 1, g.n1d), T(-1) * inv_h2);
-
         }
     }
 
-    D.resize(g.np, g.np);
-    M_lump.resize(g.np, g.np);
-    D.setFromTriplets(Dt.begin(), Dt.end());
-    M_lump.setFromTriplets(Mt.begin(), Mt.end());
-    D.makeCompressed();
-    M_lump.makeCompressed();
+    FemQ1DiffResult<T> res;
+    res.A_stiff.resize(g.np, g.np);
+    res.M_cons.resize(g.np, g.np);
+    res.A_stiff.setFromTriplets(At.begin(), At.end());
+    res.M_cons.setFromTriplets(Mt.begin(), Mt.end());
+    res.A_stiff.makeCompressed();
+    res.M_cons.makeCompressed();
+    res.f_rhs = f_rhs;
+    return res;
 }
 
-/*
-===========================================================================
-Assemble Helmholtz operator:
-    D = -Δ - k^2 I
-    
-    D: 5-point Laplacian stiffness minus k^2 on the interior diagonal
-    M_lump: lumped mass as diagonal (area weights)
- 
-Dirichlet boundary:
-    For boundary nodes p: enforce y_p = bc(p) by setting D(p,p)=1, D(p,*)=0.
-    bc_field = non-null gives a per-node Dirichlet value (used when y = yhat
-    on the boundary); otherwise the constant bc_value is used everywhere.
-===========================================================================
-*/
+/*---------------------------------------------------------------------
+Q1 convection-diffusion assembly: adds convection matrix N_conv to the
+diffusion assembly above. Translation of femq1_cd.m. Element Peclet
+number / SUPG scaling diagnostics are omitted.
+
+  A_stiff_{ij} = \int_Ω  ∇(phi_i) ⋅ ∇(phi_j)          dΩ
+  M_cons_{ij}  = \int_Ω  phi_i * phi_j                dΩ
+  N_conv_{ij}  = \int_Ω  phi_i * ( w(x) ⋅ ∇(phi_j) )  dΩ
+
+where w(x) = (wx, wy) is the wind/transport field sampled at each Gauss
+point via fem::gauss_transprt. The resulting convection-diffusion
+operator is D_op = eps * A_stiff + N_conv.
+-------------------------------------------------------------------------*/
 template <typename T>
-static void assemble_helmholtz_fd_lumped_mass(
-    const Grid<T>& g,
-    Eigen::SparseMatrix<T>& D,
-    Eigen::SparseMatrix<T>& M_lump,
-    Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
-    T bc_value,
-    T k_param,
-    const Eigen::Matrix<T, Eigen::Dynamic, 1>* bc_field = nullptr
-) {
-    using Trip = Eigen::Triplet<T>;
-    std::vector<Trip> Dt;
-    std::vector<Trip> Mt;
-    Dt.reserve(std::size_t(g.np) * 5);
-    Mt.reserve(std::size_t(g.np));
+struct FemQ1CdResult {
+    Eigen::SparseMatrix<T> A_stiff;
+    Eigen::SparseMatrix<T> N_conv;
+    Eigen::SparseMatrix<T> M_cons;
+    Eigen::Matrix<T, Eigen::Dynamic, 1> f_rhs;
+};
 
-    rhs = Eigen::Matrix<T, Eigen::Dynamic, 1>::Zero(g.np);
+template <typename T, typename WindFn = void (*)(T, T, T&, T&)>
+FemQ1CdResult<T> assemble_femq1_cd(const GridQ1<T>& g,
+                                    WindFn wind = fem::velocity_field_w_circular<T>) {
+    using SpMat = Eigen::SparseMatrix<T>;
+    using Vec   = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using Trip  = Eigen::Triplet<T>;
 
-    const T inv_h2 = T(1) / (g.h * g.h);
-    const T area   = g.h * g.h;
+    std::vector<Trip> At, Nt, Mt;
+    At.reserve(std::size_t(g.nel) * 16);
+    Nt.reserve(std::size_t(g.nel) * 16);
+    Mt.reserve(std::size_t(g.nel) * 16);
+    Vec f_rhs = Vec::Zero(g.np);
 
-    for (int j = 0; j < g.n1d; ++j) {
-        for (int i = 0; i < g.n1d; ++i) {
-            const int p = Grid<T>::idx(i, j, g.n1d);
+    const auto gpts = fem::gauss_2x2<T>();
 
-            if (is_boundary_node<T>(i, j, g.n1d)) {
-                Mt.emplace_back(p, p, T(0));
-                Dt.emplace_back(p, p, T(1));
-                rhs(p) = bc_field ? (*bc_field)(p) : bc_value;
-                continue;
+    for (int ej = 0; ej < g.nel1d; ++ej) {
+        for (int ei = 0; ei < g.nel1d; ++ei) {
+            const auto nodes = g.element_nodes(ei, ej);
+            const T x0 = g.x1d[ei],   x1 = g.x1d[ei + 1];
+            const T y0 = g.x1d[ej],   y1 = g.x1d[ej + 1];
+            const T xl[4] = { x0, x1, x1, x0 };
+            const T yl[4] = { y0, y0, y1, y1 };
+
+            T ae[4][4] = {};
+            T ne[4][4] = {};
+            T me[4][4] = {};
+            T fe[4]    = {};
+
+            for (const auto& gp : gpts) {
+                const auto dv = fem::deriv<T>(gp.s, gp.t, xl, yl);
+                const T scale = dv.jac * gp.wt;
+                const T src   = fem::gauss_source<T>(dv.phi, xl, yl);
+
+                T wx, wy;
+                fem::gauss_transprt<T>(dv.phi, xl, yl, wx, wy, wind);
+
+                for (int jl = 0; jl < 4; ++jl) {
+                    for (int il = 0; il < 4; ++il) {
+                        ae[il][jl] += (dv.dphidx[il] * dv.dphidx[jl] +
+                                       dv.dphidy[il] * dv.dphidy[jl]) * scale;
+                        me[il][jl] += dv.phi[il] * dv.phi[jl] * scale;
+                        ne[il][jl] += (wx * dv.phi[il] * dv.dphidx[jl] +
+                                       wy * dv.phi[il] * dv.dphidy[jl]) * scale;
+                    }
+                    fe[jl] += src * dv.phi[jl] * scale;
+                }
             }
 
-            Mt.emplace_back(p, p, area);
-
-            // Interior: (-Δ - k^2) discretization
-            Dt.emplace_back(p, p, T(4) * inv_h2 - k_param * k_param);
-            Dt.emplace_back(p, Grid<T>::idx(i - 1, j, g.n1d), T(-1) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i + 1, j, g.n1d), T(-1) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i, j - 1, g.n1d), T(-1) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i, j + 1, g.n1d), T(-1) * inv_h2);
+            for (int il = 0; il < 4; ++il) {
+                f_rhs(nodes[il]) += fe[il];
+                for (int jl = 0; jl < 4; ++jl) {
+                    At.emplace_back(nodes[il], nodes[jl], ae[il][jl]);
+                    Mt.emplace_back(nodes[il], nodes[jl], me[il][jl]);
+                    Nt.emplace_back(nodes[il], nodes[jl], ne[il][jl]);
+                }
+            }
         }
     }
 
-    D.resize(g.np, g.np);
-    M_lump.resize(g.np, g.np);
-    D.setFromTriplets(Dt.begin(), Dt.end());
-    M_lump.setFromTriplets(Mt.begin(), Mt.end());
-    D.makeCompressed();
-    M_lump.makeCompressed();
+    FemQ1CdResult<T> res;
+    res.A_stiff.resize(g.np, g.np);
+    res.N_conv.resize(g.np, g.np);
+    res.M_cons.resize(g.np, g.np);
+    res.A_stiff.setFromTriplets(At.begin(), At.end());
+    res.N_conv.setFromTriplets(Nt.begin(), Nt.end());
+    res.M_cons.setFromTriplets(Mt.begin(), Mt.end());
+    res.A_stiff.makeCompressed();
+    res.N_conv.makeCompressed();
+    res.M_cons.makeCompressed();
+    res.f_rhs = f_rhs;
+    return res;
 }
 
-/*
-===========================================================================
-Assemble convection–diffusion operator:
-    D = -eps * Δ + N_upwind.
+/*-----------------------------------------------------------------------
+Dirichlet boundary conditions via row/col elimination on the fully
+assembled global operator. Translation of nonzerobc_input.m. Applied as
+a separate post-assembly step.
 
-    D: 5-point Laplacian stiffness plus w·grad,
-    N_upwind approximates w·grad with simple first-order upwind on a uniform grid.
+For boundary nodes p with prescribed value g_p = bc_values[p]:
+  rhs_r  <-  rhs_r - sum_{p in bc_nodes} D_op(r,p) * g_p    for r not in bc_nodes
+  D_op(p, :) = D_op(:, p) = 0,  D_op(p, p) = 1              for p in bc_nodes
+  rhs_p  <-  g_p                                            for p in bc_nodes
 
-    w = (w_x, w_y) constant.
-===========================================================================
-*/
+i.e. known boundary columns are folded into the RHS of the interior
+equations, then boundary rows/cols are replaced by identity rows so that
+solving D_op y = rhs directly yields y_p = g_p at the boundary.
+-----------------------------------------------------------------------*/
 template <typename T>
-static inline void velocity_field_w(T x1, T x2, T& wx, T& wy) {
-    // w = [2 x2 (1 - x1^2), -2 x1 (1 - x2^2)]^T
-    wx = T(2) * x2 * (T(1) - x1 * x1);
-    wy = T(-2) * x1 * (T(1) - x2 * x2);
+void apply_dirichlet_bc(Eigen::SparseMatrix<T>& D_op,
+                         Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
+                         const std::vector<int>& bc_nodes,
+                         const Eigen::Matrix<T, Eigen::Dynamic, 1>& bc_values) {
+    using SpMat = Eigen::SparseMatrix<T>;
+    using Vec   = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using Trip  = Eigen::Triplet<T>;
+
+    const int np = static_cast<int>(D_op.rows());
+    std::vector<char> is_bc(np, 0);
+    Vec bc_value_at = Vec::Zero(np);
+    for (std::size_t k = 0; k < bc_nodes.size(); ++k) {
+        is_bc[bc_nodes[k]] = 1;
+        bc_value_at(bc_nodes[k]) = bc_values(static_cast<int>(k));
+    }
+
+    // fold known boundary columns into the RHS before elimination
+    for (int k = 0; k < D_op.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(D_op, k); it; ++it) {
+            const int r = it.row();
+            const int c = it.col();
+            if (!is_bc[r] && is_bc[c]) {
+                rhs(r) -= it.value() * bc_value_at(c);
+            }
+        }
+    }
+
+    // zero boundary rows/cols, keep interior entries, set diagonal = 1
+    std::vector<Trip> Dt;
+    Dt.reserve(std::size_t(D_op.nonZeros()) + bc_nodes.size());
+    for (int k = 0; k < D_op.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(D_op, k); it; ++it) {
+            const int r = it.row();
+            const int c = it.col();
+            if (!is_bc[r] && !is_bc[c]) Dt.emplace_back(r, c, it.value());
+        }
+    }
+    for (int p : bc_nodes) Dt.emplace_back(p, p, T(1));
+
+    D_op.setFromTriplets(Dt.begin(), Dt.end());
+    D_op.makeCompressed();
+
+    for (int p : bc_nodes) rhs(p) = bc_value_at(p);
 }
 
+// Zeroes boundary rows/cols of a mass matrix (no RHS coupling).
 template <typename T>
-static void assemble_convdiff_fd_lumped_mass(
-    const Grid<T>& g,
-    Eigen::SparseMatrix<T>& D,
-    Eigen::SparseMatrix<T>& M_lump,
-    Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
-    T bc_value,
-    T eps
-) {
+void apply_dirichlet_bc_mass(Eigen::SparseMatrix<T>& M, const std::vector<int>& bc_nodes) {
     using SpMat = Eigen::SparseMatrix<T>;
     using Trip  = Eigen::Triplet<T>;
-    std::vector<Trip> Dt;
+
+    const int np = static_cast<int>(M.rows());
+    std::vector<char> is_bc(np, 0);
+    for (int p : bc_nodes) is_bc[p] = 1;
+
     std::vector<Trip> Mt;
-    Dt.reserve(std::size_t(g.np) * 9);
-    Mt.reserve(std::size_t(g.np));
-
-    rhs = Eigen::Matrix<T, Eigen::Dynamic, 1>::Zero(g.np);
-
-    const T inv_h2 = T(1) / (g.h * g.h);
-    const T inv_h  = T(1) / g.h;
-    const T area   = g.h * g.h;
-
-    for (int j = 0; j < g.n1d; ++j) {
-        for (int i = 0; i < g.n1d; ++i) {
-            const int p = Grid<T>::idx(i, j, g.n1d);
-
-            // Lumped mass diagonal (0 on boundary)
-            if (is_boundary_node<T>(i, j, g.n1d)) Mt.emplace_back(p, p, T(0));
-            else                                  Mt.emplace_back(p, p, area);
-
-            // Dirichlet boundary row: y_p = bc_value
-            if (is_boundary_node<T>(i, j, g.n1d)) {
-                Dt.emplace_back(p, p, T(1));
-                rhs(p) = bc_value;
-                continue;
-            }
-
-            // Diffusion: eps * Laplacian
-            Dt.emplace_back(p, p, eps * (T(4) * inv_h2));
-            Dt.emplace_back(p, Grid<T>::idx(i - 1, j, g.n1d), eps * (T(-1) * inv_h2));
-            Dt.emplace_back(p, Grid<T>::idx(i + 1, j, g.n1d), eps * (T(-1) * inv_h2));
-            Dt.emplace_back(p, Grid<T>::idx(i, j - 1, g.n1d), eps * (T(-1) * inv_h2));
-            Dt.emplace_back(p, Grid<T>::idx(i, j + 1, g.n1d), eps * (T(-1) * inv_h2));
-
-            // Convection: w(x) · grad y, first-order upwind at node (i,j)
-            const T x1 = T(i) * g.h;
-            const T x2 = T(j) * g.h;
-            T wx, wy;
-            velocity_field_w<T>(x1, x2, wx, wy);
-
-            const T wx_p = std::max(wx, T(0));
-            const T wx_m = std::max(-wx, T(0));
-            const T wy_p = std::max(wy, T(0));
-            const T wy_m = std::max(-wy, T(0));
-
-            // Upwind stencil contributions:
-            // wx>0:  wx*(y_p - y_W)/h  -> +wx/h * y_p  -wx/h * y_W
-            // wx<0:  wx*(y_E - y_p)/h  -> -|wx|/h*y_p +|wx|/h*y_E
-            // same in y-direction.
-            Dt.emplace_back(p, p, (wx_p + wx_m + wy_p + wy_m) * inv_h);
-            Dt.emplace_back(p, Grid<T>::idx(i - 1, j, g.n1d), (-wx_p) * inv_h);
-            Dt.emplace_back(p, Grid<T>::idx(i + 1, j, g.n1d), (+wx_m) * inv_h);
-            Dt.emplace_back(p, Grid<T>::idx(i, j - 1, g.n1d), (-wy_p) * inv_h);
-            Dt.emplace_back(p, Grid<T>::idx(i, j + 1, g.n1d), (+wy_m) * inv_h);
+    Mt.reserve(std::size_t(M.nonZeros()));
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
+            const int r = it.row();
+            const int c = it.col();
+            if (!is_bc[r] && !is_bc[c]) Mt.emplace_back(r, c, it.value());
         }
     }
-
-    D.resize(g.np, g.np);
-    M_lump.resize(g.np, g.np);
-    D.setFromTriplets(Dt.begin(), Dt.end());
-    M_lump.setFromTriplets(Mt.begin(), Mt.end());
-    D.makeCompressed();
-    M_lump.makeCompressed();
+    M.setFromTriplets(Mt.begin(), Mt.end());
+    M.makeCompressed();
 }
 
-/*
-===========================================================================
+// Collects the boundary node ids of a GridQ1.
+template <typename T>
+std::vector<int> fem_boundary_nodes(const GridQ1<T>& g) {
+    std::vector<int> bc_nodes;
+    bc_nodes.reserve(std::size_t(4) * g.n1d);
+    for (int j = 0; j < g.n1d; ++j)
+        for (int i = 0; i < g.n1d; ++i)
+            if (is_boundary_node<T>(i, j, g.n1d))
+                bc_nodes.push_back(GridQ1<T>::idx(i, j, g.n1d));
+    return bc_nodes;
+}
+
+/*-----------------------------------------------------------------------
 L1/L2-regularized PDE-constrained QP, using split control:
     x = [ y ; u+ ; u- ]   (size 3*np)
     w = u = u+ - u-       (size np)
- 
+
 Objective:
     0.5 (y - yhat)^T M (y - yhat) + 0.5 * alpha2 * u^T M u + 0.5 * alpha1 * sum_i R_i (u+_i + u-_i)
- 
+
 Constraints:
     A x = b   : PDE  (D_op y - M (u+ - u-) = rhs)
     B x = w   : w = u+ - u-
     bounds:
         y free
         u+, u- >= 0
-        lw <= w <= uw (control bounds)
-===========================================================================
-*/
+        lw <= w <= uw
+
+(Gondzio, Pougkakiotis & Pearson 2022) 
+-----------------------------------------------------------------------*/
 template <typename T>
-static PDPMMdata<T> make_problem_from_mats(
+static PDPMMdata<T> make_problem_l1l2_from_mats(
     const Eigen::SparseMatrix<T>& D_op,
     const Eigen::SparseMatrix<T>& M_lump,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
@@ -303,18 +376,17 @@ static PDPMMdata<T> make_problem_from_mats(
     pb.l = np;
 
 
-    // --- Build R (lumped L1 weights) as row-sum of M_lump, but it's diagonal so just diag ---
+    // --- Build R (lumped L1 weights) as row-sum of M_lump ---
     Vec R(np);
     R.setZero();
-    // M_lump is diagonal here; extract diag efficiently
     for (int k = 0; k < M_lump.outerSize(); ++k) {
         for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
-            if (it.row() == it.col()) R(it.row()) = it.value();
+            R(it.row()) += it.value();
         }
     }
 
     // --- c vector ---
-    // Tracking: 0.5 y^T M y - (M yhat)^T y + const
+    // c = 0.5 y^T M y - (M yhat)^T y + const
     Vec Myhat = M_lump * yhat;
 
     pb.obj_const = T(0.5) * yhat.dot(Myhat);
@@ -355,7 +427,7 @@ static PDPMMdata<T> make_problem_from_mats(
     pb.Q.setFromTriplets(Qt.begin(), Qt.end());
     pb.Q.makeCompressed();
 
-    // --- A x = b : PDE in terms of (y,u+,u-) ---
+    // --- A x = b : PDE in terms of (y, u+, u-) ---
     // A = [ D_op , -M_lump , +M_lump ], b = rhs
     std::vector<Trip> At;
     At.reserve(D_op.nonZeros() + 2 * M_lump.nonZeros());
@@ -383,7 +455,7 @@ static PDPMMdata<T> make_problem_from_mats(
 
     pb.b = rhs;
 
-    // --- B x = w : w = u+ - u- ---
+    // --- B x = w = u+ - u- ---
     // B = [ 0 , I , -I ]
     std::vector<Trip> Bt;
     Bt.reserve(2 * np);
@@ -419,67 +491,7 @@ static PDPMMdata<T> make_problem_from_mats(
     return pb;
 }
 
-// -------------------
-// Problem generators
-// -------------------
-
-template <typename T>
-PDPMMdata<T> make_poisson_L1L2_control(
-    int nc, T alpha1, T alpha2,
-    T u_lower = T(-2), T u_upper = T(1.5))
-{
-    Grid<T> g(nc);
-
-    Eigen::SparseMatrix<T> D, M;
-    Eigen::Matrix<T, Eigen::Dynamic, 1> rhs;
-    assemble_poisson_fd_lumped_mass(g, D, M, rhs, /*bc=*/T(1));
-
-    Eigen::Matrix<T, Eigen::Dynamic, 1> yhat(g.np);
-    for (int j = 0; j < g.n1d; ++j)
-        for (int i = 0; i < g.n1d; ++i) {
-            const int p = Grid<T>::idx(i, j, g.n1d);
-            yhat(p) = std::sin(T(M_PI) * T(i) * g.h)
-                    * std::sin(T(M_PI) * T(j) * g.h);
-        }
-
-    return make_problem_from_mats<T>(D, M, rhs, yhat, alpha1, alpha2, u_lower, u_upper);
-}
-
-template <typename T>
-PDPMMdata<T> make_poisson_L1L2_control_default() {
-    return make_poisson_L1L2_control<T>(7, T(1e-4), T(1e-4));
-}
-
-template <typename T>
-PDPMMdata<T> make_convdiff_L1L2_control(
-    int nc, T alpha1, T alpha2,
-    T u_lower = T(-2), T u_upper = T(1.5), T eps = T(0.02)) {
-
-    Grid<T> g(nc);
-
-    Eigen::SparseMatrix<T> D, M;
-    Eigen::Matrix<T, Eigen::Dynamic, 1> rhs;
-    assemble_convdiff_fd_lumped_mass(g, D, M, rhs, /*bc=*/T(0), eps);
-
-    Eigen::Matrix<T, Eigen::Dynamic, 1> yhat(g.np);
-    for (int j = 0; j < g.n1d; ++j)
-        for (int i = 0; i < g.n1d; ++i) {
-            const int p = Grid<T>::idx(i, j, g.n1d);
-            const T dx = T(i) * g.h - T(0.5);
-            const T dy = T(j) * g.h - T(0.5);
-            yhat(p) = std::exp(T(-64) * (dx*dx + dy*dy));
-        }
-
-    return make_problem_from_mats<T>(D, M, rhs, yhat, alpha1, alpha2, u_lower, u_upper);
-}
-
-template <typename T>
-PDPMMdata<T> make_convdiff_L1L2_control_default() {
-    return make_convdiff_L1L2_control<T>(9, T(1e-4), T(1e-4));
-}
-
-/*
-===========================================================================
+/*-----------------------------------------------------------------------
 L2-regularized PDE-constrained QP:
 
   x = [y; u]
@@ -488,202 +500,12 @@ L2-regularized PDE-constrained QP:
        y_lower <= y <= y_upper
        u_lower <= u <= u_upper
 
+(Pearson & Gondzio 2017)
+
 Note: B is an empty 0 x n matrix, i.e. l = 0.
-===========================================================================
-*/
+-----------------------------------------------------------------------*/
 template <typename T>
-static void assemble_poisson_fd_lumped_mass_bcfield(
-    const Grid<T>& g,
-    Eigen::SparseMatrix<T>& D,
-    Eigen::SparseMatrix<T>& M_lump,
-    Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
-    T bc_value,
-    const Eigen::Matrix<T, Eigen::Dynamic, 1>* bc_field
-) {
-    using Trip = Eigen::Triplet<T>;
-    std::vector<Trip> Dt;
-    std::vector<Trip> Mt;
-    Dt.reserve(std::size_t(g.np) * 5);
-    Mt.reserve(std::size_t(g.np));
-
-    rhs = Eigen::Matrix<T, Eigen::Dynamic, 1>::Zero(g.np);
-
-    const T inv_h2 = T(1) / (g.h * g.h);
-    const T area   = g.h * g.h;
-
-    for (int j = 0; j < g.n1d; ++j) {
-        for (int i = 0; i < g.n1d; ++i) {
-            const int p = Grid<T>::idx(i, j, g.n1d);
-
-            if (is_boundary_node<T>(i, j, g.n1d)) {
-                Mt.emplace_back(p, p, T(0));
-                Dt.emplace_back(p, p, T(1));
-                rhs(p) = bc_field ? (*bc_field)(p) : bc_value;
-                continue;
-            }
-            Mt.emplace_back(p, p, area);
-
-            Dt.emplace_back(p, p, T(4) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i - 1, j, g.n1d), T(-1) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i + 1, j, g.n1d), T(-1) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i, j - 1, g.n1d), T(-1) * inv_h2);
-            Dt.emplace_back(p, Grid<T>::idx(i, j + 1, g.n1d), T(-1) * inv_h2);
-        }
-    }
-
-    D.resize(g.np, g.np);
-    M_lump.resize(g.np, g.np);
-    D.setFromTriplets(Dt.begin(), Dt.end());
-    M_lump.setFromTriplets(Mt.begin(), Mt.end());
-    D.makeCompressed();
-    M_lump.makeCompressed();
-}
-
-// Convection-diffusion assembly with a constant velocity field.
-template <typename T>
-static void assemble_convdiff_fd_lumped_mass_constw(
-    const Grid<T>& g,
-    Eigen::SparseMatrix<T>& D,
-    Eigen::SparseMatrix<T>& M_lump,
-    Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
-    T bc_value,
-    T eps,
-    T wx,
-    T wy
-) {
-    using Trip = Eigen::Triplet<T>;
-    std::vector<Trip> Dt;
-    std::vector<Trip> Mt;
-    Dt.reserve(std::size_t(g.np) * 9);
-    Mt.reserve(std::size_t(g.np));
-
-    rhs = Eigen::Matrix<T, Eigen::Dynamic, 1>::Zero(g.np);
-
-    const T inv_h2 = T(1) / (g.h * g.h);
-    const T inv_h  = T(1) / g.h;
-    const T area   = g.h * g.h;
-
-    const T wx_p = std::max(wx, T(0));
-    const T wx_m = std::max(-wx, T(0));
-    const T wy_p = std::max(wy, T(0));
-    const T wy_m = std::max(-wy, T(0));
-
-    for (int j = 0; j < g.n1d; ++j) {
-        for (int i = 0; i < g.n1d; ++i) {
-            const int p = Grid<T>::idx(i, j, g.n1d);
-
-            if (is_boundary_node<T>(i, j, g.n1d)) {
-                Mt.emplace_back(p, p, T(0));
-                Dt.emplace_back(p, p, T(1));
-                rhs(p) = bc_value;
-                continue;
-            }
-            Mt.emplace_back(p, p, area);
-
-            // Diffusion: eps * Laplacian
-            Dt.emplace_back(p, p, eps * (T(4) * inv_h2));
-            Dt.emplace_back(p, Grid<T>::idx(i - 1, j, g.n1d), eps * (T(-1) * inv_h2));
-            Dt.emplace_back(p, Grid<T>::idx(i + 1, j, g.n1d), eps * (T(-1) * inv_h2));
-            Dt.emplace_back(p, Grid<T>::idx(i, j - 1, g.n1d), eps * (T(-1) * inv_h2));
-            Dt.emplace_back(p, Grid<T>::idx(i, j + 1, g.n1d), eps * (T(-1) * inv_h2));
-
-            // Convection: constant wind, first-order upwind
-            Dt.emplace_back(p, p, (wx_p + wx_m + wy_p + wy_m) * inv_h);
-            Dt.emplace_back(p, Grid<T>::idx(i - 1, j, g.n1d), (-wx_p) * inv_h);
-            Dt.emplace_back(p, Grid<T>::idx(i + 1, j, g.n1d), (+wx_m) * inv_h);
-            Dt.emplace_back(p, Grid<T>::idx(i, j - 1, g.n1d), (-wy_p) * inv_h);
-            Dt.emplace_back(p, Grid<T>::idx(i, j + 1, g.n1d), (+wy_m) * inv_h);
-        }
-    }
-
-    D.resize(g.np, g.np);
-    M_lump.resize(g.np, g.np);
-    D.setFromTriplets(Dt.begin(), Dt.end());
-    M_lump.setFromTriplets(Mt.begin(), Mt.end());
-    D.makeCompressed();
-    M_lump.makeCompressed();
-}
-
-// 3D uniform grid.
-template <typename T>
-struct Grid3 {
-    int nc;
-    int n1d;
-    int np;
-    T h;
-
-    static int idx(int i, int j, int k, int n1d) {
-        return i + j * n1d + k * n1d * n1d;
-    }
-
-    explicit Grid3(int nc_in)
-        : nc(nc_in),
-          n1d((1 << nc) + 1),
-          np(n1d * n1d * n1d),
-          h(T(1) / T(n1d - 1)) {}
-};
-
-template <typename T>
-static inline bool is_boundary_node3(int i, int j, int k, int n1d) {
-    return (i == 0 || j == 0 || k == 0 ||
-            i == n1d - 1 || j == n1d - 1 || k == n1d - 1);
-}
-
-// 3D Poisson stiffness (7-point stencil) + diagonal lumped mass.
-template <typename T>
-static void assemble_poisson3d_fd_lumped_mass(
-    const Grid3<T>& g,
-    Eigen::SparseMatrix<T>& D,
-    Eigen::SparseMatrix<T>& M_lump,
-    Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
-    T bc_value
-) {
-    using Trip = Eigen::Triplet<T>;
-    std::vector<Trip> Dt;
-    std::vector<Trip> Mt;
-    Dt.reserve(std::size_t(g.np) * 7);
-    Mt.reserve(std::size_t(g.np));
-
-    rhs = Eigen::Matrix<T, Eigen::Dynamic, 1>::Zero(g.np);
-
-    const T inv_h2 = T(1) / (g.h * g.h);
-    const T volume = g.h * g.h * g.h;
-
-    for (int k = 0; k < g.n1d; ++k) {
-        for (int j = 0; j < g.n1d; ++j) {
-            for (int i = 0; i < g.n1d; ++i) {
-                const int p = Grid3<T>::idx(i, j, k, g.n1d);
-
-                if (is_boundary_node3<T>(i, j, k, g.n1d)) {
-                    Mt.emplace_back(p, p, T(0));
-                    Dt.emplace_back(p, p, T(1));
-                    rhs(p) = bc_value;
-                    continue;
-                }
-                Mt.emplace_back(p, p, volume);
-
-                Dt.emplace_back(p, p, T(6) * inv_h2);
-                Dt.emplace_back(p, Grid3<T>::idx(i - 1, j, k, g.n1d), T(-1) * inv_h2);
-                Dt.emplace_back(p, Grid3<T>::idx(i + 1, j, k, g.n1d), T(-1) * inv_h2);
-                Dt.emplace_back(p, Grid3<T>::idx(i, j - 1, k, g.n1d), T(-1) * inv_h2);
-                Dt.emplace_back(p, Grid3<T>::idx(i, j + 1, k, g.n1d), T(-1) * inv_h2);
-                Dt.emplace_back(p, Grid3<T>::idx(i, j, k - 1, g.n1d), T(-1) * inv_h2);
-                Dt.emplace_back(p, Grid3<T>::idx(i, j, k + 1, g.n1d), T(-1) * inv_h2);
-            }
-        }
-    }
-
-    D.resize(g.np, g.np);
-    M_lump.resize(g.np, g.np);
-    D.setFromTriplets(Dt.begin(), Dt.end());
-    M_lump.setFromTriplets(Mt.begin(), Mt.end());
-    D.makeCompressed();
-    M_lump.makeCompressed();
-}
-
-// Problem generator
-template <typename T>
-static PDPMMdata<T> make_problem_pure_l2(
+static PDPMMdata<T> make_problem_l2_from_mats(
     const Eigen::SparseMatrix<T>& D_op,
     const Eigen::SparseMatrix<T>& M_lump,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
@@ -714,8 +536,8 @@ static PDPMMdata<T> make_problem_pure_l2(
     pb.c.segment(0, np) = -Myhat;
     // c on u is zero.
 
-    // Q = [M     0
-    //      0, beta * M]
+    // Q = [[M      0   ],
+    //      [0, beta * M]]
     std::vector<Trip> Qt;
     Qt.reserve(std::size_t(2) * M_lump.nonZeros());
     for (int k = 0; k < M_lump.outerSize(); ++k) {
@@ -766,178 +588,211 @@ static PDPMMdata<T> make_problem_pure_l2(
     return pb;
 }
 
-/*
-===========================================================================
+
+// ===== QP generators =====
+
+/*-----------------------------------------------------------------------
 2D Poisson control problem (control-constrained).
-    Omega = [0,1]^2, y = 0 on boundary,
-    D = -Δ
-    yhat = exp(-64((x1-.5)^2+(x2-.5)^2)).
-===========================================================================
-*/
+    Ω = [0,1]^2, y = 0 on boundary,
+    D = -Δ,
+    yhat = exp(-64((x1 - 0.5)^2 + (x2 - 0.5)^2)).
+-----------------------------------------------------------------------*/
 template <typename T>
-PDPMMdata<T> make_poisson_control(
+PDPMMdata<T> make_poisson_l2_control(
     int nc, T beta,
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
     T u_lower = -std::numeric_limits<T>::infinity(),
     T u_upper =  std::numeric_limits<T>::infinity())
 {
-    Grid<T> g(nc);
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
-    Eigen::Matrix<T, Eigen::Dynamic, 1> yhat(g.np);
+    GridQ1<T> g(nc);
+
+    Vec yhat(g.np);
     for (int j = 0; j < g.n1d; ++j)
         for (int i = 0; i < g.n1d; ++i) {
-            const int p  = Grid<T>::idx(i, j, g.n1d);
-            const T dx = T(i) * g.h - T(0.5);
-            const T dy = T(j) * g.h - T(0.5);
+            const int p = GridQ1<T>::idx(i, j, g.n1d);
+            const T dx = g.x1d[i] - T(0.5);
+            const T dy = g.x1d[j] - T(0.5);
             yhat(p) = std::exp(T(-64) * (dx * dx + dy * dy));
         }
 
-    Eigen::SparseMatrix<T> D, M;
-    Eigen::Matrix<T, Eigen::Dynamic, 1> rhs;
-    assemble_poisson_fd_lumped_mass_bcfield<T>(g, D, M, rhs, /*bc_value=*/T(0), /*bc_field=*/nullptr);
+    auto asm_res = assemble_femq1_diff<T>(g);
+    Eigen::SparseMatrix<T> D = asm_res.A_stiff;
+    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Vec rhs = Vec::Zero(g.np);
 
-    return make_problem_pure_l2<T>(D, M, rhs, yhat, beta, y_lower, y_upper, u_lower, u_upper);
+    const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
+    const Vec bc_values = Vec::Zero(static_cast<int>(bc_nodes.size()));
+    apply_dirichlet_bc<T>(D, rhs, bc_nodes, bc_values);
+    apply_dirichlet_bc_mass<T>(M, bc_nodes);
+
+    return make_problem_l2_from_mats<T>(D, M, rhs, yhat, beta, y_lower, y_upper, u_lower, u_upper);
 }
 
-
-/*
-===========================================================================
+/*-----------------------------------------------------------------------
 2D Poisson control problem (state-constrained).
-    Omega = [0,1]^2, y = yhat on boundary,
+    Ω = [0,1]^2, y = yhat on boundary,
     D = -Δ,
     yhat = sin(pi x1) sin(pi x2).
-===========================================================================
-*/
+-----------------------------------------------------------------------*/
 template <typename T>
-PDPMMdata<T> make_poisson_state_control(
+PDPMMdata<T> make_poisson_l2_state_control(
     int nc, T beta,
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
     T u_lower = -std::numeric_limits<T>::infinity(),
     T u_upper =  std::numeric_limits<T>::infinity())
 {
-    Grid<T> g(nc);
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
-    Eigen::Matrix<T, Eigen::Dynamic, 1> yhat(g.np);
+    GridQ1<T> g(nc);
+
+    Vec yhat(g.np);
     for (int j = 0; j < g.n1d; ++j)
         for (int i = 0; i < g.n1d; ++i) {
-            const int p = Grid<T>::idx(i, j, g.n1d);
-            yhat(p) = std::sin(T(M_PI) * T(i) * g.h)
-                    * std::sin(T(M_PI) * T(j) * g.h);
+            const int p = GridQ1<T>::idx(i, j, g.n1d);
+            yhat(p) = std::sin(T(M_PI) * g.x1d[i]) * std::sin(T(M_PI) * g.x1d[j]);
         }
 
-    Eigen::SparseMatrix<T> D, M;
-    Eigen::Matrix<T, Eigen::Dynamic, 1> rhs;
-    assemble_poisson_fd_lumped_mass_bcfield<T>(g, D, M, rhs, /*bc_value=*/T(0), /*bc_field=*/&yhat);
+    auto asm_res = assemble_femq1_diff<T>(g);
+    Eigen::SparseMatrix<T> D = asm_res.A_stiff;
+    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Vec rhs = Vec::Zero(g.np);
 
-    return make_problem_pure_l2<T>(D, M, rhs, yhat, beta, y_lower, y_upper, u_lower, u_upper);
+    const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
+    Vec bc_values(static_cast<int>(bc_nodes.size()));
+    for (std::size_t k = 0; k < bc_nodes.size(); ++k)
+        bc_values(static_cast<int>(k)) = yhat(bc_nodes[k]);
+
+    apply_dirichlet_bc<T>(D, rhs, bc_nodes, bc_values);
+    apply_dirichlet_bc_mass<T>(M, bc_nodes);
+
+    return make_problem_l2_from_mats<T>(D, M, rhs, yhat, beta, y_lower, y_upper, u_lower, u_upper);
 }
 
-/*
-===========================================================================
-2D Helmholtz control problem (state-constrained).
-    Omega = [0,1]^2, y = yhat on boundary,
-    D = -Δ - k^2,
-    yhat = sin(pi x1) sin(pi x2).
-===========================================================================
-*/
+/*-----------------------------------------------------------------------
+2D convection-diffusion control problem.
+    Ω = [0,1]^2, y = 0 on boundary,
+    D = -eps * Δ + w ⋅ ∇ (constant wind w = [-1/sqrt(2), 1/sqrt(2)]^T),
+    yhat = exp(-64((x1 - 0.5)^2 + (x2 - 0.5)^2)).
+-----------------------------------------------------------------------*/
 template <typename T>
-PDPMMdata<T> make_helmholtz_control(
-    int nc, T beta, T k_param,
-    T y_lower = -std::numeric_limits<T>::infinity(),
-    T y_upper =  std::numeric_limits<T>::infinity(),
-    T u_lower = -std::numeric_limits<T>::infinity(),
-    T u_upper =  std::numeric_limits<T>::infinity())
-{
-    Grid<T> g(nc);
-
-    Eigen::Matrix<T, Eigen::Dynamic, 1> yhat(g.np);
-    for (int j = 0; j < g.n1d; ++j)
-        for (int i = 0; i < g.n1d; ++i) {
-            const int p = Grid<T>::idx(i, j, g.n1d);
-            yhat(p) = std::sin(T(M_PI) * T(i) * g.h)
-                    * std::sin(T(M_PI) * T(j) * g.h);
-        }
-
-    Eigen::SparseMatrix<T> D, M;
-    Eigen::Matrix<T, Eigen::Dynamic, 1> rhs;
-    assemble_helmholtz_fd_lumped_mass<T>(g, D, M, rhs, /*bc_value=*/T(0), k_param, /*bc_field=*/&yhat);
-
-    return make_problem_pure_l2<T>(D, M, rhs, yhat, beta, y_lower, y_upper, u_lower, u_upper);
-}
-
-/*
-===========================================================================
-2D convection-diffusion control problem (control- and state-constrained).
-    Omega = [0,1]^2, y = 0 on boundary,
-    D = -eps * Δ + w . grad, w = (-1/sqrt(2), 1/sqrt(2)) constant,
-    yhat = exp(-64((x1-.5)^2+(x2-.5)^2)).
-===========================================================================
-*/
-template <typename T>
-PDPMMdata<T> make_convdiff_control(
+PDPMMdata<T> make_convdiff_l2_control(
     int nc, T beta,
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
     T u_lower = -std::numeric_limits<T>::infinity(),
     T u_upper =  std::numeric_limits<T>::infinity(),
-    T eps = T(0.01),
-    T wx  = T(-0.70710678118654752440),
-    T wy  = T( 0.70710678118654752440))
+    T eps = T(0.01))
 {
-    Grid<T> g(nc);
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
-    Eigen::Matrix<T, Eigen::Dynamic, 1> yhat(g.np);
+    GridQ1<T> g(nc);
+
+    Vec yhat(g.np);
     for (int j = 0; j < g.n1d; ++j)
         for (int i = 0; i < g.n1d; ++i) {
-            const int p  = Grid<T>::idx(i, j, g.n1d);
-            const T dx = T(i) * g.h - T(0.5);
-            const T dy = T(j) * g.h - T(0.5);
+            const int p = GridQ1<T>::idx(i, j, g.n1d);
+            const T dx = g.x1d[i] - T(0.5);
+            const T dy = g.x1d[j] - T(0.5);
             yhat(p) = std::exp(T(-64) * (dx * dx + dy * dy));
         }
 
-    Eigen::SparseMatrix<T> D, M;
-    Eigen::Matrix<T, Eigen::Dynamic, 1> rhs;
-    assemble_convdiff_fd_lumped_mass_constw<T>(g, D, M, rhs, /*bc_value=*/T(0), eps, wx, wy);
+    auto asm_res = assemble_femq1_cd<T>(g, fem::velocity_field_w_constant<T>);
+    Eigen::SparseMatrix<T> D = eps * asm_res.A_stiff + asm_res.N_conv;
+    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Vec rhs = Vec::Zero(g.np);
 
-    return make_problem_pure_l2<T>(D, M, rhs, yhat, beta, y_lower, y_upper, u_lower, u_upper);
+    const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
+    const Vec bc_values = Vec::Zero(static_cast<int>(bc_nodes.size()));
+    apply_dirichlet_bc<T>(D, rhs, bc_nodes, bc_values);
+    apply_dirichlet_bc_mass<T>(M, bc_nodes);
+
+    return make_problem_l2_from_mats<T>(D, M, rhs, yhat, beta, y_lower, y_upper, u_lower, u_upper);
 }
 
-/*
-===========================================================================
-3D Poisson control problem (control-constrained).
-    Omega = [0,1]^3, y = 0 on boundary,
+/*-----------------------------------------------------------------------
+L1/L2-regularized Poisson-constrained QP.
+    Ω = (0,1)^2, y = 1 on boundary,
     D = -Δ,
-    yhat = exp(-64((x1-.5)^2+(x2-.5)^2+(x3-.5)^2)).
-===========================================================================
-*/
+    yhat = sin(pi x1) sin(pi x2),
+    u_lower <= u <= u_upper,
+    y_lower <= y <= y_upper (free by default).
+-----------------------------------------------------------------------*/
 template <typename T>
-PDPMMdata<T> make_poisson_control_3d(
-    int nc, T beta,
+PDPMMdata<T> make_poisson_l1l2_control(
+    int nc, T alpha1, T alpha2,
+    T u_lower = T(-2), T u_upper = T(1.5),
     T y_lower = -std::numeric_limits<T>::infinity(),
-    T y_upper =  std::numeric_limits<T>::infinity(),
-    T u_lower = -std::numeric_limits<T>::infinity(),
-    T u_upper =  std::numeric_limits<T>::infinity())
+    T y_upper =  std::numeric_limits<T>::infinity())
 {
-    Grid3<T> g(nc);
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
-    Eigen::Matrix<T, Eigen::Dynamic, 1> yhat(g.np);
-    for (int k = 0; k < g.n1d; ++k)
-        for (int j = 0; j < g.n1d; ++j)
-            for (int i = 0; i < g.n1d; ++i) {
-                const int p = Grid3<T>::idx(i, j, k, g.n1d);
-                const T dx = T(i) * g.h - T(0.5);
-                const T dy = T(j) * g.h - T(0.5);
-                const T dz = T(k) * g.h - T(0.5);
-                yhat(p) = std::exp(T(-64) * (dx * dx + dy * dy + dz * dz));
-            }
+    GridQ1<T> g(nc);
 
-    Eigen::SparseMatrix<T> D, M;
-    Eigen::Matrix<T, Eigen::Dynamic, 1> rhs;
-    assemble_poisson3d_fd_lumped_mass<T>(g, D, M, rhs, /*bc_value=*/T(0));
+    Vec yhat(g.np);
+    for (int j = 0; j < g.n1d; ++j)
+        for (int i = 0; i < g.n1d; ++i) {
+            const int p = GridQ1<T>::idx(i, j, g.n1d);
+            yhat(p) = std::sin(T(M_PI) * g.x1d[i]) * std::sin(T(M_PI) * g.x1d[j]);
+        }
 
-    return make_problem_pure_l2<T>(D, M, rhs, yhat, beta, y_lower, y_upper, u_lower, u_upper);
+    auto asm_res = assemble_femq1_diff<T>(g);
+    Eigen::SparseMatrix<T> D = asm_res.A_stiff;
+    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Vec rhs = Vec::Zero(g.np);
+
+    const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
+    const Vec bc_values = Vec::Constant(static_cast<int>(bc_nodes.size()), T(1));
+    apply_dirichlet_bc<T>(D, rhs, bc_nodes, bc_values);
+    apply_dirichlet_bc_mass<T>(M, bc_nodes);
+
+    return make_problem_l1l2_from_mats<T>(D, M, rhs, yhat, alpha1, alpha2, u_lower, u_upper,
+                                           y_lower, y_upper);
+}
+
+/*-----------------------------------------------------------------------
+L1/L2-regularized convection-diffusion-constrained QP.
+    Ω = (0,1)^2, y = 0 on boundary,
+    D = -eps * Δ + w ⋅ ∇ (circular wind w),
+    yhat = exp(-64((x1 - 0.5)^2 + (x2 - 0.5)^2)),
+    u_lower <= u <= u_upper,
+    y_lower <= y <= y_upper (free by default).
+-----------------------------------------------------------------------*/
+template <typename T>
+PDPMMdata<T> make_convdiff_l1l2_control(
+    int nc, T alpha1, T alpha2,
+    T u_lower = T(-2), T u_upper = T(1.5), T eps = T(0.02),
+    T y_lower = -std::numeric_limits<T>::infinity(),
+    T y_upper =  std::numeric_limits<T>::infinity())
+{
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+    GridQ1<T> g(nc);
+
+    Vec yhat(g.np);
+    for (int j = 0; j < g.n1d; ++j)
+        for (int i = 0; i < g.n1d; ++i) {
+            const int p = GridQ1<T>::idx(i, j, g.n1d);
+            const T dx = g.x1d[i] - T(0.5);
+            const T dy = g.x1d[j] - T(0.5);
+            yhat(p) = std::exp(T(-64) * (dx * dx + dy * dy));
+        }
+
+    auto asm_res = assemble_femq1_cd<T>(g);
+    Eigen::SparseMatrix<T> D = eps * asm_res.A_stiff + asm_res.N_conv;
+    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Vec rhs = Vec::Zero(g.np);
+
+    const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
+    const Vec bc_values = Vec::Zero(static_cast<int>(bc_nodes.size()));
+    apply_dirichlet_bc<T>(D, rhs, bc_nodes, bc_values);
+    apply_dirichlet_bc_mass<T>(M, bc_nodes);
+
+    return make_problem_l1l2_from_mats<T>(D, M, rhs, yhat, alpha1, alpha2, u_lower, u_upper,
+                                           y_lower, y_upper);
 }
 
 } // namespace pdegen

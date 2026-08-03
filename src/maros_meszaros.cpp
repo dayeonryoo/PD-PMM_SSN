@@ -23,11 +23,11 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 // ----------------------- Solving individual problem -----------------------
-/*
+
 int main() {
     // std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros_meszaros/";
     std::string root = "/Users/dianaryoo/Desktop/KCL/PD-PMM_SSN/data/maros_meszaros/";
-    std::string name = "HUESTIS";
+    std::string name = "AUG2DCQP";
     std::string filename = root + name + ".SIF";
 
     std::cout << "==================== Solving " + name << " ====================\n";
@@ -71,7 +71,7 @@ int main() {
 
     return 0;
 }
-*/
+
 
 
 // ----------------------- Running Netlib problems -----------------------
@@ -348,7 +348,7 @@ void run_Netlib_infeas() {
             auto t0 = std::chrono::steady_clock::now();
             Solution<T> sol = solver.solve();
             auto t1 = std::chrono::steady_clock::now();
-            double solving_time_sec = time_diff_ms(t0, t1) * 1e-3;
+            double solving_time_sec = time_diff_s(t0, t1);
             // std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
 
             // Store the result
@@ -376,7 +376,7 @@ void run_Netlib_infeas() {
 }
 
 // ----------------------- Solving a set of problems -----------------------
-
+/*
 int main() {
 
     run_Netlib_infeas();
@@ -563,7 +563,7 @@ int main() {
             // Construct the problem and solver
             Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
             SSN_PMM<T> solver(prob);
-            
+
             std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
             std::cout << "Compuation started at " << std::ctime(&curr_time);
 
@@ -614,3 +614,4 @@ int main() {
 
     return 0;
 }
+*/

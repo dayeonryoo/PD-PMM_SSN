@@ -7,11 +7,12 @@
 #include "MpsParser.hpp"
 
 // =============================================================
-//      min  c^T x + (1/2) x^T Q x,
+//      min  c^T x + 0.5 x^T Q x + obj_const,
 //      s.t. A x = b,
 //           B x = w,
 //           lx <= x <= ux,
-//           lw <= w <= uw
+//           lw <= w <= uw,
+//  c = n-dim vector, Q = n x n matrix, A = m x n matrix, B = l x n matrix
 // =============================================================
 
 template <typename T>
@@ -28,8 +29,8 @@ public:
     int n, m, l;
 
     T tol = 1e-6;
-    int max_iter = 1000;
-    double time_limit = 600.0; // in seconds
+    int max_iter = 3000;
+    double time_limit = 60.0; // in seconds
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::NONE;
 

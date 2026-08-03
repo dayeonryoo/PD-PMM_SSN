@@ -30,7 +30,7 @@ struct TestResult {
     T pmm_tol_achieved;
     T ssn_tol_achieved;
 
-    double solving_time_sec;
+    double run_time; // in seconds
     int linesearch_fail;
     int krylov_fail;
 };
@@ -85,7 +85,7 @@ inline void write_csv_header(const std::string& path) {
         std::ofstream csv(path);
         csv << "System,agree,opt_status,diverged,name,abs_err,rel_err,obj_val,"
             << "pmm_iter,ssn_iter,krylov_iter,fact,smw_count,pmm_tol_achieved,ssn_tol_achieved,"
-            << "solving_time_sec,linesearch_fail,krylov_fail\n";
+            << "run_time,linesearch_fail,krylov_fail\n";
     } else if (!fs::is_empty(fs::path(path))) {
         std::ofstream csv(path, std::ios::out | std::ios::app);
         csv << "\n";
@@ -100,5 +100,5 @@ void append_csv_result(const std::string& path, const TestResult<T>& r) {
         << r.obj_val << "," << r.pmm_iter << "," << r.ssn_iter << ","
         << r.krylov_iter << "," << r.fact << "," << r.smw_count << ","
         << r.pmm_tol_achieved << "," << r.ssn_tol_achieved << ","
-        << r.solving_time_sec << "," << r.linesearch_fail << "," << r.krylov_fail << "\n";
+        << r.run_time << "," << r.linesearch_fail << "," << r.krylov_fail << "\n";
 }

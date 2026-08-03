@@ -19,7 +19,6 @@ const typename SSN<T>::Vec& SSN<T>::compute_grad_Lagrangian(const Vec& x_new, co
     grad_A_tr_y_.noalias() = mu * grad_Atr_resp_ + (mu / alpha) * grad_Btr_distW_
                             + mu * grad_dist_K_ - A_tr_y1_;
 
-    // Compute gradient of Lagrangian.
     if (Q_info == 0) {
         grad_L_.head(N).noalias() = c + grad_A_tr_y_ + (x_new - x) / rho;
     } else {
@@ -33,6 +32,7 @@ const typename SSN<T>::Vec& SSN<T>::compute_grad_Lagrangian(const Vec& x_new, co
 
 template <typename T>
 T SSN<T>::compute_grad_Lagrangian_unscaled_inf_norm(const Vec& grad_L) {
+    // Compute the infinity norm of the unscaled gradient of the Lagrangian.
     T x_block  = inf_norm(grad_L.head(N).cwiseProduct(D2_ext_inv));
     T y2_block = inf_norm(grad_L.tail(l).cwiseProduct(D1B_diag_inv));
     return std::max(x_block, y2_block);
@@ -204,6 +204,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
             krylov_fail++;
             return false;
         }
+
         Vec dy_;
         bool warm_start = (prev_dy_.size() == s); // prev_dy_ is empty on the first SSN iteration or if the active set changed.
         if (warm_start) {
@@ -212,20 +213,19 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
             dy_ = cg.solve(rhs);
         }
         krylov_iter += cg.iterations();
+
         T err = cg.error();
         if (cg.info() != Eigen::Success) {
-            if (err > T(1e-10)) {
-                // std::cout << "[PCG] CG failed to converge with " << err << ".\n";
+            if (err > T(1e-10)) { // Acceptable error threshold for PCG failure.
                 krylov_fail++;
                 return false;
             }
-            // std::cout << "[PCG] CG reached max iterations but error " << err << " <= 1e-10, accepting.\n";
         }
         dy_out = std::move(dy_);
         return true;
     };
 
-    // Release the now-unused PCG state if solve switches to LDLT on the augmented KKT system.
+    // Release the PCG state (unused anymore) if solve switches to LDLT on the augmented KKT system.
     auto switch_to_ldlt = [&]() {
         krylov_converged = false;
         ldlt_used = true;
@@ -279,7 +279,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
     prev_dy_ = dy_;
 
-    // Recover dx = H_inv (G^T dy_ - r1)
+    // Recover dx = H_inv (G^T dy_ - r1).
     cg_dx_.noalias() = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
 
     Vec result(n + s);
@@ -451,7 +451,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
         }
     }
 
-    // Trivial case.
+    // Trivial case: if there are no breakpoints, return a full step.
     if (breakpoints.empty()) return T(1);
 
     // Sort breakpoints by t in ascending order.
@@ -484,14 +484,13 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
         T p_t = p + m * (t - t_prev);
         if (p_t >= T(0)) return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
 
-        // Cross the breakpoint(s)
+        // Cross the breakpoint(s).
         t_prev = t;
         p = p_t;
         m += bp.slope_change;
     }
 
-    // Checking the last breakpoint.
-    // m should be >= 0.
+    // Checking the last breakpoint; m should be >= 0.
     if (m >= T(0)) {
         return t_prev - p / std::max(m, eps_zero * (T(1) + eta));
     }
@@ -499,7 +498,7 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
 }
 
 template <typename T>
-void SSN<T>::solve_ssn(const T eps) {
+void SSN<T>::solve_ssn(const T ssn_tol) {
     using Vec = typename SSN<T>::Vec;
     using SpMat = typename SSN<T>::SpMat;
     using BoolArr = typename SSN<T>::BoolArr;
@@ -512,6 +511,13 @@ void SSN<T>::solve_ssn(const T eps) {
     T prev_tol_achieved = inf;
     int stagnation = 0;
 
+#if SSN_ENABLE_TIMERS
+    // TIMER: reset per-phase accumulators for this solve_ssn() call.
+    timer_subgrad_dist = timer_pk_update = timer_rebuild_g = timer_rhs_build = 0.0;
+    timer_choose_ldlt  = timer_linear_solve = timer_linesearch = timer_state_update = 0.0;
+    timer_n_iters = 0;
+#endif
+
     // Useful matvecs
     Ax_ssn_.noalias() = A * x_cur_;
     Bx_ssn_.noalias() = B * x_cur_;
@@ -520,28 +526,28 @@ void SSN<T>::solve_ssn(const T eps) {
     while (_iter < ssn_max_in_iter) {
         // ----------------------------------------------
         // Structure:
-        // Let M(u), with u = (x, y_2), be the proximal augmented Lagrangian associated with the subproblem of interest.
+        // Let M(u), with u = (x, y2), be the proximal augmented Lagrangian associated with the subproblem of interest.
         // Until (||∇M(u_{k_j})|| < eps), for some given eps, do:
         //     1) Compute a Clarke subgradient J of ∇M(u_{k_j})
         //        and solve J du = - ∇M(u_{k_j}) for the Newton direction du;
-        //     2) Perform exact line search to determine the step size alpha;
+        //     2) Perform exact linesearch to determine the step size alpha;
+        //        If the linesearch fails, use gradient descent and retry the linesearch;
         //     3) Update the variables;
         //     j = j + 1;
+        //     If the SSN iteration stagnates for 10 consecutive iterations, terminate early.
         // End
         // ----------------------------------------------
 
-        // Timer for SSN iteration
-        auto t0_ssn = std::chrono::steady_clock::now();
-
         // ========== Preporation for Cholesky decomposition ==========
-        auto t0_chol_prep = std::chrono::steady_clock::now();
-
+        {
+        SSN_TIMER_BLOCK(timer_subgrad_dist);
         u_.noalias() = z / mu + x_cur_;
         v_ = Bx_ssn_ + ((1 - alpha) * y2_cur_ - y2) / mu;
 
         // Clarke subgradient and distance for K and W
         compute_subgrad_and_dist(u_, lx, ux, false, new_diag_P_K_, dist_K_u_);
         compute_subgrad_and_dist(v_, lw, uw, true,  new_diag_P_W_, dist_W_v_);
+        }
 
         // If P_K and P_W are unchanged, reuse the preconditioner and LDLT factorization.
         bool update_prec = false;
@@ -555,6 +561,7 @@ void SSN<T>::solve_ssn(const T eps) {
         bool pw_changed = first_ssn_iter || (diag_P_W.array() != new_diag_P_W_.array()).any();
 
         if (pk_changed) {
+            SSN_TIMER_BLOCK(timer_pk_update);
             update_prec = true;
             prec_pattern_changed = true;
             ldlt_numeric_dirty_ = true;
@@ -573,6 +580,7 @@ void SSN<T>::solve_ssn(const T eps) {
         }
 
         if (pw_changed) {
+            SSN_TIMER_BLOCK(timer_rebuild_g);
             update_prec = true;
             prec_pattern_changed = true;
             ldlt_pattern_dirty_ = true;
@@ -590,6 +598,8 @@ void SSN<T>::solve_ssn(const T eps) {
         }
 
         // Compute dy2 in inactive_W: dy2_inactive_W = - (mu / alpha) * dist_W(v)(inactive_W) - y2(inactive_W).
+        {
+        SSN_TIMER_BLOCK(timer_rhs_build);
         split_by_mask(y2_cur_, active_W, n_active_W, y2_active_W_, y2_inactive_W_);
         split_by_mask(dist_W_v_, active_W, n_active_W, dist_W_v_active_, dist_W_v_inactive_);
         dy2_inactive_W_.head(n_inactive_W).noalias() =
@@ -608,22 +618,24 @@ void SSN<T>::solve_ssn(const T eps) {
         r2_.resize(M + n_active_W);
         r2_.head(M) = y1 / mu - Ax_ssn_ + b;
         r2_.tail(n_active_W) = -dist_W_v_active_.head(n_active_W) - (alpha / mu) * y2_active_W_.head(n_active_W);
+        }
 
-        auto t1_chol_prep = std::chrono::steady_clock::now();
-        double timer_chol_prep = time_diff_ms(t0_chol_prep, t1_chol_prep);
-        // std::cout << "  Prep to solve SSN system took " << timer_chol_prep << " ms.\n";
-        
-        auto t0_solve_lin_sys = std::chrono::steady_clock::now();
         // Determines the factorization method for a preconditioner; locked after the first 3 decisions.
         if ((pk_changed || pw_changed) && ldlt_decisions_made_ < 3) {
+            SSN_TIMER_BLOCK(timer_choose_ldlt);
             use_ldlt = choose_ldlt(G, active_K);
             ++ldlt_decisions_made_;
         }
+
+        int s = 0;
+        Vec dx(N);
+        {
+        SSN_TIMER_BLOCK(timer_linear_solve);
         // Solve for dx and dy2_active_W.
         dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1_, r2_, mu, krylov_tol, krylov_max_in_iter, update_prec, prec_pattern_changed, use_ldlt);
 
         // Iterative refinement: correct the residual of K [dx;dy] = [r1_;r2_], K = [-H, G^T; G, (1/mu)I].
-        const int s = static_cast<int>(r2_.size());
+        s = static_cast<int>(r2_.size());
         const T ref_norm = std::max(inf_norm(r1_), inf_norm(r2_));
         Vec rho1(N), rho2(s);
 
@@ -646,12 +658,8 @@ void SSN<T>::solve_ssn(const T eps) {
             prev_dy_ = dxdy_.tail(s); // warm-start for the next SSN iteration's main solve
         }
 
-        auto t1_solve_lin_sys = std::chrono::steady_clock::now();
-        double timer_solve_line_sys = time_diff_ms(t0_solve_lin_sys, t1_solve_lin_sys);
-        // std::cout << "  Solving SSN system took " << timer_solve_line_sys << " ms.\n";
-
         // Split dxdy_ into dx and dy2_active_W.
-        Vec dx = dxdy_.head(N);
+        dx = dxdy_.head(N);
         const auto dy2_active_W = dxdy_.tail(n_active_W);
 
         assert(dy2_active_W.size() == n_active_W);
@@ -660,48 +668,49 @@ void SSN<T>::solve_ssn(const T eps) {
 
         // Recover dy2.
         retrieve_row_order(dy2_active_W, dy2_inactive_W_.head(n_inactive_W), active_W, dy2_);
+        }
 
+        T tau;
+        {
+        SSN_TIMER_BLOCK(timer_linesearch);
         // ========== Exact linesearch ==========
-        auto t0_linesearch = std::chrono::steady_clock::now();
         Adx_.noalias() = A * dx;
         Bdx_.noalias() = B * dx;
-        T tau = exact_line_search(x_cur_, y2_cur_, dx, dy2_,
+        tau = exact_line_search(x_cur_, y2_cur_, dx, dy2_,
                                     Ax_ssn_, Bx_ssn_, Adx_, Bdx_,
                                     dist_K_u_, dist_W_v_);
-        auto t1_linesearch = std::chrono::steady_clock::now();
-        double timer_linesearch = time_diff_ms(t0_linesearch, t1_linesearch);
-        // std::cout << "  Linesearch took " << timer_linesearch << " ms.\n";
-        // std::cout << "      Linesearch step size tau = " << tau << "\n";
 
-        // ========== Update x and y2 ==========
-        if (tau <= T(0)) { // Linesearch found step size <= 0 with the Newton direction.
+        // If linesearch found step size <= 0 with the Newton direction, ...
+        if (tau <= T(0)) {
             const Vec& grad_L = compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
             T grad_norm = compute_grad_Lagrangian_unscaled_inf_norm(grad_L);
-            if (grad_norm <= T(5) * eps) {
-                _opt = 0; // ||∇M|| is small enough to accept optimality.
-                // std::cout << "[Optimal] Linesearch failed but ||∇M|| = " << grad_norm << " <= 5 * eps, so we accept optimality.\n";
+            // ... check if ||∇M|| is small enough to accept optimality.
+            if (grad_norm <= T(5) * ssn_tol) {
+                _opt = 0;
                 break;
             }
 
-            // Newton direction failed; retry once with the steepest-descent direction.
-            // std::cout << "[Grad desc] Linesearch failed with Newton direction (||∇M|| = " << grad_norm << "); retrying with gradient descent: ";
+            // Retry linesearch with the steepest-descent direction.
             dx  = -grad_L.head(N);
             dy2_ = -grad_L.tail(l);
-            // std::cout << "grad: ||dx|| = " << dx.norm() << ", ||dy2|| = " << dy2_.norm() << "\n";
             Adx_.noalias() = A * dx;
             Bdx_.noalias() = B * dx;
             tau = exact_line_search(x_cur_, y2_cur_, dx, dy2_,
                                     Ax_ssn_, Bx_ssn_, Adx_, Bdx_,
                                     dist_K_u_, dist_W_v_);
-            
+
+            // If linesearch still fails, exit SSN loop and let PMM adjust penalties.
             if (tau <= T(0)) {
                 linesearch_fail++;
                 _opt = 3;
-                // std::cout << "[Linesearch] Gradient-descent fallback also failed; exiting SSN loop early.\n";
                 break;
             }
         }
+        }
 
+        {
+        SSN_TIMER_BLOCK(timer_state_update);
+        // ========== Update x and y2 ==========
         x_cur_  += tau * dx;
         y2_cur_ += tau * dy2_;
         if (_iter % 5 == 4) { // Reset incremental drift every 5 iterations.
@@ -715,21 +724,26 @@ void SSN<T>::solve_ssn(const T eps) {
         // Compute gradient of Lagrangian at current (x, y2).
         compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
         tol_achieved = compute_grad_Lagrangian_unscaled_inf_norm(grad_L_);
-        // std::cout << "[SSN] Iteration " << _iter << ": ||∇M|| = " << tol_achieved << ", tau = " << tau << "\n";
-        _iter++;
+        }
 
-        auto t1_ssn = std::chrono::steady_clock::now();
-        double timer_ssn = time_diff_ms(t0_ssn, t1_ssn);
-        // std::cout << "  SSN iteration took " << timer_ssn << " ms.\n";
+        _iter++;
+#if SSN_ENABLE_TIMERS
+        timer_n_iters++;
+#endif
+        if (what == PrintWhat::SSN) {
+            print(when, what, 0, ssn_iter + _iter, krylov_iter, fact,
+                  T(0), Vec(), tol_achieved, mu, rho, ssn_tol, linesearch_fail, krylov_fail,
+                  /*show_pmm_iter=*/false);
+        }
 
         // Check termination criterion.
-        if (tol_achieved < eps) {
+        if (tol_achieved < ssn_tol) {
             _opt = 0; // Optimality achieved.
             break;
         }
 
-        // Stagnation check: if ||∇M|| fails to meaningfully improve for consecutive iterations,
-        // stop and let the PMM level adjust penalties.
+        // Stagnation check: if ||∇M|| fails to meaningfully improve for 10 consecutive iterations,
+        // exit early and let the PMM level adjust penalties.
         if (tol_achieved >= T(0.999) * prev_tol_achieved) {
             ++stagnation;
         } else {
@@ -738,13 +752,11 @@ void SSN<T>::solve_ssn(const T eps) {
         prev_tol_achieved = tol_achieved;
 
         if (stagnation >= 10) {
-            if (tol_achieved < T(5) * eps) {
+            if (tol_achieved < T(5) * ssn_tol) {
                 _opt = 0; // Optimality achieved.
-                // std::cout << "[Optimal] ||∇M|| stagnated (" << tol_achieved << "), but ||∇M|| <= 5 * eps, so we accept optimality.\n";
                 break;
             }
             _opt = 5; // ||∇M|| stagnated; not a confirmed optimum.
-            // std::cout << "[Stagnated] ||∇M|| stagnated (" << tol_achieved << "); exiting SSN loop early.\n";
             break;
         }
     }
@@ -756,5 +768,17 @@ void SSN<T>::solve_ssn(const T eps) {
     y2 = y2_cur_;
     opt = _opt;
     iter = _iter;
-    // std::cout << "[SSN result] SSN opt = " << opt << "\n";
+
+#if SSN_ENABLE_TIMERS
+    // TIMER: phase-by-phase wall-clock breakdown for this solve_ssn() call (one call per PMM iteration).
+    {
+        const double total = timer_subgrad_dist + timer_pk_update + timer_rebuild_g + timer_rhs_build
+                            + timer_choose_ldlt + timer_linear_solve + timer_linesearch + timer_state_update;
+        fprintf(stderr,
+            "[SSN_TIMER] iters=%d total=%.4fs | subgrad_dist=%.4f pk_update=%.4f rebuild_g=%.4f "
+            "rhs_build=%.4f choose_ldlt=%.4f linear_solve=%.4f linesearch=%.4f state_update=%.4f\n",
+            timer_n_iters, total, timer_subgrad_dist, timer_pk_update, timer_rebuild_g,
+            timer_rhs_build, timer_choose_ldlt, timer_linear_solve, timer_linesearch, timer_state_update);
+    }
+#endif
 }

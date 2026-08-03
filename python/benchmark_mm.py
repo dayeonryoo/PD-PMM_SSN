@@ -3,8 +3,8 @@ Benchmark SSN-PMM vs QPALM vs OSQP on the Maros-Meszaros QP test set.
 
 Outputs
 -------
-  results/comparison_mm.csv                  - per-problem timing, iteration counts, and status
-  results/performance_profile_mm.pdf/png     - Dolan-Moré performance profile (solve time)
+  results/comparison_mm.csv                    - per-problem timing, iteration counts, and status
+  results/performance_profile_mm.pdf/png       - Dolan-Moré performance profile (run time)
   results/performance_profile_mm_iters.pdf/png - Dolan-Moré performance profile (iterations)
 
 === HOW TO RUN FROM SCRATCH ===
@@ -30,22 +30,23 @@ Step 3 - Run the benchmark
 ---------------------------
   python3 benchmark_mm.py
 
-  Optional: override the project root if running from a different directory:
-  python3 benchmark_mm.py --root /path/to/PD-PMM_SSN
-
-Settings: tol = 1e-6, time limit = 60 s (1 min), max iterations = infinity.
+Settings: tol = 1e-6, time limit = 60 s, max iterations = infinity.
+        --root:       to change the output directory (default: results/).
+        --name:       to change the output file prefix (default: comparison_mm).
+        --solver:     to select which solvers to run among ssn-pmm, qpalm, osqp (default: all three).
+        --tol:        to change the solver tolerance (default: 1e-6).
+        --time-limit: to change the solver time limit in seconds (default: 60).
+        --cooldown:   to change the cooldown time in seconds between solver runs (default: 3).
 """
 
 import sys
 import os
-import csv
 import time
 import argparse
 import multiprocessing as mp
 from pathlib import Path
 
 import numpy as np
-import scipy.sparse as sp
 import matplotlib
 matplotlib.use("Agg")        # non-interactive backend; remove if running interactively
 import matplotlib.pyplot as plt
@@ -67,15 +68,16 @@ except ModuleNotFoundError:
         "  cmake .. && cmake --build . --config Release"
     )
 
-try:
-    import qpalm
-except ModuleNotFoundError:
-    sys.exit("Cannot find qpalm. Install it with: pip install qpalm")
-
-try:
-    import osqp
-except ModuleNotFoundError:
-    sys.exit("Cannot find osqp. Install it with: pip install osqp")
+from benchmark_common import (
+    pdpmm_to_qpalm,
+    run_qpalm,
+    run_osqp,
+    _run_isolated,
+    QPALM_SOLVED,
+    OSQP_SOLVED,
+    _write_csv,
+    _load_existing_rows,
+)
 
 # ---------------------------------------------------------------------------
 # Maros-Meszaros problem list  (name → reference optimal objective)
@@ -222,149 +224,6 @@ QPS = {
 }
 
 # ---------------------------------------------------------------------------
-# Convert PDPMMdata dict (from ssn_pmm_bind.parse_sif) to QPALM inputs.
-#
-# PDPMMdata form:  min ½ xᵀQx + cᵀx   s.t.  Ax = b,  lw ≤ Bx ≤ uw,  lx ≤ x ≤ ux
-# QPALM form:      min ½ xᵀQx + qᵀx   s.t.  bmin ≤ Cx ≤ bmax
-#
-# Stacking:  C = [A; B; Iₙ],  bmin/bmax accordingly.
-# ---------------------------------------------------------------------------
-
-def _make_upper_triangular(Q):
-    """Return upper-triangular part of a symmetric Q.
-
-    Works regardless of whether Q is stored fully, as lower-triangular only,
-    or as upper-triangular only.  Uses COO deduplication to avoid double-counting.
-    """
-    Q_coo = Q.tocoo()
-    entries: dict[tuple[int, int], float] = {}
-    for r, c, v in zip(Q_coo.row.tolist(), Q_coo.col.tolist(), Q_coo.data.tolist()):
-        key = (min(r, c), max(r, c))
-        entries.setdefault(key, v)   # first occurrence wins
-    if not entries:
-        return sp.csc_matrix(Q.shape)
-    rows, cols, vals = zip(*((k[0], k[1], v) for k, v in entries.items()))
-    return sp.coo_matrix((vals, (rows, cols)), shape=Q.shape).tocsc()
-
-
-def pdpmm_to_qpalm(pd: dict):
-    """Build (Q_upper, q, C, bmin, bmax, n, m_total) from a parse_sif dict."""
-    n, ell = pd["n"], pd["l"]
-    INF = 1e30   # QPALM treats values beyond this as infinite
-
-    Q = sp.csc_matrix(
-        (pd["Q_data"], pd["Q_indices"], pd["Q_indptr"]), shape=pd["Q_shape"]
-    )
-    A = sp.csc_matrix(
-        (pd["A_data"], pd["A_indices"], pd["A_indptr"]), shape=pd["A_shape"]
-    )
-    B = sp.csc_matrix(
-        (pd["B_data"], pd["B_indices"], pd["B_indptr"]), shape=pd["B_shape"]
-    )
-
-    Q_upper = _make_upper_triangular(Q)
-    q = np.asarray(pd["c"], dtype=np.float64)
-
-    row_blocks  = [A]
-    bmin_blocks = [np.asarray(pd["b"],  dtype=np.float64)]
-    bmax_blocks = [np.asarray(pd["b"],  dtype=np.float64)]
-
-    if ell > 0:
-        row_blocks.append(B)
-        bmin_blocks.append(np.asarray(pd["lw"], dtype=np.float64))
-        bmax_blocks.append(np.asarray(pd["uw"], dtype=np.float64))
-
-    row_blocks.append(sp.eye(n, format="csc"))
-    bmin_blocks.append(np.asarray(pd["lx"], dtype=np.float64))
-    bmax_blocks.append(np.asarray(pd["ux"], dtype=np.float64))
-
-    C    = sp.vstack(row_blocks, format="csc")
-    bmin = np.clip(np.concatenate(bmin_blocks), -INF, INF)
-    bmax = np.clip(np.concatenate(bmax_blocks), -INF, INF)
-
-    return Q_upper, q, C, bmin, bmax, n, int(C.shape[0])
-
-
-# ---------------------------------------------------------------------------
-# QPALM solver wrapper
-# ---------------------------------------------------------------------------
-QPALM_SOLVED = qpalm.Info.SOLVED   # == 1
-
-def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
-    """Run QPALM on a problem already converted via pdpmm_to_qpalm.
-
-    Returns dict with: status, obj_val, run_time, outter_iter, inner_iter.
-    """
-    Q_upper, q, C, bmin, bmax, n, m_total = qpalm_data
-
-    data      = qpalm.Data(n, m_total)
-    data.Q    = Q_upper
-    data.q    = q
-    data.A    = C
-    data.bmin = bmin
-    data.bmax = bmax
-
-    settings              = qpalm.Settings()
-    settings.eps_abs      = tol
-    settings.eps_rel      = tol
-    settings.max_iter     = 2_000_000_000   # effectively infinite
-    settings.time_limit   = time_limit
-    settings.verbose      = 0               # silent
-    settings.scaling      = 10              # default Ruiz scaling passes
-
-    solver = qpalm.Solver(data, settings)   # setup: Ruiz scaling + factorisation
-    solver.solve()
-
-    info = solver.info
-    return {
-        "status":       int(info.status_val),
-        # QPALM's Data has no constant-term field; it only ever reports 0.5 x'Qx + q'x,
-        # so obj_const must be added back explicitly to compare against SSN-PMM's obj_val.
-        "obj_val":      float(info.objective) + obj_const,
-        "run_time":     float(info.run_time),
-        "outer_iter":   int(info.iter_out),
-        "inner_iter":   int(info.iter),
-        "tol_achieved": max(float(info.pri_res_norm), float(info.dua_res_norm)),
-    }
-
-
-# ---------------------------------------------------------------------------
-# OSQP solver wrapper
-# ---------------------------------------------------------------------------
-OSQP_SOLVED = 1   # osqp.constant("OSQP_SOLVED")
-
-def run_osqp(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
-    """Run OSQP on a problem already converted via pdpmm_to_qpalm.
-
-    Returns dict with: status, obj_val, run_time, outer_iter, inner_iter=0.
-    """
-    Q_upper, q, C, bmin, bmax, *_ = qpalm_data
-
-    prob = osqp.OSQP()
-    prob.setup(                         # setup: scaling + factorisation
-        Q_upper, q, C, bmin, bmax,
-        eps_abs    = tol,
-        eps_rel    = tol,
-        max_iter   = 2_000_000_000,   # effectively infinite
-        time_limit = time_limit,
-        verbose    = False,
-        scaling    = 10,
-    )
-    res = prob.solve()
-
-    info = res.info
-    return {
-        "status":       int(info.status_val),
-        # OSQP's setup() has no constant-term argument either; same fix as run_qpalm.
-        "obj_val":      float(info.obj_val) + obj_const,
-        "run_time":     float(info.run_time),
-        "outer_iter":   int(info.iter),
-        "inner_iter":   int(0),
-        "tol_achieved": max(float(info.prim_res), float(info.dual_res)),
-    }
-
-
-# ---------------------------------------------------------------------------
 # Performance profile (Dolan-Moré)
 # ---------------------------------------------------------------------------
 
@@ -372,12 +231,12 @@ def compute_performance_profile(times: np.ndarray, tau_vals: np.ndarray) -> np.n
     """
     Parameters
     ----------
-    times : (n_problems, n_solvers) float array  – np.inf when unsolved
+    times : (n_problems, n_solvers) float array - np.inf when unsolved
     tau_vals : sorted 1-D array of τ values
 
     Returns
     -------
-    profiles : (n_solvers, len(tau_vals)) array – ρ_s(τ) values in [0, 1]
+    profiles : (n_solvers, len(tau_vals)) array - ρ_s(τ) values in [0, 1]
     """
     n_p, n_s = times.shape
     best     = times.min(axis=1, keepdims=True)           # (n_p, 1)
@@ -614,28 +473,9 @@ def _worker_osqp_mm(sif_path, tol, time_limit, conn):
     conn.close()
 
 
-def _run_isolated(target_func, args: tuple) -> dict:
-    """Spawn a fresh process, run target_func(*args, conn), return the sent dict."""
-    parent_conn, child_conn = mp.Pipe(duplex=False)
-    p = mp.Process(target=target_func, args=(*args, child_conn))
-    p.start()
-    child_conn.close()
-    out = parent_conn.recv()
-    p.join()
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Main benchmark loop
 # ---------------------------------------------------------------------------
-
-def _load_existing_rows(csv_path: Path) -> list[dict]:
-    """Load previously written rows so a rerun appends instead of overwriting."""
-    if not csv_path.exists():
-        return []
-    with open(csv_path, newline="") as fh:
-        return list(csv.DictReader(fh))
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -690,10 +530,7 @@ def main() -> None:
 
     def _flush() -> None:
         """Rewrite the CSV from `rows` — called right after every solver finishes."""
-        with open(csv_path, "w", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(rows)
+        _write_csv(csv_path, rows, fieldnames)
 
     for idx, (name, _ref_obj) in enumerate(QPS.items(), 1):
         sif_path = str(data_dir / f"{name}.SIF")

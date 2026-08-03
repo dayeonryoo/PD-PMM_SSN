@@ -18,13 +18,13 @@ struct ParsedModel {
     bool is_qp = false;
     bool is_min = true;
 
-    int num_rows = 0; // number of constraints
-    int num_cols = 0; // number of variables
+    int num_rows = 0;   // number of constraints
+    int num_cols = 0;   // number of variables
 
-    Vec c; // objective coefficients
+    Vec c;              // objective coefficients
     T obj_const = T(0); // objective constant term
-    SpMat A; // constraint matrix
-    SpMat Q; // quadratic coefficients (for QP; store lower triangular part only)
+    SpMat A;            // constraint matrix
+    SpMat Q;            // quadratic coefficients (store lower triangular part only)
     Vec row_lower, row_upper; // constraint bounds
     Vec col_lower, col_upper; // variable bounds
 };
@@ -59,7 +59,7 @@ private:
     struct RowInfo {
         // For ROWS section
         char type = 'N'; // 'N', 'E', 'L', 'G'
-        int idx = -1; // index of constraint rows (objective row has idx = -1)
+        int idx   = -1;  // index of constraint rows (objective row has idx = -1)
     };
 
     Section section_ = Section::NONE;

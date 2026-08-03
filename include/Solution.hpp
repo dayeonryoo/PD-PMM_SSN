@@ -4,11 +4,11 @@
 #include <limits>
 
 // =============================================================
-//      min  c^T x + (1/2) x^T Q x,
+//      min  c^T x + 0.5 x^T Q x + obj_const,
 //      s.t. A x = b,
 //           B x = w,
 //           lx <= x <= ux,
-//           lw <= w <= uw
+//           lw <= w <= uw.
 // =============================================================
 
 template <typename T>
@@ -41,18 +41,21 @@ public:
     T pmm_tol_achieved; // Tolerance achieved by PMM
     T ssn_tol_achieved; // Tolerance achieved by SSN
 
-    double run_time;     // Total time in seconds taken to solve the problem
+    double setup_time;   // Wall-clock time in seconds spent in the SSN_PMM constructor
+    double solve_time;   // Wall-clock time in seconds spent in solve()
+    double run_time;     // setup_time + solve_time
     int linesearch_fail; // Number of linesearch failures
     int krylov_fail;     // Number of Krylov failures
 
     Solution(int opt, const Vec& x, const Vec& y1, const Vec& y2, const Vec& z,
              T obj_val, int pmm_iter, int ssn_iter, int krylov_iter, int fact, int smw_count,
              T pmm_tol_achieved, T ssn_tol_achieved,
-             double run_time, int linesearch_fail, int krylov_fail)
+             double setup_time, double solve_time, int linesearch_fail, int krylov_fail)
     : opt(opt), x(x), y1(y1), y2(y2), z(z), obj_val(obj_val),
       pmm_iter(pmm_iter), ssn_iter(ssn_iter), krylov_iter(krylov_iter), fact(fact), smw_count(smw_count),
       pmm_tol_achieved(pmm_tol_achieved), ssn_tol_achieved(ssn_tol_achieved),
-      run_time(run_time), linesearch_fail(linesearch_fail), krylov_fail(krylov_fail)
+      setup_time(setup_time), solve_time(solve_time), run_time(setup_time + solve_time),
+      linesearch_fail(linesearch_fail), krylov_fail(krylov_fail)
     {}
 
     void print_summary() const {
@@ -75,7 +78,7 @@ public:
         }
         std::cout << "Number of linesearch failures (linesearch_fail): " << linesearch_fail << std::endl;
         std::cout << "Number of Krylov failures (krylov_fail): " << krylov_fail << std::endl;
-        std::cout << "Total run time (run_time): " << run_time << " seconds\n";
+        std::cout << "Run time (run_time): " << run_time << " seconds\n";
     }
 
 };
