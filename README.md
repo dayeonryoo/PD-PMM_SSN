@@ -54,12 +54,22 @@ cmake --build . --config Release
 
 This produces four executables inside `build/`:
 
-| Executable | Description |
-|---|---|
-| `ssn_pmm_netlib` | Runs the solver on the Netlib LP test set |
-| `ssn_pmm_maros_meszaros` | Runs the solver on the Maros-Meszaros QP test set |
-| `ssn_pmm_pde` | Runs the solver on a PDE-constrained problem |
-| `mps_parser` | Standalone MPS/SIF file parser demo |
+| Executable | Source | Description |
+|---|---|---|
+| `ssn_pmm_netlib` | `src/netlib.cpp` | Runs the solver on Netlib LPs (`.mps`) |
+| `ssn_pmm_maros_meszaros` | `src/maros_meszaros.cpp` | Runs the solver on Maros-Meszaros QPs (`.SIF`) |
+| `ssn_pmm_pde` | `src/PDE.cpp` | Runs the solver on a PDE-constrained QP built by `PDEgenerator.hpp` |
+| `mps_parser` | `src/readingMps.cpp` | Standalone MPS/SIF file parser demo |
+
+`ssn_pmm_netlib`, `ssn_pmm_maros_meszaros`, and `ssn_pmm_pde` each take `--name`, `--tol`,
+`--max-iter`, and `--time-limit` flags. `--name` picks a single problem to solve, or `all` to
+sweep every problem the driver knows about (`ssn_pmm_netlib` and `ssn_pmm_maros_meszaros` also
+take `--root` to point at a different data directory, and write a CSV when `--name all` is
+used). Run any of them with `--help` for the full flag list. Run them from the repo root so
+their default (relative) data paths resolve, or pass `--root`. Each driver still hardcodes its
+`PrintWhen`/`PrintWhat` settings and (beyond the flags above) some legacy alternates only
+reachable by editing `main()` — see
+["Running the C++ drivers"](#running-the-c-drivers) below.
 
 ### Option B — Python bindings
 
@@ -233,7 +243,7 @@ n, m, l = pd["n"], pd["m"], pd["l"]
 | `max_iter` | `int` | Maximum PMM outer iterations |
 | `time_limit` | `double` | Wall-clock limit in seconds (default `600`) |
 | `when` | `PrintWhen` | `NEVER` / `EVERY10` / `ALWAYS` |
-| `what` | `PrintWhat` | `NONE` / `TUNING` |
+| `what` | `PrintWhat` | `NONE` / `MINIMAL` / `SSN` / `TUNING` / `FULL` (see ["Tuning: printing and timers"](#tuning-printing-and-timers)) |
 
 ### C++ `Solution<T>`
 
@@ -276,35 +286,194 @@ Sparse matrices are in CSC format (`_data`, `_indices`, `_indptr`, `_shape`).
 
 ---
 
-## Running the benchmarks
+## Running the C++ drivers
 
-### Maros-Meszaros QP benchmark (Python, compares SSN-PMM vs QPALM vs OSQP)
+Each driver takes a small set of `--flag value` command-line options (see `--help`), and
+defaults to paths relative to the repo root — **run them from the repo root**, or pass `--root`
+to point at your clone from elsewhere. No editing or rebuilding is needed just to change `tol`,
+`max_iter`, `time_limit`, or (where applicable) which data file to load.
+
+### `ssn_pmm_netlib` — Netlib LPs (`src/netlib.cpp`)
 
 ```bash
-pip install qpalm osqp numpy scipy matplotlib pandas
+./build/ssn_pmm_netlib [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE]
+```
 
-# Build the Python binding first (see "Building" above)
+Solves `<root>/<PROBLEM>.mps` (default: `data/netlib/AFIRO.mps`), printing the solution summary.
+Pass `--name all` to sweep every Netlib LP with a known reference objective value (the same
+`name -> obj_val` map used historically), checking each result against it and appending a row
+to `<root>/results/netlib_all.csv` (override with `--out`). There is no Python/QPALM/OSQP
+comparison script for Netlib LPs; this driver is the only way to benchmark them.
 
+Two infeasibility-detection alternates are also included, commented out at the bottom of the
+file (sweep the Netlib-infeasible set, or solve one infeasible LP by name) — these predate
+`--name` and still require editing `main()` (uncomment, remove the `/* ... */`, rebuild) since
+they check for *detected infeasibility* rather than an objective value.
+
+### `ssn_pmm_maros_meszaros` — Maros-Meszaros QPs (`src/maros_meszaros.cpp`)
+
+```bash
+./build/ssn_pmm_maros_meszaros [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE] [--cooldown S]
+```
+
+Solves `<root>/<PROBLEM>.SIF` (default: `data/maros_meszaros/AUG2DCQP.SIF`), printing the
+solution summary. Pass `--name all` to sweep the full Maros-Meszaros set against its built-in
+reference objectives, appending a row to `<root>/results/maros_meszaros_all.csv` (override with
+`--out`) for each — `--cooldown` (default 0s) sleeps between problems in this mode.
+
+For comparing against QPALM/OSQP rather than just checking against reference objectives, use
+the Python benchmark instead (see below) — that's what produces performance profiles.
+
+### `ssn_pmm_pde` — PDE-constrained QPs (`src/PDE.cpp`)
+
+```bash
+./build/ssn_pmm_pde [--name PROBLEM|all] [--nc N] [--tol T] [--max-iter N] [--time-limit S]
+```
+
+Builds and solves one named problem via `include/PDEgenerator.hpp`'s generators, printing the
+solution summary. `--name` is one of:
+
+| Name | Generator |
+|---|---|
+| `l1l2_poisson` | `pdegen::make_poisson_l1l2_control` |
+| `l1l2_convdiff` | `pdegen::make_convdiff_l1l2_control` |
+| `l2_poisson_control` | `pdegen::make_poisson_l2_control` |
+| `l2_poisson_state` | `pdegen::make_poisson_l2_state_control` |
+| `l2_convdiff` (default) | `pdegen::make_convdiff_l2_control` |
+
+`--name all` solves all five in sequence. `--nc` sets the grid exponent (grid size ~ `2^nc`)
+passed to whichever generator(s) run (default: 6). The other generator arguments (regularization
+weights, state/control bounds) are fixed per problem in `build_problem()` in `PDE.cpp` — editing
+those still requires a rebuild.
+
+---
+
+## Running the benchmarks
+
+All three Python benchmark scripts compare **SSN-PMM vs QPALM vs OSQP** and live in `python/`.
+Build the Python binding first (see "Building" above), then `pip install qpalm osqp numpy scipy
+matplotlib pandas`.
+
+### Maros-Meszaros QP benchmark
+
+```bash
 cd python
 python3 benchmark_mm.py
 ```
 
-Results are written to `results/comparison_mm.csv` and a Dolan-Moré performance profile is saved as `results/performance_profile_mm.pdf/.png`.
+Runs the full Maros-Meszaros test set. Writes `results/comparison_mm.csv` plus Dolan-Moré
+performance profiles (`results/performance_profile_mm*.pdf/.png`, by time and by iteration count).
 
-Optional arguments:
 ```
---root /path/to/PD-PMM_SSN   # override project root (default: parent of script)
---tol 1e-6                   # primal-dual tolerance
---time-limit 600             # per-problem time limit in seconds
+--root DIR             override project root (default: parent of script)
+--tol 1e-6             primal-dual tolerance
+--time-limit 600       per-problem time limit in seconds
+--solver {ssn-pmm,qpalm,osqp} [...]   which solvers to run (default: all three)
+--out PREFIX           output file prefix (default: comparison_mm)
+--cooldown 0           seconds to sleep between problems (avoids CPU throttling)
 ```
 
-### Netlib LP benchmark (C++)
+### PDE-constrained QP benchmarks (L1/L2-regularized)
 
 ```bash
-./build/ssn_pmm_netlib
+cd python
+python3 benchmark_pde.py
 ```
 
-Results are appended to `results/*.csv`.
+Produces four sweep tables (`poisson_vary_n`, `poisson_vary_a2`, `convdiff_vary_n`,
+`convdiff_vary_a2`), written to `results/<table>.csv`.
+
+```
+--root DIR             override project root (default: parent of script)
+--tol 1e-6              solver tolerance
+--time-limit 600        per-problem time limit in seconds (10 min default)
+--table {poisson_vary_n,poisson_vary_a2,convdiff_vary_n,convdiff_vary_a2} [...]   default: all four
+--nc N [N ...]          grid exponents to sweep for vary-n tables (default: 6 7 8 9 10)
+--solver {ssn-pmm,qpalm,osqp} [...]   default: all three
+--cooldown 0            seconds to sleep between problems
+--out PREFIX            output file prefix
+```
+
+### PDE-constrained QP benchmarks (smooth, L2-regularized)
+
+```bash
+cd python
+python3 benchmark_smooth_pde.py
+```
+
+Produces three tables — `poisson_control`, `poisson_state`, `convdiff_both` — written to
+`results/smooth_<table>.csv`. Same `--root`, `--tol`, `--time-limit`, `--table`, `--nc`,
+`--solver`, `--cooldown`, `--out` flags as `benchmark_pde.py` (defaults: `tol=1e-9`,
+`nc = 7 8 9 10`).
+
+---
+
+## Tuning: printing and timers
+
+The solver has two independent knobs for diagnosing/tuning performance: **runtime printing**
+(what gets printed to stdout while solving, controlled by `Problem<T>`'s `when`/`what` fields)
+and a **compile-time step timer** (per-phase wall-clock breakdown of the SSN inner loop,
+printed to stderr).
+
+### Runtime printing — `PrintWhen` / `PrintWhat` (`include/Printing.hpp`)
+
+`PrintWhen` controls *how often* a line is printed per PMM iteration:
+
+| `PrintWhen` | Behavior |
+|---|---|
+| `NEVER` | No output |
+| `EVERY10` | Print every 10th PMM iteration |
+| `ALWAYS` | Print every PMM iteration |
+
+`PrintWhat` controls *how much* is printed on each line:
+
+| `PrintWhat` | Columns shown |
+|---|---|
+| `NONE` | Nothing (overrides `PrintWhen`) |
+| `MINIMAL` | Iteration counts, residuals |
+| `SSN` | + Krylov/factorization counts, PMM params (`mu`, `rho`, `eps`), line-search/Krylov failures — printed at every SSN iteration, not just per PMM iteration |
+| `TUNING` | Same columns as `SSN`, at the normal per-PMM-iteration cadence |
+| `FULL` | + objective value, but without the Krylov/factorization/failure columns |
+
+Set these on the `Problem<T>` constructor, e.g. `Problem<T> prob(pd, tol, max_iter, time_limit,
+PrintWhen::EVERY10, PrintWhat::TUNING);`. `TUNING` is the most useful combination for tuning
+PMM/SSN hyperparameters — it shows residuals, `mu`/`rho`/`eps`, and failure counts together.
+Turning printing off (`PrintWhen::NEVER` or `PrintWhat::NONE`) removes the stdout overhead
+entirely, which matters when timing large sweeps.
+
+### Compile-time step timers — `SSN_ENABLE_TIMERS` (`include/SSN.hpp`)
+
+A separate, more granular timer instruments the phases inside each SSN iteration (system prep,
+linear solve, preconditioner assembly/analyze/factorize, Krylov solve, LDLT fallback,
+line search, state update). It is gated by a macro so it compiles to zero overhead when off:
+
+```cpp
+// include/SSN.hpp
+#ifndef SSN_ENABLE_TIMERS
+#define SSN_ENABLE_TIMERS 0   // set to 1 to enable
+#endif
+```
+
+Enable it either by editing that line directly, or by passing the define at configure time
+without touching the source:
+
+```bash
+cmake -B build -DCMAKE_CXX_FLAGS="-DSSN_ENABLE_TIMERS=1"
+cmake --build build --config Release
+```
+
+When enabled, every SSN iteration prints a line like this to **stderr** (independent of the
+`PrintWhen`/`PrintWhat` settings above):
+
+```
+[Timer] ssn_iter=3 total=0.1234s | prep=0.0012 linear_solve=0.1180 (prec_setup=0.0500 [assembly=0.0100 analyze=0.0150 factorize=0.0250] krylov_solve=0.0680) linesearch=0.0030 state_update=0.0012
+```
+
+If the Krylov solve falls back to a dense LDLT factorization for that iteration, a second line
+reports the LDLT analyze/factorize/solve breakdown. This is the tool to use when profiling
+*where* time goes inside the solver (e.g. preconditioner factorization vs. CG iterations);
+`PrintWhat::TUNING` is the tool for watching *convergence behavior* (residuals, PMM parameters)
+across iterations.
 
 ---
 
@@ -320,7 +489,8 @@ PD-PMM_SSN/
 │   ├── MpsParser.hpp/.tpp   # MPS/SIF file parser
 │   ├── SchurOperator.hpp    # Schur complement linear operator
 │   ├── SchurPreconditioner.hpp
-│   ├── Printing.hpp
+│   ├── PDEgenerator.hpp     # Builds PDE-constrained QPs (Q1 FEM) for PDE.cpp
+│   ├── Printing.hpp         # PrintWhen/PrintWhat runtime printing
 │   └── RecordResult.hpp
 ├── src/
 │   ├── netlib.cpp           # Netlib LP benchmark runner
@@ -328,9 +498,12 @@ PD-PMM_SSN/
 │   ├── PDE.cpp              # PDE-constrained problem runner
 │   └── readingMps.cpp       # MPS parser demo
 ├── python/
-│   ├── ssn_pmm_bind.cpp     # pybind11 bindings
-│   ├── benchmark_mm.py      # Python benchmark script
-│   └── CMakeLists.txt       # Python binding build config
+│   ├── ssn_pmm_bind.cpp          # pybind11 bindings
+│   ├── benchmark_common.py       # shared QPALM/OSQP conversion + runner helpers
+│   ├── benchmark_mm.py           # Maros-Meszaros benchmark vs QPALM/OSQP
+│   ├── benchmark_pde.py          # L1/L2 PDE-constrained benchmark vs QPALM/OSQP
+│   ├── benchmark_smooth_pde.py   # L2 PDE-constrained benchmark vs QPALM/OSQP
+│   └── CMakeLists.txt            # Python binding build config
 ├── data/
 │   ├── netlib/              # Netlib LP instances (.mps)
 │   ├── netlib_infeas/       # Infeasible Netlib instances (.mps)

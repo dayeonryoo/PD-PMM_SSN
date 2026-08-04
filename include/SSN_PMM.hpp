@@ -119,7 +119,7 @@ public:
     int ssn_max_in_iter = 50;
     T eps_limit = 1e-3 * tol;
     T mu_limit = 1e9;
-    T rho_limit = 1e7;
+    T rho_limit = 1e9;
     T eps_pinf = 1e-1 * tol;
     T eps_dinf = 1e-1 * tol;
     T alpha = 0.95;
@@ -130,7 +130,7 @@ public:
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e1;
-    T rho = 1e7;
+    T rho = 1e9;
     T ssn_tol = 1e-2;
      
     // Outputs:
@@ -165,7 +165,6 @@ public:
             }
             check_dimensions(problem);
             Q = problem.Q;
-            std::cout << "Q info: " << Q_info << "\n";
             // problem.Q may already be lower-only or full symmetric; Q only stores the lower-triangular part.
             if (Q.nonZeros() > 0) {
                 std::vector<Eigen::Triplet<T>> Q_lower_trip;

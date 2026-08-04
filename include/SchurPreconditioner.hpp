@@ -161,29 +161,12 @@ public:
     Eigen::ComputationInfo info() const { return info_; }
     int fact_count() const { return fact_count_; }
     int smw_count()  const { return smw_count_; }
-
-    // Outcome of the most recent try_build_smw() call: why it was rejected (or "accepted"),
-    // and the active-set delta (h = deleted W rows, p = active_K flips, q = added W rows) it
-    // was evaluated against. h/p/q/rank are -1 if try_build_smw() returned before computing them.
-    const char* smw_reject_reason() const { return smw_reject_reason_; }
-    int smw_last_h()    const { return smw_last_h_; }
-    int smw_last_p()    const { return smw_last_p_; }
-    int smw_last_q()    const { return smw_last_q_; }
-    int smw_last_rank() const { return smw_last_rank_; }
     bool used_smw()  const { return use_smw_; }
 
-    // TIMER: cumulative wall-clock seconds spent in build(), broken down by phase.
-    // Callers should diff these against a "before" snapshot around compute() to get
-    // the incremental cost of a single call (build() may be a no-op if SMW engages).
+    // TIMER: step-by-step time spent in build().
     double assembly_time()  const { return assembly_time_; }
     double analyze_time()   const { return analyze_time_; }
     double factorize_time() const { return factorize_time_; }
-
-    // Size of the matrix factorized on the most recent full rebuild (Case 2 in build());
-    // stale/meaningless if the most recent build() call was serviced by SMW instead.
-    int      last_build_rows() const { return last_build_rows_; }
-    long long last_build_nnz() const { return last_build_nnz_; }
-    bool     last_build_used_ldlt() const { return last_build_used_ldlt_; }
 
     void force_full_rebuild() { skip_smw_ = true; base_dirty_ = true; }
     void record_smw_rebuild() {
@@ -332,9 +315,6 @@ private:
         use_ldlt_at_last_fact_ = true;
         n_act_     = n_act;
         s_current_ = static_cast<int>(s);
-        last_build_rows_       = n_act + static_cast<int>(s);
-        last_build_nnz_        = static_cast<long long>(sol.P_hat.nonZeros());
-        last_build_used_ldlt_  = true;
         base_dirty_ = false;
 
         if (!smw_suppressed()) snapshot_state();
@@ -401,9 +381,6 @@ private:
         mu_at_last_fact_       = mu_;
         use_ldlt_at_last_fact_ = false;
         s_current_ = static_cast<int>(s);
-        last_build_rows_       = static_cast<int>(s);
-        last_build_nnz_        = static_cast<long long>(sol.P.nonZeros());
-        last_build_used_ldlt_  = false;
 
         if (!smw_suppressed())
             snapshot_state();
@@ -413,16 +390,15 @@ private:
 
     // SMW Setup Phase. Returns true and arms use_smw_ iff 0 < h+p+q <= threshold.
     bool try_build_smw() {
-        smw_last_h_ = smw_last_p_ = smw_last_q_ = smw_last_rank_ = -1; // -1 = not computed this call
-        if (skip_smw_) { skip_smw_ = false; smw_reject_reason_ = "skip_smw_ (forced full rebuild requested by caller)"; return false; }
-        if (smw_fail_streak_ >= kMaxSmwFailStreak) { smw_reject_reason_ = "smw_suppressed (fail streak >= kMaxSmwFailStreak)"; return false; }
-        if (!active_W_ || !B_rm_ || M_rows_ < 0) { smw_reject_reason_ = "missing active_W_/B_rm_/M_rows_ data"; return false; }
+        if (skip_smw_) { skip_smw_ = false; return false; }
+        if (smw_fail_streak_ >= kMaxSmwFailStreak) return false;
+        if (!active_W_ || !B_rm_ || M_rows_ < 0) return false;
         // If the factorization method changed since last full rebuild, do refactorization instead of SMW.
-        if (use_ldlt_ != use_ldlt_at_last_fact_) { smw_reject_reason_ = "factorization method (use_ldlt_) changed since last full rebuild"; return false; }
-        if (!has_snapshot_) { smw_reject_reason_ = "no snapshot yet (first factorization)"; return false; }
+        if (use_ldlt_ != use_ldlt_at_last_fact_) return false;
+        if (!has_snapshot_) return false;
 
         const int s_old = static_cast<int>(G_old_.rows());
-        if (s_old == 0) { smw_reject_reason_ = "s_old == 0"; return false; }
+        if (s_old == 0) return false;
         const int N = static_cast<int>(G_old_.cols());
         const int l = static_cast<int>(active_W_->size());
 
@@ -459,9 +435,7 @@ private:
         const int p = static_cast<int>(delta_K_idx_.size());
         const int rank = h + p + q;
         const int threshold = 5;
-        smw_last_h_ = h; smw_last_p_ = p; smw_last_q_ = q; smw_last_rank_ = rank;
-        if (rank == 0) { smw_reject_reason_ = "rank == 0 (active set unchanged, but rebuild was requested)"; return false; }
-        if (rank > threshold) { smw_reject_reason_ = "rank(h+p+q) exceeds threshold"; return false; }
+        if (rank == 0 || rank > threshold) return false;
 
         h_ = h; p_ = p; q_ = q; s_old_ = s_old;
 
@@ -589,11 +563,8 @@ private:
 
         S_lambda_lu_.setThreshold(std::sqrt(std::numeric_limits<T>::epsilon()));
         S_lambda_lu_.compute(S_Lambda);
-        if (S_lambda_lu_.rank() < rank) {
-            smw_reject_reason_ = "near-singular capacitance matrix";
-            return false;  // fall back to full rebuild.
-        }
-        smw_reject_reason_ = "accepted";
+        if (S_lambda_lu_.rank() < rank)
+            return false;  // near-singular capacitance matrix; fall back to full rebuild.
 
         // ---- Pre-allocate hot-loop vectors ----
         const int s_new = s_old - h + q;
@@ -641,9 +612,6 @@ private:
     double assembly_time_  = 0.0;
     double analyze_time_   = 0.0;
     double factorize_time_ = 0.0;
-    int       last_build_rows_      = 0;
-    long long last_build_nnz_       = 0;
-    bool      last_build_used_ldlt_ = false;
 
     // ------ Cholesky factorization ------
     bool use_ldlt_ = false;
@@ -675,13 +643,6 @@ private:
     int  smw_fail_streak_ = 0;
     int  smw_fail_total_  = 0;
     static constexpr int    kMaxSmwFailStreak = 5;
-
-    // Diagnostics: outcome of the most recent try_build_smw() call (see getters above).
-    const char* smw_reject_reason_ = "not attempted";
-    int smw_last_h_    = -1;
-    int smw_last_p_    = -1;
-    int smw_last_q_    = -1;
-    int smw_last_rank_ = -1;
 
     // Snapshots from last full rebuild (input to try_build_smw)
     bool    has_snapshot_ = false; // true once snapshot_state() has run at least once

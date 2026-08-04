@@ -8,11 +8,11 @@
 #include "SchurOperator.hpp"
 #include "SchurPreconditioner.hpp"
 
-// TIMER: master switch for per-step SSN-loop timing instrumentation.
-// Set to 1 (here, or via -DSSN_ENABLE_TIMERS=1) to accumulate and print a phase-by-phase
-// wall-clock breakdown of solve_ssn() to stderr; 0 compiles the timers out entirely (no overhead).
+// TIMER: master switch for per-step SSN-loop timer.
+// Set to 1 (here, or via -DSSN_ENABLE_TIMERS=1) to print a step-by-step timer of solve_ssn();
+// 0 compiles the timers out entirely (no overhead).
 #ifndef SSN_ENABLE_TIMERS
-#define SSN_ENABLE_TIMERS 1
+#define SSN_ENABLE_TIMERS 0
 #endif
 
 #if SSN_ENABLE_TIMERS
@@ -88,21 +88,20 @@ public:
     bool krylov_converged = true;
 
 #if SSN_ENABLE_TIMERS
-    // TIMER: wall-clock seconds per SSN-loop phase for the current SSN iteration; reset at the top
-    // of each iteration and printed to stderr at the end of that same iteration. See solve_ssn() in
-    // SSN.tpp for what each phase covers.
-    double timer_prep         = 0.0; // subgrad_dist + pk_update + rebuild_g + rhs_build + choose_ldlt
-    double timer_linear_solve = 0.0; // solve_using_cg() + iterative refinement + recovering dy2
-    double timer_prec_setup   = 0.0; // subset of timer_linear_solve: preconditioner setData()/compute()
+    // TIMER: wall-clock seconds per SSN-loop phase for the current SSN iteration in solve_ssn();
+    // reset at the top of each iteration and printed to stderr at the end of that same iteration.
+    double timer_prep           = 0.0; // preparing SSN linear system
+    double timer_linear_solve   = 0.0; // solve_using_cg() + iterative refinement + recovering dy2
+    double timer_prec_setup     = 0.0; // subset of timer_linear_solve: preconditioner setData()/compute()
     double timer_prec_assembly  = 0.0; // subset of timer_prec_setup: SchurPreconditioner sparse matrix assembly (P_hat / G*E*G_tr)
     double timer_prec_analyze   = 0.0; // subset of timer_prec_setup: SchurPreconditioner::analyzePattern()
     double timer_prec_factorize = 0.0; // subset of timer_prec_setup: SchurPreconditioner::factorize()
-    double timer_krylov_solve = 0.0; // subset of timer_linear_solve: cg.solve()/solveWithGuess()
+    double timer_krylov_solve   = 0.0; // subset of timer_linear_solve: cg.solve()/solveWithGuess()
     double timer_ldlt_analyze   = 0.0; // subset of timer_linear_solve: solve_using_ldlt()'s ldlt_.analyzePattern()
     double timer_ldlt_factorize = 0.0; // subset of timer_linear_solve: solve_using_ldlt()'s ldlt_.factorize()
     double timer_ldlt_solve     = 0.0; // subset of timer_linear_solve: solve_using_ldlt()'s ldlt_.solve()
-    double timer_linesearch   = 0.0; // exact_line_search() (incl. gradient-descent retry)
-    double timer_state_update = 0.0; // x_cur_/y2_cur_/Ax_ssn_/Bx_ssn_ update + gradient/termination check
+    double timer_linesearch     = 0.0; // exact_linesearch
+    double timer_state_update   = 0.0; // x, y2 update + termination check
 #endif
 
     // Conjugate gradient parameters

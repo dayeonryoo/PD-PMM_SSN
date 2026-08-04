@@ -32,11 +32,11 @@ Step 3 - Run the benchmark
 
 Settings: tol = 1e-6, time limit = 60 s, max iterations = infinity.
         --root:       to change the output directory (default: results/).
-        --name:       to change the output file prefix (default: comparison_mm).
+        --out:        to change the output file prefix (default: comparison_mm).
         --solver:     to select which solvers to run among ssn-pmm, qpalm, osqp (default: all three).
         --tol:        to change the solver tolerance (default: 1e-6).
         --time-limit: to change the solver time limit in seconds (default: 60).
-        --cooldown:   to change the cooldown time in seconds between solver runs (default: 3).
+        --cooldown:   to change the cooldown time in seconds between solver runs (default: 0).
 """
 
 import sys
@@ -491,7 +491,7 @@ def main() -> None:
         "--time-limit", type=float, default=60.0, help="Per-problem time limit in seconds (default: 60)"
     )
     parser.add_argument(
-        "--name", default="", help="Prefix for output filenames (e.g. '0508' → '0508_comparison_mm.csv')"
+        "--out", default="", help="Prefix for output filenames (e.g. '0508' → '0508_comparison_mm.csv')"
     )
     parser.add_argument(
         "--solver", nargs="+", default=["ssn-pmm", "qpalm", "osqp"],
@@ -499,8 +499,8 @@ def main() -> None:
         help="Solvers to run (default: all three). Choices: ssn-pmm qpalm osqp",
     )
     parser.add_argument(
-        "--cooldown", type=float, default=3.0,
-        help="Seconds to sleep between problems to prevent CPU throttling (default: 3)",
+        "--cooldown", type=float, default=0.0,
+        help="Seconds to sleep between problems to prevent CPU throttling (default: 0)",
     )
     mp.set_start_method("spawn", force=True)
     args = parser.parse_args()
@@ -516,7 +516,7 @@ def main() -> None:
     cooldown   = args.cooldown
     max_iter   = 10_000_000_000   # effectively infinite for SSN-PMM
 
-    prefix = f"{args.name}_" if args.name else ""
+    prefix = f"{args.out}_" if args.out else ""
     csv_path = result_dir / f"{prefix}comparison_mm.csv"
     fieldnames = [
         "name",

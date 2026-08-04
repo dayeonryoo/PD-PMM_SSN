@@ -37,13 +37,13 @@ python3 benchmark_smooth_pde.py
 
 Settings: tol = 1e-6, time limit = 600 s (10 min), max iterations = infinity by default.
         --root:       to change the output directory (default: results/).
-        --name:       to change the output file prefix (default: smooth_*.csv).
+        --out:       to change the output file prefix (default: smooth_*.csv).
         --solver:     to select which solvers to run among ssn-pmm, qpalm, osqp (default: all three).
         --table:      to select which tables to run among poisson_control, poisson_state, convdiff_both (default: all three).
         --nc:         to select which grid exponents to run for vary-n tables (default: 7 8 9 10; see sweep parameters).
         --tol:        to change the solver tolerance (default: 1e-9).
         --time-limit: to change the solver time limit in seconds (default: 600).
-        --cooldown:   to change the cooldown time in seconds between solver runs (default: 3).
+        --cooldown:   to change the cooldown time in seconds between solver runs (default: 0).
 """
 
 import sys
@@ -306,9 +306,9 @@ def main() -> None:
     parser.add_argument("--solver",     nargs="+",  default=["ssn-pmm", "qpalm", "osqp"],
                         choices=["ssn-pmm", "qpalm", "osqp"], metavar="SOLVER",
                         help="Solvers to run (default: all three). Choices: ssn-pmm qpalm osqp")
-    parser.add_argument("--cooldown",   type=float, default=3.0,
-                        help="Seconds to sleep between solver runs to prevent CPU throttling (default: 3)")
-    parser.add_argument("--name",       default="",
+    parser.add_argument("--cooldown",   type=float, default=0.0,
+                        help="Seconds to sleep between solver runs to prevent CPU throttling (default: 0)")
+    parser.add_argument("--out",       default="",
                         help="Prefix for output filenames (e.g. '0727' -> '0727_smooth_poisson_control.csv')")
     args = parser.parse_args()
 
@@ -322,7 +322,7 @@ def main() -> None:
     max_iter   = 10_000_000_000
     tables     = set(args.table)
     solvers    = set(args.solver)
-    name_prefix = f"{args.name}_" if args.name else ""
+    name_prefix = f"{args.out}_" if args.out else ""
 
     if "poisson_control" in tables:
         nc_list = args.nc or TABLE1_NC

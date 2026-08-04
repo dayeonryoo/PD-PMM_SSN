@@ -24,26 +24,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(eigen)
 
-# GoogleTest
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-)
-FetchContent_MakeAvailable(googletest)
-
-# HiGHS
-# FetchContent_Declare(
-#     highs
-#     GIT_REPOSITORY "https://github.com/ERGO-Code/HiGHS.git"
-#     GIT_TAG        "latest"
-# )
-# FetchContent_MakeAvailable(highs)
-
-# ----------------------
-# Enable CTest
-# ----------------------
-enable_testing()
-
 # ----------------------
 # Solver library
 # ----------------------
@@ -55,7 +35,6 @@ target_include_directories(ssn_pmm INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DI
 target_link_libraries(ssn_pmm
     INTERFACE
         Eigen3::Eigen)
-        # highs::highs)
 
 # ----------------------
 # Main executable
@@ -71,39 +50,3 @@ target_link_libraries(ssn_pmm_maros_meszaros ssn_pmm)
 
 add_executable(ssn_pmm_pde src/PDE.cpp)
 target_link_libraries(ssn_pmm_pde ssn_pmm)
-
-# ----------------------
-# COIN-OR (CoinUtils + Osi) for MPS reading
-# ----------------------
-# find_path(COIN_INCLUDE_DIR
-#     CoinMpsIO.hpp
-#     PATH_SUFFIXES coin
-# )
-# find_library(COINUTILS_LIBRARY CoinUtils)
-
-# target_include_directories(ssn_pmm_netlib
-#     PRIVATE
-#         ${COIN_INCLUDE_DIR}
-# )
-# target_link_libraries(ssn_pmm_netlib
-#     PRIVATE
-#         ssn_pmm
-#         ${COINUTILS_LIBRARY}
-# )
-
-# ----------------------
-# Tests
-# ----------------------
-# add_executable(test_ssn tests/SSN_tests.cpp)
-# target_link_libraries(test_ssn
-#     ssn_pmm
-#     gtest
-#     gtest_main)
-# add_test(NAME SSNTests COMMAND test_ssn)
-
-# add_executable(test_pmm tests/PMM_tests.cpp)
-# target_link_libraries(test_pmm
-#     ssn_pmm
-#     gtest
-#     gtest_main)
-# add_test(NAME PMMTests COMMAND test_pmm)
