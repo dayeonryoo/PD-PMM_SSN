@@ -36,7 +36,7 @@ where `Q` is a symmetric positive semi-definite matrix (set `Q = 0` for LPs).
 ## Getting the code
 
 ```bash
-git clone https://github.com/<your-org>/PD-PMM_SSN.git
+git clone https://github.com/dayeonryoo/PD-PMM_SSN
 cd PD-PMM_SSN
 ```
 
