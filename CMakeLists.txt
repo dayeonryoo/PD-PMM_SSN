@@ -7,6 +7,11 @@ set(CMAKE_CXX_STANDARD 17)
 if (NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
+# -march=native tunes for the CPU that runs *this* build, so binaries are not portable to
+# other machines (they can crash with "Illegal instruction" on a different/older CPU). Safe as
+# long as everyone builds from source on their own machine; do not reuse a compiled build/
+# across machines, bake one into a Docker image that runs elsewhere, or ship it as a release
+# binary without switching this to a portable baseline (e.g. -march=x86-64-v2).
 add_compile_options(-O3 -march=native -funroll-loops)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

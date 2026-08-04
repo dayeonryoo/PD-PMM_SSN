@@ -52,6 +52,14 @@ cmake ..
 cmake --build . --config Release
 ```
 
+> **Portability note:** `CMakeLists.txt` compiles with `-march=native`, which tunes for the CPU
+> doing the build and is not portable to other machines — a binary built this way can crash with
+> `Illegal instruction` on a different/older CPU. This is safe as long as everyone builds from
+> source on their own machine (the normal workflow here); it becomes a problem if you copy a
+> compiled `build/` to another machine, bake one into a Docker image that runs elsewhere, or
+> ship a prebuilt release binary. In those cases, switch `-march=native` to a portable baseline
+> (e.g. `-march=x86-64-v2`) first.
+
 This produces four executables inside `build/`:
 
 | Executable | Source | Description |
