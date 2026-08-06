@@ -44,7 +44,7 @@ public:
     void setData(const SpMat& G, const SpMat& G_tr, const Vec& H_diag,
                  const BoolArr& active_K, const BoolArr& active_W,
                  const RowMajorSpMat& B_rm,
-                 T mu, bool rebuild, bool prec_pattern_changed) {
+                 T mu, T rho, bool rebuild, bool prec_pattern_changed) {
         // Store data pointers and set flags for refactorization.
         G_        = &G;
         G_tr_     = &G_tr;
@@ -53,13 +53,14 @@ public:
         active_W_ = &active_W;
         B_rm_     = &B_rm; // row-major B matrix
         mu_       = mu;
+        rho_      = rho;
 
         // Detect if refactorization is needed.
         bool size_changed = (s_current_ != static_cast<int>(G.rows()));
         if (!pattern_analyzed_ || prec_pattern_changed || size_changed)
             pattern_dirty_ = true;
 
-        // Detect if G E G^T needs to be recomputed.
+        // Detect if active_K/active_W is changed, i.e. G structure changed.
         if (prec_pattern_changed || size_changed)
             base_dirty_ = true;
 
@@ -75,8 +76,9 @@ public:
 
     template <typename MatrixType>
     SchurPreconditioner& compute(const MatrixType&) {
-        bool mu_changed = initialized_ && (mu_ != mu_at_last_fact_);
-        if (!initialized_ || rebuild_ || mu_changed) {
+        bool mu_changed  = initialized_ && (mu_  != mu_at_last_fact_);
+        bool rho_changed = initialized_ && (rho_ != rho_at_last_fact_);
+        if (!initialized_ || rebuild_ || mu_changed || rho_changed) {
             build();
             initialized_ = true;
         }
@@ -204,10 +206,16 @@ public:
         std::vector<int>().swap(delta_K_idx_);
         std::vector<int>().swap(ldlt_act_idx_);
         std::vector<Triplet>().swap(ldlt_build_trips_);
-        std::vector<Triplet>().swap(chol_build_trips_);
+        E_diag_.resize(0);
+        std::vector<int>().swap(diag_idx_chol_);
+        std::vector<int>().swap(ldlt_diag_top_idx_);
+        std::vector<int>().swap(ldlt_diag_bot_idx_);
         V_plus_.resize(0, 0);
         Y_all_.resize(0, 0);
         S_lambda_lu_ = Eigen::FullPivLU<Mat>();
+        tmp_smw_.resize(0);
+        ldlt_padded_.resize(0);
+        ldlt_padded_V_.resize(0, 0);
 
         r_pad_.resize(0);
         u_base_.resize(0);
@@ -263,40 +271,69 @@ private:
         const Eigen::Index n = G.cols();
 
         auto& sol = std::get<LdltSolver>(active_solver_);
-        int n_act;
+        const bool rho_changed = (rho_ != rho_at_last_fact_);
+        const bool structural_change = base_dirty_; // captured before any reset, for snapshot_state().
+        int n_act = n_act_;
         {
             SchurPrecScopedTimer timer(assembly_time_);
 
-            // Collect active K indices.
-            ldlt_act_idx_.clear();
-            ldlt_act_idx_.reserve(n);
-            for (Eigen::Index i = 0; i < n; ++i)
-                if (active_K(i)) ldlt_act_idx_.push_back(static_cast<int>(i));
-            n_act = static_cast<int>(ldlt_act_idx_.size());
+            if (base_dirty_) {
+                // Full rebuild: G's sparsity changed (active_K/active_W changed) or first call.
 
-            // Build P_hat of size (n_act + s) x (n_act + s).
-            ldlt_build_trips_.clear();
-            ldlt_build_trips_.reserve(n_act + 2 * static_cast<int>(G.nonZeros()) + static_cast<int>(s));
+                // Collect active K indices.
+                ldlt_act_idx_.clear();
+                ldlt_act_idx_.reserve(n);
+                for (Eigen::Index i = 0; i < n; ++i)
+                    if (active_K(i)) ldlt_act_idx_.push_back(static_cast<int>(i));
+                n_act = static_cast<int>(ldlt_act_idx_.size());
 
-            // Top-left block: -H_act (diagonal, n_act x n_act).
-            for (int k = 0; k < n_act; ++k)
-                ldlt_build_trips_.emplace_back(k, k, -H_diag(ldlt_act_idx_[k]));
+                // Build P_hat of size (n_act + s) x (n_act + s).
+                ldlt_build_trips_.clear();
+                ldlt_build_trips_.reserve(n_act + 2 * static_cast<int>(G.nonZeros()) + static_cast<int>(s));
 
-            // Off-diagonal blocks: G_act (s x n_act) and G_act^T (n_act x s).
-            for (int k = 0; k < n_act; ++k)
-                for (typename SpMat::InnerIterator it(G, ldlt_act_idx_[k]); it; ++it) {
-                    const int row = static_cast<int>(it.row());
-                    ldlt_build_trips_.emplace_back(n_act + row, k,           it.value()); // G_act
-                    ldlt_build_trips_.emplace_back(k,           n_act + row, it.value()); // G_act^T
+                // Top-left block: -H_act (diagonal, n_act x n_act).
+                for (int k = 0; k < n_act; ++k)
+                    ldlt_build_trips_.emplace_back(k, k, -H_diag(ldlt_act_idx_[k]));
+
+                // Off-diagonal blocks: G_act (s x n_act) and G_act^T (n_act x s).
+                for (int k = 0; k < n_act; ++k)
+                    for (typename SpMat::InnerIterator it(G, ldlt_act_idx_[k]); it; ++it) {
+                        const int row = static_cast<int>(it.row());
+                        ldlt_build_trips_.emplace_back(n_act + row, k,           it.value()); // G_act
+                        ldlt_build_trips_.emplace_back(k,           n_act + row, it.value()); // G_act^T
+                    }
+
+                // Bottom-right block: (1/mu) I_s.
+                for (Eigen::Index i = 0; i < s; ++i)
+                    ldlt_build_trips_.emplace_back(n_act + i, n_act + i, T(1) / mu_);
+
+                sol.P_hat.resize(n_act + s, n_act + s);
+                sol.P_hat.setFromTriplets(ldlt_build_trips_.begin(), ldlt_build_trips_.end());
+                sol.P_hat.makeCompressed();
+
+                std::cout << "[SchurPreconditioner] LDLT on P_hat of size " << sol.P_hat.rows() << " x " << sol.P_hat.cols()
+                          << " with nnz = " << sol.P_hat.nonZeros() << std::endl;
+
+                // Cache each diagonal's flat storage index for diagonal updates below.
+                ldlt_diag_top_idx_.resize(n_act);
+                for (int k = 0; k < n_act; ++k)
+                    ldlt_diag_top_idx_[k] = static_cast<int>(&sol.P_hat.coeffRef(k, k) - sol.P_hat.valuePtr());
+                ldlt_diag_bot_idx_.resize(s);
+                for (Eigen::Index i = 0; i < s; ++i)
+                    ldlt_diag_bot_idx_[i] = static_cast<int>(&sol.P_hat.coeffRef(n_act + i, n_act + i) - sol.P_hat.valuePtr());
+            } else {
+                // active_K/active_W unchanged: update only the diagonal blocks that changed.
+                if (rho_changed)
+                    // -H_act depends on rho (via H_diag); rewrite its diagonal directly.
+                    for (int k = 0; k < n_act; ++k)
+                        sol.P_hat.valuePtr()[ldlt_diag_top_idx_[k]] = -H_diag(ldlt_act_idx_[k]);
+                if (mu_ != mu_at_last_fact_) {
+                    // (1/mu) I block: shift by delta.
+                    const T delta = (mu_at_last_fact_ - mu_) / (mu_ * mu_at_last_fact_);
+                    for (Eigen::Index i = 0; i < s; ++i)
+                        sol.P_hat.valuePtr()[ldlt_diag_bot_idx_[i]] += delta;
                 }
-
-            // Bottom-right block: (1/mu) I_s.
-            for (Eigen::Index i = 0; i < s; ++i)
-                ldlt_build_trips_.emplace_back(n_act + i, n_act + i, T(1) / mu_);
-
-            sol.P_hat.resize(n_act + s, n_act + s);
-            sol.P_hat.setFromTriplets(ldlt_build_trips_.begin(), ldlt_build_trips_.end());
-            sol.P_hat.makeCompressed();
+            }
         }
 
         if (pattern_dirty_) {
@@ -312,12 +349,13 @@ private:
         info_ = sol.ldlt.info();
         fact_count_++;
         mu_at_last_fact_       = mu_;
+        rho_at_last_fact_      = rho_;
         use_ldlt_at_last_fact_ = true;
         n_act_     = n_act;
         s_current_ = static_cast<int>(s);
         base_dirty_ = false;
 
-        if (!smw_suppressed()) snapshot_state();
+        if (!smw_suppressed()) snapshot_state(structural_change);
     }
 
     // Build P = G E G^T + (1/mu) I (or shift its mu diagonal), then factorize with Cholesky.
@@ -336,33 +374,39 @@ private:
         assert(active_K.size() == n);
 
         auto& sol = std::get<CholSolver>(active_solver_);
+        const bool rho_changed = (rho_ != rho_at_last_fact_);
+        const bool structural_change = base_dirty_; // captured before any reset, for snapshot_state().
 
         {
             SchurPrecScopedTimer timer(assembly_time_);
-            if (base_dirty_) {
+            if (base_dirty_ || rho_changed) {
                 // Rebuild G E G^T.
+                // Triggered by active_K/active_W/size changes (base_dirty_) or a rho change (E = 1/H_diag changes).
                 assert(H_diag.minCoeff() > T(0));
-                chol_build_trips_.clear();
-                chol_build_trips_.reserve(n);
-                for (Eigen::Index i = 0; i < n; ++i)
-                    if (active_K(i))
-                        chol_build_trips_.emplace_back(i, i, T(1) / H_diag(i));
-                SpMat E(n, n);
-                E.setFromTriplets(chol_build_trips_.begin(), chol_build_trips_.end());
-                E.makeCompressed();
 
-                sol.P = G * E * G_tr;
+                E_diag_.resize(n);
+                for (Eigen::Index i = 0; i < n; ++i)
+                    E_diag_(i) = active_K(i) ? T(1) / H_diag(i) : T(0);
+
+                SpMat GE = G * E_diag_.asDiagonal();
+                GE.prune(T(0)); // drop explicit zero columns from E_diag_ (inactive K).
+                sol.P = GE * G_tr;
                 base_dirty_ = false;
 
                 for (Eigen::Index i = 0; i < s; ++i)
                     sol.P.coeffRef(i, i) += T(1) / mu_;
                 sol.P.makeCompressed();
+
+                // Cache each diagonal's flat storage index for diagonal updates below.
+                diag_idx_chol_.resize(s);
+                for (Eigen::Index i = 0; i < s; ++i)
+                    diag_idx_chol_[i] = static_cast<int>(&sol.P.coeffRef(i, i) - sol.P.valuePtr());
             } else {
                 // G E G^T unchanged; only mu changed: shift the (1/mu) I diagonal by delta.
                 assert(sol.P.rows() == s && sol.P.cols() == s);
                 const T delta = (mu_at_last_fact_ - mu_) / (mu_ * mu_at_last_fact_);
                 for (Eigen::Index i = 0; i < s; ++i)
-                    sol.P.coeffRef(i, i) += delta;
+                    sol.P.valuePtr()[diag_idx_chol_[i]] += delta;
             }
         }
 
@@ -379,11 +423,11 @@ private:
         info_ = sol.llt.info();
         fact_count_++;
         mu_at_last_fact_       = mu_;
+        rho_at_last_fact_      = rho_;
         use_ldlt_at_last_fact_ = false;
         s_current_ = static_cast<int>(s);
 
-        if (!smw_suppressed())
-            snapshot_state();
+        if (!smw_suppressed()) snapshot_state(structural_change);
     }
 
     // ------ SMW low-rank update ------
@@ -393,7 +437,6 @@ private:
         if (skip_smw_) { skip_smw_ = false; return false; }
         if (smw_fail_streak_ >= kMaxSmwFailStreak) return false;
         if (!active_W_ || !B_rm_ || M_rows_ < 0) return false;
-        // If the factorization method changed since last full rebuild, do refactorization instead of SMW.
         if (use_ldlt_ != use_ldlt_at_last_fact_) return false;
         if (!has_snapshot_) return false;
 
@@ -434,8 +477,12 @@ private:
         const int q = static_cast<int>(added_new_rows_.size());
         const int p = static_cast<int>(delta_K_idx_.size());
         const int rank = h + p + q;
-        const int threshold = 5;
+        const int threshold = 30;
+
+        // if (rank > threshold)  std::cout << "[SchurPreconditioner] Skipping SMW update: rank=" << rank << ", threshold=" << threshold << std::endl;
         if (rank == 0 || rank > threshold) return false;
+
+        std::cout << "[SchurPreconditioner] Attempting SMW update: rank=" << rank  << ", threshold=" << threshold << std::endl;
 
         h_ = h; p_ = p; q_ = q; s_old_ = s_old;
 
@@ -503,14 +550,19 @@ private:
         // V_+ solves: dense block multi-RHS.
         Y_all_.resize(s_old, rank);
         {
-            Vec tmp = Vec::Zero(s_old);
+            tmp_smw_.resize(s_old);
+            tmp_smw_.setZero();
+
+            if (use_ldlt_) {
+                ldlt_padded_.resize(n_act_ + s_old);
+                ldlt_padded_.head(n_act_).setZero();
+            }
 
             // Helper: P_old^-1 v via LLT, or (P_hat_old^-1 [0;v]).tail via LDLT.
             auto solve_base_vec = [&](const Vec& rhs) -> Vec {
                 if (use_ldlt_) {
-                    Vec padded = Vec::Zero(n_act_ + s_old);
-                    padded.tail(s_old) = rhs;
-                    return std::get<LdltSolver>(active_solver_).ldlt.solve(padded).tail(s_old);
+                    ldlt_padded_.tail(s_old) = rhs;
+                    return std::get<LdltSolver>(active_solver_).ldlt.solve(ldlt_padded_).tail(s_old);
                 } else {
                     return std::get<CholSolver>(active_solver_).llt.solve(rhs);
                 }
@@ -518,27 +570,27 @@ private:
 
             // Cols 0..h-1: P_old^-1 e_{del_k}
             for (int k = 0; k < h; ++k) {
-                if (k > 0) tmp(deleted_old_rows_[k - 1]) = T(0);
-                tmp(deleted_old_rows_[k]) = T(1);
-                Y_all_.col(k) = solve_base_vec(tmp);
+                if (k > 0) tmp_smw_(deleted_old_rows_[k - 1]) = T(0);
+                tmp_smw_(deleted_old_rows_[k]) = T(1);
+                Y_all_.col(k) = solve_base_vec(tmp_smw_);
             }
-            if (h > 0) tmp(deleted_old_rows_[h - 1]) = T(0);
+            if (h > 0) tmp_smw_(deleted_old_rows_[h - 1]) = T(0);
 
-            // Cols h..h+p-1: P_old^-1 G_old_col_j 
+            // Cols h..h+p-1: P_old^-1 G_old_col_j
             for (int j = 0; j < p; ++j) {
                 for (typename SpMat::InnerIterator it(G_old_, delta_K_idx_[j]); it; ++it)
-                    tmp(it.row()) = it.value();
-                Y_all_.col(h + j) = solve_base_vec(tmp);
+                    tmp_smw_(it.row()) = it.value();
+                Y_all_.col(h + j) = solve_base_vec(tmp_smw_);
                 for (typename SpMat::InnerIterator it(G_old_, delta_K_idx_[j]); it; ++it)
-                    tmp(it.row()) = T(0);
+                    tmp_smw_(it.row()) = T(0);
             }
 
-            // Cols h+p..rank-1: P_old^-1 V_plus_ 
+            // Cols h+p..rank-1: P_old^-1 V_plus_
             if (q > 0) {
                 if (use_ldlt_) {
-                    Mat padded_V = Mat::Zero(n_act_ + s_old, q);
-                    padded_V.bottomRows(s_old) = V_plus_;
-                    Y_all_.rightCols(q) = std::get<LdltSolver>(active_solver_).ldlt.solve(padded_V).bottomRows(s_old);
+                    ldlt_padded_V_.setZero(n_act_ + s_old, q);
+                    ldlt_padded_V_.bottomRows(s_old) = V_plus_;
+                    Y_all_.rightCols(q) = std::get<LdltSolver>(active_solver_).ldlt.solve(ldlt_padded_V_).bottomRows(s_old);
                 } else {
                     Y_all_.rightCols(q) = std::get<CholSolver>(active_solver_).llt.solve(V_plus_);
                 }
@@ -561,10 +613,16 @@ private:
         if (q > 0)
             S_Lambda.bottomRows(q).noalias() -= V_plus_.transpose() * Y_all_;
 
-        S_lambda_lu_.setThreshold(std::sqrt(std::numeric_limits<T>::epsilon()));
+        S_lambda_lu_.setThreshold(Eigen::Default);
         S_lambda_lu_.compute(S_Lambda);
-        if (S_lambda_lu_.rank() < rank)
+        if (S_lambda_lu_.rank() < rank) {
+            // std::cout << "[SchurPreconditioner] Rejecting SMW update: capacitance rank="
+            //           << S_lambda_lu_.rank() << " < needed=" << rank
+            //           << " (h=" << h << " p=" << p << " q=" << q
+            //           << ", maxPivot=" << S_lambda_lu_.maxPivot()
+            //           << ", threshold=" << S_lambda_lu_.threshold() << ")" << std::endl;
             return false;  // near-singular capacitance matrix; fall back to full rebuild.
+        }
 
         // ---- Pre-allocate hot-loop vectors ----
         const int s_new = s_old - h + q;
@@ -575,17 +633,23 @@ private:
         z_base_.resize(s_old);
         z_new_.resize(s_new);
         s_current_ = s_new;
+        mu_at_last_fact_  = mu_;
+        rho_at_last_fact_ = rho_;
         use_smw_   = true;
         smw_count_++;
         return true;
     }
 
     // Helper: snapshot last full-rebuild state for next SMW attempt.
-    void snapshot_state() {
-        G_old_        = *G_;
+    // structural_change: true iff active_K/active_W/G changed (not just mu/rho values).
+    // If true, G_old_/active_K_old_/active_W_old_ are re-copied; if false, only H_diag_old_ is re-copied.
+    void snapshot_state(bool structural_change) {
+        if (structural_change) {
+            G_old_        = *G_;
+            active_K_old_ = *active_K_;
+            if (active_W_) active_W_old_ = *active_W_;
+        }
         H_diag_old_   = *H_diag_;
-        active_K_old_ = *active_K_;
-        if (active_W_) active_W_old_ = *active_W_;
         has_snapshot_ = true;
     }
 
@@ -596,7 +660,8 @@ private:
     const BoolArr*       active_K_ = nullptr;
     const BoolArr*       active_W_ = nullptr;
     const RowMajorSpMat* B_rm_     = nullptr;
-    T mu_ = T(1);
+    T mu_  = T(1);
+    T rho_ = T(1);
     int M_rows_    = -1;  // number of equality-constraint rows
     int s_current_ = -1;  // current row count of G
 
@@ -607,6 +672,7 @@ private:
     bool pattern_dirty_    = true;
     bool base_dirty_       = true;
     T    mu_at_last_fact_  = T(-1);
+    T    rho_at_last_fact_ = T(-1);
 
     // TIMER: cumulative wall-clock seconds spent in build(), by phase (see getters above).
     double assembly_time_  = 0.0;
@@ -633,7 +699,12 @@ private:
 
     std::vector<int> ldlt_act_idx_;
     std::vector<Triplet> ldlt_build_trips_;
-    std::vector<Triplet> chol_build_trips_;
+    Vec E_diag_; // factorize_by_chol's E diagonal (1/H_diag, zeroed at inactive K)
+
+    // Cached flat storage indices (into sol.P/sol.P_hat's valuePtr()).
+    std::vector<int> diag_idx_chol_;
+    std::vector<int> ldlt_diag_top_idx_;
+    std::vector<int> ldlt_diag_bot_idx_;
 
     // ------ SMW low-rank update ------
     // Control & failure tracking
@@ -662,6 +733,9 @@ private:
     Mat V_plus_;
     Mat Y_all_;
     Eigen::FullPivLU<Mat> S_lambda_lu_;
+    Vec tmp_smw_;       // try_build_smw()'s Y_all_ column-solve RHS scratch
+    Vec ldlt_padded_;   // try_build_smw()'s LDLT-padded [0;v] RHS scratch
+    Mat ldlt_padded_V_; // try_build_smw()'s LDLT-padded [0;V_plus_] multi-RHS scratch
 
     // ------ Application: solve-time working storage ------
     mutable Vec r_pad_, u_base_, Lambda_all_, lambda_work_, z_base_, z_new_, direct_result_;

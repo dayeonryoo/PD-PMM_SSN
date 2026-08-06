@@ -654,10 +654,10 @@ void SSN_PMM<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& ne
         rho = std::min(rho_limit, T(1.3) * rho);
         ssn_tol = std::max(eps_limit, T(0.1) * ssn_tol);
 
-    } else if (ssn_opt == 3 || ((ssn_opt == 2 || ssn_opt == 5) && ssn_res > T(100) * worst_res)) {
+    } else if (ssn_opt == 3 || (ssn_opt == 2 || ssn_opt == 5) && ssn_res > T(100) * worst_res) {
         // Linesearch failed, or SSN residual is too large compared to PMM tolerance achieved.
-        mu = std::max(mu0, T(0.8) * mu);
-        rho = std::max(rho0, T(0.8) * rho);
+        mu = std::max(mu0, T(0.5) * mu);
+        rho = std::max(rho0, T(0.5) * rho);
         ssn_tol = std::min({worst_res, T(1.1) * ssn_tol, T(1e-2)});
 
     }

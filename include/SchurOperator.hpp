@@ -45,18 +45,21 @@ public:
     SchurOperator(const SpMat& G_, const SpMat& G_tr_, const Vec& H_diag_inv_, T mu)
         : G(G_), G_tr(G_tr_), H_diag_inv(H_diag_inv_), mu_inv(T(1) / mu) {
             m_ = G.rows(); // Schur operator is m x m
+            t_.resize(G.cols());
+            u_.resize(G.cols());
+            w_.resize(m_);
     }
 
     Eigen::Index rows() const { return m_; }
     Eigen::Index cols() const { return m_; }
 
     template <typename Rhs>
-    Vec operator*(const Eigen::MatrixBase<Rhs>& v) const {
-        Vec t = G_tr * v;
-        Vec u = H_diag_inv.cwiseProduct(t);
-        Vec w = G * u;
-        w.noalias() += mu_inv * v;
-        return w;
+    const Vec& operator*(const Eigen::MatrixBase<Rhs>& v) const {
+        t_.noalias() = G_tr * v;
+        u_.noalias() = H_diag_inv.cwiseProduct(t_);
+        w_.noalias() = G * u_;
+        w_.noalias() += mu_inv * v;
+        return w_;
     }
 
 private:
@@ -65,4 +68,5 @@ private:
     const Vec& H_diag_inv;
     T mu_inv;
     Eigen::Index m_;
+    mutable Vec t_, u_, w_;
 };
