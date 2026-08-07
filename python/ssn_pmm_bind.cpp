@@ -280,7 +280,8 @@ y_lower/y_upper = state bounds (default ±inf)
 py::dict generate_pde_l1l2_qp(const std::string& choice,
                               int nc, double alpha1, double alpha2,
                               double y_lower = -std::numeric_limits<double>::infinity(),
-                              double y_upper =  std::numeric_limits<double>::infinity()) {
+                              double y_upper =  std::numeric_limits<double>::infinity(),
+                              bool lumped_mass = false) {
     if (choice != "poisson" && choice != "convdiff")
         throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
 
@@ -289,9 +290,9 @@ py::dict generate_pde_l1l2_qp(const std::string& choice,
         py::gil_scoped_release release;
         pd = (choice == "poisson")
                ? pdegen::make_poisson_l1l2_control<T>(nc, (T)alpha1, (T)alpha2, T(-2), T(1.5),
-                                                       (T)y_lower, (T)y_upper)
+                                                       (T)y_lower, (T)y_upper, lumped_mass)
                : pdegen::make_convdiff_l1l2_control<T>(nc, (T)alpha1, (T)alpha2, T(-2), T(1.5), T(0.02),
-                                                        (T)y_lower, (T)y_upper);
+                                                        (T)y_lower, (T)y_upper, lumped_mass);
     }
     return pdpmm_to_dict(pd);
 }
@@ -312,7 +313,8 @@ py::dict generate_pde_l2_qp(const std::string& choice,
                                      double y_upper =  std::numeric_limits<double>::infinity(),
                                      double u_lower = -std::numeric_limits<double>::infinity(),
                                      double u_upper =  std::numeric_limits<double>::infinity(),
-                                     double eps = 0.01) {
+                                     double eps = 0.01,
+                                     bool lumped_mass = false) {
     if (choice != "poisson" && choice != "poisson_state" && choice != "convdiff")
         throw std::invalid_argument(
             "choice must be one of 'poisson', 'poisson_state', 'convdiff'");
@@ -322,13 +324,13 @@ py::dict generate_pde_l2_qp(const std::string& choice,
         py::gil_scoped_release release;
         if (choice == "poisson") {
             pd = pdegen::make_poisson_l2_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                    (T)u_lower, (T)u_upper);
+                                                    (T)u_lower, (T)u_upper, lumped_mass);
         } else if (choice == "poisson_state") {
             pd = pdegen::make_poisson_l2_state_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                        (T)u_lower, (T)u_upper);
+                                                        (T)u_lower, (T)u_upper, lumped_mass);
         } else { // convdiff
             pd = pdegen::make_convdiff_l2_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                    (T)u_lower, (T)u_upper, (T)eps);
+                                                    (T)u_lower, (T)u_upper, (T)eps, lumped_mass);
         }
     }
     return pdpmm_to_dict(pd);
@@ -363,6 +365,7 @@ status >  0  → iteration / time limit reached)");
           py::arg("choice"), py::arg("nc"), py::arg("alpha1"), py::arg("alpha2"),
           py::arg("y_lower") = -std::numeric_limits<double>::infinity(),
           py::arg("y_upper") =  std::numeric_limits<double>::infinity(),
+          py::arg("lumped_mass") = false,
           R"(Generate a L1/L2-regularized PDE-constrained QP via split control variables.
 
 choice = 'poisson'  or  'convdiff'
@@ -371,8 +374,8 @@ alpha1 = L1 regularisation weight
 alpha2 = L2 regularisation weight (0 is valid)
 y_lower/y_upper = state bounds (default ±inf, i.e. control-constrained only;
                   pass finite bounds for a state- or jointly-constrained problem)
-
-Uses Q1 finite-element discretisation with the consistent mass matrix.
+lumped_mass = if True, use the lumped (diagonal) mass matrix instead of the
+              consistent Q1 mass matrix.
 
 Returns the same dict format as parse_sif(), so the result can be passed
 directly to solve_from_data() and used with pdpmm_to_qpalm().)");
@@ -384,6 +387,7 @@ directly to solve_from_data() and used with pdpmm_to_qpalm().)");
           py::arg("u_lower") = -std::numeric_limits<double>::infinity(),
           py::arg("u_upper") =  std::numeric_limits<double>::infinity(),
           py::arg("eps") = 0.01,
+          py::arg("lumped_mass") = false,
           R"(Generate a L2-regularized PDE-constrained QP.
 
 choice = 'poisson' (control-constrained)  or  'poisson_state' (state-constrained)  or  'convdiff' (control- and state-constrained)
@@ -391,8 +395,8 @@ nc     = grid exponent (grid size = 2^nc + 1 per direction)
 beta   = L2 regularisation weight
 y_lower/y_upper/u_lower/u_upper = box bounds on state/control (default ±inf)
 eps = diffusion coefficient, 'convdiff' only.
-
-Uses Q1 finite-element discretisation with the consistent mass matrix.
+lumped_mass = if True, use the lumped (diagonal) mass matrix instead of the
+              consistent Q1 mass matrix.
 
 Returns the same dict format as parse_sif(), so the result can be passed
 directly to solve_from_data() and used with pdpmm_to_qpalm().)");

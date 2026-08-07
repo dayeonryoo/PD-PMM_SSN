@@ -44,6 +44,7 @@ Settings: tol = 1e-6, time limit = 600 s (10 min), max iterations = infinity by 
         --tol:        to change the solver tolerance (default: 1e-6).
         --time-limit: to change the solver time limit in seconds (default: 600).
         --cooldown:   to change the cooldown time in seconds between solver runs (default: 0).
+        --lumped-mass: 0 to use the consistent mass matrix (default), 1 to use the lumped mass matrix.
 """
 
 import sys
@@ -108,10 +109,11 @@ def _n_display(nc: int) -> int:
 # Subprocess worker functions
 # ---------------------------------------------------------------------------
 
-def _worker_ssn(problem, nc, alpha1, alpha2, tol, time_limit, max_iter, conn):
+def _worker_ssn(problem, nc, alpha1, alpha2, lumped_mass, tol, time_limit, max_iter, conn):
     result = {}
     try:
-        pd_data = ssn_pmm_bind.generate_pde_l1l2_qp(problem, nc, alpha1, alpha2)
+        pd_data = ssn_pmm_bind.generate_pde_l1l2_qp(problem, nc, alpha1, alpha2,
+                                                     lumped_mass=lumped_mass)
         result["n_vars"] = pd_data["n"]
         result["res"] = ssn_pmm_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
     except Exception as e:
@@ -120,10 +122,11 @@ def _worker_ssn(problem, nc, alpha1, alpha2, tol, time_limit, max_iter, conn):
     conn.close()
 
 
-def _worker_qpalm(problem, nc, alpha1, alpha2, tol, time_limit, conn):
+def _worker_qpalm(problem, nc, alpha1, alpha2, lumped_mass, tol, time_limit, conn):
     result = {}
     try:
-        pd_data = ssn_pmm_bind.generate_pde_l1l2_qp(problem, nc, alpha1, alpha2)
+        pd_data = ssn_pmm_bind.generate_pde_l1l2_qp(problem, nc, alpha1, alpha2,
+                                                     lumped_mass=lumped_mass)
         qpalm_data = pdpmm_to_qpalm(pd_data)
         result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
@@ -132,10 +135,11 @@ def _worker_qpalm(problem, nc, alpha1, alpha2, tol, time_limit, conn):
     conn.close()
 
 
-def _worker_osqp(problem, nc, alpha1, alpha2, tol, time_limit, conn):
+def _worker_osqp(problem, nc, alpha1, alpha2, lumped_mass, tol, time_limit, conn):
     result = {}
     try:
-        pd_data = ssn_pmm_bind.generate_pde_l1l2_qp(problem, nc, alpha1, alpha2)
+        pd_data = ssn_pmm_bind.generate_pde_l1l2_qp(problem, nc, alpha1, alpha2,
+                                                     lumped_mass=lumped_mass)
         qpalm_data = pdpmm_to_qpalm(pd_data)
         result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
@@ -149,15 +153,17 @@ def _worker_osqp(problem, nc, alpha1, alpha2, tol, time_limit, conn):
 # ---------------------------------------------------------------------------
 
 def run_one(result: dict, problem: str, nc: int, alpha1: float, alpha2: float,
+            lumped_mass: bool,
             tol: float, time_limit: float, max_iter: int, solvers: set,
             cooldown: float = 0.0, flush_cb=None) -> dict:
     """Solve one problem with all three solvers in isolated subprocesses."""
     n_disp = _n_display(nc)
     a2_str = f"{alpha2:.0e}" if alpha2 > 0 else "0"
     print(f"  {problem} nc={nc} (n={n_disp:.2e})  "
-          f"alpha1={alpha1:.0e}  alpha2={a2_str}", flush=True)
+          f"alpha1={alpha1:.0e}  alpha2={a2_str}  "
+          f"mass={'lumped' if lumped_mass else 'consistent'}", flush=True)
 
-    worker_args = (problem, nc, alpha1, alpha2)
+    worker_args = (problem, nc, alpha1, alpha2, lumped_mass)
     return run_solvers(result, worker_args, _worker_ssn, _worker_qpalm, _worker_osqp,
                        tol, time_limit, max_iter, solvers, cooldown, flush_cb)
 
@@ -167,7 +173,7 @@ def run_one(result: dict, problem: str, nc: int, alpha1: float, alpha2: float,
 # ---------------------------------------------------------------------------
 
 CSV_FIELDS = [
-    "problem", "nc", "n_display", "alpha1", "alpha2",
+    "problem", "nc", "n_display", "alpha1", "alpha2", "lumped_mass",
     "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter", "pmm_tol_achieved", "ssn_time", "ssn_obj",
     "qpalm_status", "qpalm_solved", "qpalm_iter", "qpalm_inner_iter", "qpalm_tol_achieved", "qpalm_time", "qpalm_obj",
     "osqp_status",  "osqp_solved",  "osqp_iter",  "osqp_tol_achieved",  "osqp_time",  "osqp_obj",
@@ -179,7 +185,7 @@ CSV_FIELDS = [
 # ---------------------------------------------------------------------------
 
 def _run_vary_n(problem: str, nc_list: list[int], alpha1_list: list[float],
-                alpha2: float, tol: float, time_limit: float,
+                alpha2: float, lumped_mass: bool, tol: float, time_limit: float,
                 max_iter: int, result_dir: Path, solvers: set,
                 cooldown: float = 0.0, name_prefix: str = "") -> list[dict]:
     label = f"{problem}_vary_n"
@@ -196,16 +202,16 @@ def _run_vary_n(problem: str, nc_list: list[int], alpha1_list: list[float],
             done += 1
             print(f"\n[{label}  {done}/{n_total}]")
             row = {"problem": problem, "nc": nc, "n_display": _n_display(nc),
-                   "alpha1": alpha1, "alpha2": alpha2}
+                   "alpha1": alpha1, "alpha2": alpha2, "lumped_mass": int(lumped_mass)}
             rows.append(row)
-            run_one(row, problem, nc, alpha1, alpha2, tol, time_limit, max_iter, solvers,
-                    cooldown, flush_cb=_flush)
+            run_one(row, problem, nc, alpha1, alpha2, lumped_mass, tol, time_limit, max_iter,
+                    solvers, cooldown, flush_cb=_flush)
     print(f"  Saved: {csv_path}")
     return rows
 
 
 def _run_vary_a2(problem: str, nc: int, alpha1: float, alpha2_list: list[float],
-                 tol: float, time_limit: float, max_iter: int,
+                 lumped_mass: bool, tol: float, time_limit: float, max_iter: int,
                  result_dir: Path, solvers: set, cooldown: float = 0.0,
                  name_prefix: str = "") -> list[dict]:
     label = f"{problem}_vary_a2"
@@ -219,10 +225,10 @@ def _run_vary_a2(problem: str, nc: int, alpha1: float, alpha2_list: list[float],
     for done, alpha2 in enumerate(alpha2_list, 1):
         print(f"\n[{label}  {done}/{n_total}]")
         row = {"problem": problem, "nc": nc, "n_display": _n_display(nc),
-               "alpha1": alpha1, "alpha2": alpha2}
+               "alpha1": alpha1, "alpha2": alpha2, "lumped_mass": int(lumped_mass)}
         rows.append(row)
-        run_one(row, problem, nc, alpha1, alpha2, tol, time_limit, max_iter, solvers,
-                cooldown, flush_cb=_flush)
+        run_one(row, problem, nc, alpha1, alpha2, lumped_mass, tol, time_limit, max_iter,
+                solvers, cooldown, flush_cb=_flush)
     print(f"  Saved: {csv_path}")
     return rows
 
@@ -249,6 +255,9 @@ def main() -> None:
                         help="Solvers to run (default: all three). Choices: ssn-pmm qpalm osqp")
     parser.add_argument("--cooldown",   type=float, default=0.0,
                         help="Seconds to sleep between solver runs to prevent CPU throttling (default: 0)")
+    parser.add_argument("--lumped-mass", type=int, default=0, choices=[0, 1], metavar="{0,1}",
+                        help="0 to use the consistent mass matrix (default), "
+                             "1 to use the lumped mass matrix.")
     parser.add_argument("--out",       default="",
                         help="Prefix for output filenames (e.g. '0508' -> '0508_poisson_vary_n.csv')")
     args = parser.parse_args()
@@ -263,33 +272,34 @@ def main() -> None:
     max_iter   = 10_000_000_000
     tables     = set(args.table)
     solvers    = set(args.solver)
+    lumped_mass = bool(args.lumped_mass)
     name_prefix = f"{args.out}_" if args.out else ""
 
     # ---- poisson_vary_n ----------------------------------------------------
     if "poisson_vary_n" in tables:
         nc_list = args.nc or POISSON_VARY_N_NC
         _run_vary_n("poisson", nc_list, POISSON_VARY_N_ALPHA1,
-                   POISSON_VARY_N_ALPHA2, tol, time_limit, max_iter, result_dir, solvers, cooldown,
-                   name_prefix)
+                   POISSON_VARY_N_ALPHA2, lumped_mass, tol, time_limit, max_iter, result_dir,
+                   solvers, cooldown, name_prefix)
 
     # ---- poisson_vary_a2 ---------------------------------------------------
     if "poisson_vary_a2" in tables:
         _run_vary_a2("poisson", POISSON_VARY_A2_NC, POISSON_VARY_A2_ALPHA1,
-                    POISSON_VARY_A2_ALPHA2, tol, time_limit, max_iter, result_dir, solvers, cooldown,
-                    name_prefix)
+                    POISSON_VARY_A2_ALPHA2, lumped_mass, tol, time_limit, max_iter, result_dir,
+                    solvers, cooldown, name_prefix)
 
     # ---- convdiff_vary_n ---------------------------------------------------
     if "convdiff_vary_n" in tables:
         nc_list = args.nc or CONVDIFF_VARY_N_NC
         _run_vary_n("convdiff", nc_list, CONVDIFF_VARY_N_ALPHA1,
-                   CONVDIFF_VARY_N_ALPHA2, tol, time_limit, max_iter, result_dir, solvers, cooldown,
-                   name_prefix)
+                   CONVDIFF_VARY_N_ALPHA2, lumped_mass, tol, time_limit, max_iter, result_dir,
+                   solvers, cooldown, name_prefix)
 
     # ---- convdiff_vary_a2 --------------------------------------------------
     if "convdiff_vary_a2" in tables:
         _run_vary_a2("convdiff", CONVDIFF_VARY_A2_NC, CONVDIFF_VARY_A2_ALPHA1,
-                    CONVDIFF_VARY_A2_ALPHA2, tol, time_limit, max_iter, result_dir, solvers, cooldown,
-                    name_prefix)
+                    CONVDIFF_VARY_A2_ALPHA2, lumped_mass, tol, time_limit, max_iter, result_dir,
+                    solvers, cooldown, name_prefix)
 
 
 if __name__ == "__main__":
