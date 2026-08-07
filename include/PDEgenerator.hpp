@@ -77,6 +77,7 @@ template <typename T>
 struct FemQ1DiffResult {
     Eigen::SparseMatrix<T> A_stiff;
     Eigen::SparseMatrix<T> M_cons;
+    Eigen::SparseMatrix<T> M_lump;
     Eigen::Matrix<T, Eigen::Dynamic, 1> f_rhs;
 };
 
@@ -86,9 +87,10 @@ FemQ1DiffResult<T> assemble_femq1_diff(const GridQ1<T>& g) {
     using Vec   = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using Trip  = Eigen::Triplet<T>;
 
-    std::vector<Trip> At, Mt;
+    std::vector<Trip> At, Mt, Mlt;
     At.reserve(std::size_t(g.nel) * 16);
     Mt.reserve(std::size_t(g.nel) * 16);
+    Mlt.reserve(std::size_t(g.nel) * 4);
     Vec f_rhs = Vec::Zero(g.np);
 
     const auto gpts = fem::gauss_2x2<T>();
@@ -103,7 +105,8 @@ FemQ1DiffResult<T> assemble_femq1_diff(const GridQ1<T>& g) {
 
             T ae[4][4] = {};
             T me[4][4] = {};
-            T fe[4]    = {};
+            T me_lump[4] = {};
+            T fe[4]      = {};
 
             for (const auto& gp : gpts) {
                 const auto dv = fem::deriv<T>(gp.s, gp.t, xl, yl);
@@ -118,10 +121,14 @@ FemQ1DiffResult<T> assemble_femq1_diff(const GridQ1<T>& g) {
                     }
                     fe[jl] += src * dv.phi[jl] * scale;
                 }
+                for (int il = 0; il < 4; ++il) {
+                    me_lump[il] += dv.phi[il] * scale;
+                }
             }
 
             for (int il = 0; il < 4; ++il) {
                 f_rhs(nodes[il]) += fe[il];
+                Mlt.emplace_back(nodes[il], nodes[il], me_lump[il]);
                 for (int jl = 0; jl < 4; ++jl) {
                     At.emplace_back(nodes[il], nodes[jl], ae[il][jl]);
                     Mt.emplace_back(nodes[il], nodes[jl], me[il][jl]);
@@ -133,10 +140,16 @@ FemQ1DiffResult<T> assemble_femq1_diff(const GridQ1<T>& g) {
     FemQ1DiffResult<T> res;
     res.A_stiff.resize(g.np, g.np);
     res.M_cons.resize(g.np, g.np);
+    res.M_lump.resize(g.np, g.np);
+
     res.A_stiff.setFromTriplets(At.begin(), At.end());
     res.M_cons.setFromTriplets(Mt.begin(), Mt.end());
+    res.M_lump.setFromTriplets(Mlt.begin(), Mlt.end());
+
     res.A_stiff.makeCompressed();
     res.M_cons.makeCompressed();
+    res.M_lump.makeCompressed();
+
     res.f_rhs = f_rhs;
     return res;
 }
@@ -159,6 +172,7 @@ struct FemQ1CdResult {
     Eigen::SparseMatrix<T> A_stiff;
     Eigen::SparseMatrix<T> N_conv;
     Eigen::SparseMatrix<T> M_cons;
+    Eigen::SparseMatrix<T> M_lump;
     Eigen::Matrix<T, Eigen::Dynamic, 1> f_rhs;
 };
 
@@ -169,10 +183,11 @@ FemQ1CdResult<T> assemble_femq1_cd(const GridQ1<T>& g,
     using Vec   = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using Trip  = Eigen::Triplet<T>;
 
-    std::vector<Trip> At, Nt, Mt;
+    std::vector<Trip> At, Nt, Mt, Mlt;
     At.reserve(std::size_t(g.nel) * 16);
     Nt.reserve(std::size_t(g.nel) * 16);
     Mt.reserve(std::size_t(g.nel) * 16);
+    Mlt.reserve(std::size_t(g.nel) * 4);
     Vec f_rhs = Vec::Zero(g.np);
 
     const auto gpts = fem::gauss_2x2<T>();
@@ -188,7 +203,8 @@ FemQ1CdResult<T> assemble_femq1_cd(const GridQ1<T>& g,
             T ae[4][4] = {};
             T ne[4][4] = {};
             T me[4][4] = {};
-            T fe[4]    = {};
+            T me_lump[4] = {};
+            T fe[4]      = {};
 
             for (const auto& gp : gpts) {
                 const auto dv = fem::deriv<T>(gp.s, gp.t, xl, yl);
@@ -208,10 +224,14 @@ FemQ1CdResult<T> assemble_femq1_cd(const GridQ1<T>& g,
                     }
                     fe[jl] += src * dv.phi[jl] * scale;
                 }
+                for (int il = 0; il < 4; ++il) {
+                    me_lump[il] += dv.phi[il] * scale;
+                }
             }
 
             for (int il = 0; il < 4; ++il) {
                 f_rhs(nodes[il]) += fe[il];
+                Mlt.emplace_back(nodes[il], nodes[il], me_lump[il]);
                 for (int jl = 0; jl < 4; ++jl) {
                     At.emplace_back(nodes[il], nodes[jl], ae[il][jl]);
                     Mt.emplace_back(nodes[il], nodes[jl], me[il][jl]);
@@ -225,12 +245,18 @@ FemQ1CdResult<T> assemble_femq1_cd(const GridQ1<T>& g,
     res.A_stiff.resize(g.np, g.np);
     res.N_conv.resize(g.np, g.np);
     res.M_cons.resize(g.np, g.np);
+    res.M_lump.resize(g.np, g.np);
+
     res.A_stiff.setFromTriplets(At.begin(), At.end());
     res.N_conv.setFromTriplets(Nt.begin(), Nt.end());
     res.M_cons.setFromTriplets(Mt.begin(), Mt.end());
+    res.M_lump.setFromTriplets(Mlt.begin(), Mlt.end());
+
     res.A_stiff.makeCompressed();
     res.N_conv.makeCompressed();
     res.M_cons.makeCompressed();
+    res.M_lump.makeCompressed();
+
     res.f_rhs = f_rhs;
     return res;
 }
@@ -351,7 +377,7 @@ Constraints:
 template <typename T>
 static PDPMMdata<T> make_problem_l1l2_from_mats(
     const Eigen::SparseMatrix<T>& D_op,
-    const Eigen::SparseMatrix<T>& M_lump,
+    const Eigen::SparseMatrix<T>& M,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& yhat,
     T alpha1,
@@ -376,18 +402,18 @@ static PDPMMdata<T> make_problem_l1l2_from_mats(
     pb.l = np;
 
 
-    // --- Build R (lumped L1 weights) as row-sum of M_lump ---
+    // --- Build R (lumped L1 weights) as row-sum of M ---
     Vec R(np);
     R.setZero();
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             R(it.row()) += it.value();
         }
     }
 
     // --- c vector ---
     // c = 0.5 y^T M y - (M yhat)^T y + const
-    Vec Myhat = M_lump * yhat;
+    Vec Myhat = M * yhat;
 
     pb.obj_const = T(0.5) * yhat.dot(Myhat);
 
@@ -403,11 +429,11 @@ static PDPMMdata<T> make_problem_l1l2_from_mats(
     //      [ 0,  alpha2 M, -alpha2 M],
     //      [ 0, -alpha2 M,  alpha2 M]]
     std::vector<Trip> Qt;
-    Qt.reserve(std::size_t(1) * (M_lump.nonZeros() * 5));
+    Qt.reserve(std::size_t(1) * (M.nonZeros() * 5));
 
     // Insert M in y block
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             const int i = it.row();
             const int j = it.col();
             const T v   = it.value();
@@ -428,9 +454,9 @@ static PDPMMdata<T> make_problem_l1l2_from_mats(
     pb.Q.makeCompressed();
 
     // --- A x = b : PDE in terms of (y, u+, u-) ---
-    // A = [ D_op , -M_lump , +M_lump ], b = rhs
+    // A = [ D_op , -M , +M ], b = rhs
     std::vector<Trip> At;
-    At.reserve(D_op.nonZeros() + 2 * M_lump.nonZeros());
+    At.reserve(D_op.nonZeros() + 2 * M.nonZeros());
 
     // D_op block on y
     for (int k = 0; k < D_op.outerSize(); ++k) {
@@ -439,8 +465,8 @@ static PDPMMdata<T> make_problem_l1l2_from_mats(
         }
     }
     // -M on u+, +M on u-
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             const int r = it.row();
             const int c = it.col();
             const T v   = it.value();
@@ -507,7 +533,7 @@ Note: B is an empty 0 x n matrix, i.e. l = 0.
 template <typename T>
 static PDPMMdata<T> make_problem_l2_from_mats(
     const Eigen::SparseMatrix<T>& D_op,
-    const Eigen::SparseMatrix<T>& M_lump,
+    const Eigen::SparseMatrix<T>& M,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& yhat,
     T beta,
@@ -528,7 +554,7 @@ static PDPMMdata<T> make_problem_l2_from_mats(
     pb.m = np;
     pb.l = 0;
 
-    Vec Myhat = M_lump * yhat;
+    Vec Myhat = M * yhat;
     pb.obj_const = T(0.5) * yhat.dot(Myhat);
 
     pb.c.resize(nx);
@@ -539,9 +565,9 @@ static PDPMMdata<T> make_problem_l2_from_mats(
     // Q = [[M      0   ],
     //      [0, beta * M]]
     std::vector<Trip> Qt;
-    Qt.reserve(std::size_t(2) * M_lump.nonZeros());
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    Qt.reserve(std::size_t(2) * M.nonZeros());
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             const int i = it.row();
             const int j = it.col();
             const T v   = it.value();
@@ -553,16 +579,16 @@ static PDPMMdata<T> make_problem_l2_from_mats(
     pb.Q.setFromTriplets(Qt.begin(), Qt.end());
     pb.Q.makeCompressed();
 
-    // A = [D_op, -M_lump], b = rhs
+    // A = [D_op, -M], b = rhs
     std::vector<Trip> At;
-    At.reserve(D_op.nonZeros() + M_lump.nonZeros());
+    At.reserve(D_op.nonZeros() + M.nonZeros());
     for (int k = 0; k < D_op.outerSize(); ++k) {
         for (typename SpMat::InnerIterator it(D_op, k); it; ++it) {
             At.emplace_back(it.row(), it.col(), it.value());
         }
     }
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             At.emplace_back(it.row(), np + it.col(), -it.value());
         }
     }
@@ -603,7 +629,8 @@ PDPMMdata<T> make_poisson_l2_control(
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
     T u_lower = -std::numeric_limits<T>::infinity(),
-    T u_upper =  std::numeric_limits<T>::infinity())
+    T u_upper =  std::numeric_limits<T>::infinity(),
+    bool lump_mass = false)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -620,7 +647,9 @@ PDPMMdata<T> make_poisson_l2_control(
 
     auto asm_res = assemble_femq1_diff<T>(g);
     Eigen::SparseMatrix<T> D = asm_res.A_stiff;
-    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Eigen::SparseMatrix<T> M;
+    if (lump_mass) M = asm_res.M_lump;
+    else           M = asm_res.M_cons;
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
@@ -643,7 +672,8 @@ PDPMMdata<T> make_poisson_l2_state_control(
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
     T u_lower = -std::numeric_limits<T>::infinity(),
-    T u_upper =  std::numeric_limits<T>::infinity())
+    T u_upper =  std::numeric_limits<T>::infinity(),
+    bool lump_mass = false)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -658,7 +688,9 @@ PDPMMdata<T> make_poisson_l2_state_control(
 
     auto asm_res = assemble_femq1_diff<T>(g);
     Eigen::SparseMatrix<T> D = asm_res.A_stiff;
-    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Eigen::SparseMatrix<T> M;
+    if (lump_mass) M = asm_res.M_lump;
+    else           M = asm_res.M_cons;
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
@@ -685,7 +717,8 @@ PDPMMdata<T> make_convdiff_l2_control(
     T y_upper =  std::numeric_limits<T>::infinity(),
     T u_lower = -std::numeric_limits<T>::infinity(),
     T u_upper =  std::numeric_limits<T>::infinity(),
-    T eps = T(0.01))
+    T eps = T(0.01),
+    bool lump_mass = false)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -702,7 +735,9 @@ PDPMMdata<T> make_convdiff_l2_control(
 
     auto asm_res = assemble_femq1_cd<T>(g, fem::velocity_field_w_constant<T>);
     Eigen::SparseMatrix<T> D = eps * asm_res.A_stiff + asm_res.N_conv;
-    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Eigen::SparseMatrix<T> M;
+    if (lump_mass) M = asm_res.M_lump;
+    else           M = asm_res.M_cons;
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
@@ -726,7 +761,8 @@ PDPMMdata<T> make_poisson_l1l2_control(
     int nc, T alpha1, T alpha2,
     T u_lower = T(-2), T u_upper = T(1.5),
     T y_lower = -std::numeric_limits<T>::infinity(),
-    T y_upper =  std::numeric_limits<T>::infinity())
+    T y_upper =  std::numeric_limits<T>::infinity(),
+    bool lump_mass = false)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -741,7 +777,9 @@ PDPMMdata<T> make_poisson_l1l2_control(
 
     auto asm_res = assemble_femq1_diff<T>(g);
     Eigen::SparseMatrix<T> D = asm_res.A_stiff;
-    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Eigen::SparseMatrix<T> M;
+    if (lump_mass) M = asm_res.M_lump;
+    else           M = asm_res.M_cons;
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
@@ -766,7 +804,8 @@ PDPMMdata<T> make_convdiff_l1l2_control(
     int nc, T alpha1, T alpha2,
     T u_lower = T(-2), T u_upper = T(1.5), T eps = T(0.02),
     T y_lower = -std::numeric_limits<T>::infinity(),
-    T y_upper =  std::numeric_limits<T>::infinity())
+    T y_upper =  std::numeric_limits<T>::infinity(),
+    bool lump_mass = false)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -783,7 +822,9 @@ PDPMMdata<T> make_convdiff_l1l2_control(
 
     auto asm_res = assemble_femq1_cd<T>(g);
     Eigen::SparseMatrix<T> D = eps * asm_res.A_stiff + asm_res.N_conv;
-    Eigen::SparseMatrix<T> M = asm_res.M_cons;
+    Eigen::SparseMatrix<T> M;
+    if (lump_mass) M = asm_res.M_lump;
+    else           M = asm_res.M_cons;
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);

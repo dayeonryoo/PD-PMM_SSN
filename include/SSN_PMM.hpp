@@ -116,10 +116,10 @@ public:
     T tol = 1e-6;
     int max_iter = 3000;
     int ssn_max_iter = 120000;
-    int ssn_max_in_iter = 50;
-    T eps_limit = 1e-3 * tol;
+    int ssn_max_in_iter = 30;
+    T eps_limit = tol;
     T mu_limit = 1e9;
-    T rho_limit = 1e9;
+    T rho_limit = 1e7;
     T eps_pinf = 1e-1 * tol;
     T eps_dinf = 1e-1 * tol;
     T alpha = 0.95;
@@ -130,7 +130,7 @@ public:
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e1;
-    T rho = 1e9;
+    T rho = 1e7;
     T ssn_tol = 1e-2;
      
     // Outputs:
@@ -200,6 +200,7 @@ public:
 
             A_tr = A.transpose();
             B_tr = B.transpose();
+
         } catch (const std::exception& e) {
             std::cerr << "[SSN_PMM] Setup error: " << e.what() << "\n";
             setup_failed = true;

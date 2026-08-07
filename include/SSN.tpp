@@ -59,12 +59,10 @@ void SSN<T>::rebuild_G() {
     const int n_inact = l - n_act;
 
     // Partitioning B into active and inactive.
-    B_act_trips_.clear();
     B_inact_trips_.clear();
-    B_act_trips_.reserve(B_rm.nonZeros());
     B_inact_trips_.reserve(B_rm.nonZeros());
 
-    // G = [A; B_active_W]
+    // G = [A; active rows of B]
     G_trips_.clear();
     G_trips_.reserve(G_A_trips_.size() + B_rm.nonZeros());
     G_trips_.insert(G_trips_.end(), G_A_trips_.begin(), G_A_trips_.end());
@@ -72,10 +70,8 @@ void SSN<T>::rebuild_G() {
     int i_act = 0, i_inact = 0;
     for (int i = 0; i < l; ++i) {
         if (active_W(i)) {
-            for (RIt it(B_rm, i); it; ++it) {
-                B_act_trips_.emplace_back(i_act, it.col(), it.value());
+            for (RIt it(B_rm, i); it; ++it)
                 G_trips_.emplace_back(M + i_act, it.col(), it.value());
-            }
             ++i_act;
         } else {
             for (RIt it(B_rm, i); it; ++it)
@@ -83,10 +79,6 @@ void SSN<T>::rebuild_G() {
             ++i_inact;
         }
     }
-
-    B_active_W.resize(n_act, N);
-    B_active_W.setFromTriplets(B_act_trips_.begin(), B_act_trips_.end());
-    B_active_W.makeCompressed();
 
     B_inactive_W.resize(n_inact, N);
     B_inactive_W.setFromTriplets(B_inact_trips_.begin(), B_inact_trips_.end());
@@ -149,7 +141,6 @@ bool SSN<T>::choose_ldlt(const SpMat& G, const BoolArr& active_K) {
                    + o_k;
     }
 
-    if (S_nnz <= 0) return true;
 
     const double ratio = ((double)s / (t + s))
                        * ((double)K_nnz / S_nnz)
@@ -159,15 +150,17 @@ bool SSN<T>::choose_ldlt(const SpMat& G, const BoolArr& active_K) {
 }
 
 template <typename T>
-typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv,
-                                            const BoolArr& active_K, const Vec& r1, const Vec& r2,
-                                            T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed,
-                                            bool use_ldlt) {
+void SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv,
+                            const BoolArr& active_K, const Vec& r1, const Vec& r2,
+                            T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed,
+                            bool use_ldlt, Vec& out) {
     using Vec = typename SSN<T>::Vec;
 
     // Once PCG has failed, permanently switch to LDLT on the augmented KKT system.
-    if (ldlt_used)
-        return solve_using_ldlt(G, H_diag, r1, r2);
+    if (ldlt_used) {
+        out = solve_using_ldlt(G, H_diag, r1, r2);
+        return;
+    }
 
     const int s = G.rows();
     const int n = G.cols();
@@ -185,7 +178,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     // force_rebuild=true skips SMW and recomputes G E G^T from scratch.
     auto setup_prec = [&](bool force_rebuild) {
         SSN_TIMER_BLOCK(timer_prec_setup);
-        cg.preconditioner().setData(G, G_tr, H_diag, active_K, active_W, B_rm, mu,
+        cg.preconditioner().setData(G, G_tr, H_diag, active_K, active_W, B_rm, mu, rho,
                                     update_prec || force_rebuild, prec_pattern_changed);
         cg.preconditioner().set_use_ldlt(use_ldlt); // Factorization method for a preconditioner
         if (force_rebuild || cg.preconditioner().smw_suppressed())
@@ -208,8 +201,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     };
 
     // Run preconditioned CG.
-    // Returns false and increments krylov_fail on preconditioner failure or solver non-convergence with error > 1e-10.
-    // If max_iter is reached but the error is <= 1e-10, the direction is accepted.
+    // Returns false and increments krylov_fail on preconditioner failure or solver non-convergence with error > 1e-8.
+    // If max_iter is reached but the error is <= 1e-8, the direction is accepted.
     auto attempt_solve = [&](Vec& dy_out) -> bool {
         if (cg.preconditioner().info() != Eigen::Success) {
             std::cout << "[PCG] CG failed due to preconditioner failure.\n";
@@ -231,7 +224,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
         T err = cg.error();
         if (cg.info() != Eigen::Success) {
-            if (err > T(1e-10)) { // Acceptable error threshold for PCG failure.
+            if (err > T(1e-8)) { // Acceptable error threshold for PCG failure.
+                std::cout << "[PCG] CG failed to converge. Error = " << err << "\n";
                 krylov_fail++;
                 return false;
             }
@@ -263,7 +257,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
         std::cout << "[PCG] CG failed due to bad_alloc.\n";
         krylov_fail++;
         switch_to_ldlt();
-        return solve_using_ldlt(G, H_diag, r1, r2);
+        out = solve_using_ldlt(G, H_diag, r1, r2);
+        return;
     }
 
     // If CG succeeded and the preconditioner used SMW, reset the SMW fail streak.
@@ -281,7 +276,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
             std::cout << "[PCG] CG failed due to bad_alloc.\n";
             krylov_fail++;
             switch_to_ldlt();
-            return solve_using_ldlt(G, H_diag, r1, r2);
+            out = solve_using_ldlt(G, H_diag, r1, r2);
+            return;
         }
     }
 
@@ -289,7 +285,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     if (!ok) {
         std::cout << "[PCG] CG failed, falling back to solving the augmented Lagrangian system via LDLT.\n";
         switch_to_ldlt();
-        return solve_using_ldlt(G, H_diag, r1, r2);
+        out = solve_using_ldlt(G, H_diag, r1, r2);
+        return;
     }
 
     prev_dy_ = dy_;
@@ -297,10 +294,9 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     // Recover dx = H_inv (G^T dy_ - r1).
     cg_dx_.noalias() = H_diag_inv.cwiseProduct(G_tr * dy_ - r1);
 
-    Vec result(n + s);
-    result.head(n) = cg_dx_;
-    result.tail(s) = dy_;
-    return result;
+    out.resize(n + s);
+    out.head(n) = cg_dx_;
+    out.tail(s) = dy_;
 }
 
 template <typename T> // as a fallback of PCG
@@ -418,9 +414,9 @@ T SSN<T>::exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx
     // zeta: constant term in psi(t)
     T zeta = T(0);
     if (Q_info != 0) {
-        zeta += dx.dot(Q_diag.cwiseProduct(x_curr));
+        zeta += dx.dot(grad_Qx_);
     }
-    zeta += dx.dot(c - A_tr_y1_ + mu * A_tr * (Ax - b) + (x_curr - x) / rho);
+    zeta += dx.dot(c - A_tr_y1_ + mu * grad_Atr_resp_ + (x_curr - x) / rho);
     zeta += (1 - alpha) / mu * dy2.dot(y2_curr);
 
     // Reuse the member breakpoints vector.
@@ -538,6 +534,8 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
     Ax_ssn_.noalias() = A * x_cur_;
     Bx_ssn_.noalias() = B * x_cur_;
 
+    compute_grad_Lagrangian(x_cur_, y2_cur_, Ax_ssn_, Bx_ssn_);
+
     // SSN main loop
     while (_iter < ssn_max_in_iter) {
 #if SSN_ENABLE_TIMERS
@@ -591,7 +589,13 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
 
             diag_P_K = new_diag_P_K_;
             active_K = (diag_P_K.array() == 1);
+        }
 
+        // mu/rho are fixed for the whole SSN run but can change between runs (PMM outer iterations).
+        // Refresh H_diag on the first inner iteration of every run. 
+        // This is treated separately from active-set changes to avoid full preconditioner rebuild.
+        if (pk_changed || _iter == 0) {
+            SSN_TIMER_BLOCK(timer_prep);
             // H = Q + mu(I_N - P_K) + I_N / rho
             if (Q_info == 0) {
                 H_diag = mu * (ones_N - diag_P_K) + ones_N / rho;
@@ -617,7 +621,7 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
             n_active_W = active_W.count();
             n_inactive_W = l - n_active_W;
 
-            rebuild_G(); // Rebuild G = [A; B_active_W], B_active_W, B_inactive_W, G_tr.
+            rebuild_G(); // Rebuild G = [A; active rows of B], B_inactive_W, G_tr.
         }
 
         // Compute dy2 in inactive_W: dy2_inactive_W = - (mu / alpha) * dist_W(v)(inactive_W) - y2(inactive_W).
@@ -656,7 +660,7 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
         {
         SSN_TIMER_BLOCK(timer_linear_solve);
         // Solve for dx and dy2_active_W.
-        dxdy_ = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1_, r2_, mu, krylov_tol, krylov_max_in_iter, update_prec, prec_pattern_changed, use_ldlt);
+        solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1_, r2_, mu, krylov_tol, krylov_max_in_iter, update_prec, prec_pattern_changed, use_ldlt, dxdy_);
 
         // Iterative refinement: correct the residual of K [dx;dy] = [r1_;r2_], K = [-H, G^T; G, (1/mu)I].
         s = static_cast<int>(r2_.size());
@@ -676,8 +680,9 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
             if (res_norm <= std::max(refine_rel_tol * ref_norm, refine_abs_tol)) break;
 
             prev_dy_.resize(0); // cold-start for iterative refinement
-            Vec correction = solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, rho1, rho2,
-                                            mu, krylov_tol, krylov_max_in_iter, false, false, use_ldlt);
+            Vec correction;
+            solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, rho1, rho2,
+                           mu, krylov_tol, krylov_max_in_iter, false, false, use_ldlt, correction);
             dxdy_ += correction;
             prev_dy_ = dxdy_.tail(s); // warm-start for the next SSN iteration's main solve
         }

@@ -30,15 +30,15 @@ PDPMMdata<T> build_problem(const std::string& problem_name, int nc) {
     double inf = std::numeric_limits<double>::infinity();
 
     if (problem_name == "l1l2_poisson") {
-        return pdegen::make_poisson_l1l2_control<T>(nc, 1e-2, 1e-2);
+        return pdegen::make_poisson_l1l2_control<T>(nc, 1e-2, 1e-2, -2, 1.5, -inf, inf, /*lump_mass=*/false);
     } else if (problem_name == "l1l2_convdiff") {
-        return pdegen::make_convdiff_l1l2_control<T>(nc, 1e-2, 1e-2);
+        return pdegen::make_convdiff_l1l2_control<T>(nc, 1e-2, 1e-2, -2, 1.5, 0.02, -inf, inf, /*lump_mass=*/false);
     } else if (problem_name == "l2_poisson_control") {
-        return pdegen::make_poisson_l2_control<T>(nc, 1e-6, -inf, inf, 0, 300);
+        return pdegen::make_poisson_l2_control<T>(nc, 1e-4, -inf, inf, 0, 20, /*lump_mass=*/false);
     } else if (problem_name == "l2_poisson_state") {
-        return pdegen::make_poisson_l2_state_control<T>(nc, 1e0, -0.1, 0.002, -inf, inf);
+        return pdegen::make_poisson_l2_state_control<T>(nc, 1e0, -0.1, 0.002, -inf, inf, /*lump_mass=*/false);
     } else if (problem_name == "l2_convdiff") {
-        return pdegen::make_convdiff_l2_control<T>(nc, 1e-1, 0.0, 0.2, -0.75, 0.75);
+        return pdegen::make_convdiff_l2_control<T>(nc, 1e-2, 0.0, 0.5, -2, 2, 0.01, /*lump_mass=*/false);
     }
 
     throw std::invalid_argument("Unknown problem name: " + problem_name);
@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
             "  Builds and solves a PDE-constrained QP (see include/PDEgenerator.hpp).\n"
             "  --name PROBLEM   one of: l1l2_poisson, l1l2_convdiff, l2_poisson_control,\n"
             "                   l2_poisson_state, l2_convdiff, or \"all\" to solve every one\n"
-            "                   in sequence (default: l2_convdiff)\n"
+            "                   in sequence (default: l2_poisson_control)\n"
             "  --nc N           grid exponent passed to the PDE generator (default: 6)\n"
             "  --tol T          primal-dual tolerance (default: 1e-6)\n"
             "  --max-iter N     max PMM iterations (default: 3000)\n"
@@ -59,13 +59,13 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::string name = cli::get_str(argc, argv, "--name", "l2_convdiff");
+    std::string name = cli::get_str(argc, argv, "--name", "l2_poisson_control");
     int nc = cli::get_int(argc, argv, "--nc", 6);
     double tol = cli::get_double(argc, argv, "--tol", 1e-6);
     int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
     double time_limit = cli::get_double(argc, argv, "--time-limit", 600.0); // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
-    PrintWhat what = PrintWhat::TUNING;
+    PrintWhat what = PrintWhat::SSN;
 
     std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::cout << std::ctime(&curr_time);

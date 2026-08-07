@@ -67,13 +67,13 @@ public:
     Vec diag_P_K, diag_P_W;
     BoolArr active_W, inactive_W, active_K;
     int n_active_W, n_inactive_W;
-    SpMat B_active_W, B_inactive_W, G, G_tr;
+    SpMat B_inactive_W, G, G_tr;
 
     RowMajorSpMat B_rm;              // Row-major B for rebuilding G.
     std::vector<Triplet> G_A_trips_; // A's contribution to G, computed once since A is const.
 
     // Scratch triplet buffers for rebuild_G() and solve_using_ldlt().
-    std::vector<Triplet> B_act_trips_, B_inact_trips_, G_trips_;
+    std::vector<Triplet> B_inact_trips_, G_trips_;
     std::vector<Triplet> ldlt_trip_;
 
     // Printing
@@ -123,13 +123,6 @@ public:
         SchurPreconditioner<T>
     >;
     CGSolver cg;
-
-    using MINRESSolver = Eigen::MINRES<
-        SchurOperator<T>,
-        Eigen::Lower | Eigen::Upper,
-        SchurPreconditioner<T>
-    >;
-    MINRESSolver minres;
 
     Vec prev_dy_;
     Vec prev_dx_primal_;
@@ -262,7 +255,7 @@ public:
     void rebuild_G();
     void retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);
     bool choose_ldlt(const SpMat& G, const BoolArr& active_K);
-    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool use_ldlt);
+    void solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool use_ldlt, Vec& out);
     Vec solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                         const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx,
