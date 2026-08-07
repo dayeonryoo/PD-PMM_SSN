@@ -124,13 +124,6 @@ public:
     >;
     CGSolver cg;
 
-    using MINRESSolver = Eigen::MINRES<
-        SchurOperator<T>,
-        Eigen::Lower | Eigen::Upper,
-        SchurPreconditioner<T>
-    >;
-    MINRESSolver minres;
-
     Vec prev_dy_;
     Vec prev_dx_primal_;
     Vec A_tr_y1_; // cached A^T y1, recomputed once per PMM iteration in update_ssn_system

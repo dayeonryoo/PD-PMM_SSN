@@ -141,7 +141,6 @@ bool SSN<T>::choose_ldlt(const SpMat& G, const BoolArr& active_K) {
                    + o_k;
     }
 
-    if (S_nnz <= 0) return true;
 
     const double ratio = ((double)s / (t + s))
                        * ((double)K_nnz / S_nnz)
@@ -202,8 +201,8 @@ void SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag
     };
 
     // Run preconditioned CG.
-    // Returns false and increments krylov_fail on preconditioner failure or solver non-convergence with error > 1e-10.
-    // If max_iter is reached but the error is <= 1e-10, the direction is accepted.
+    // Returns false and increments krylov_fail on preconditioner failure or solver non-convergence with error > 1e-8.
+    // If max_iter is reached but the error is <= 1e-8, the direction is accepted.
     auto attempt_solve = [&](Vec& dy_out) -> bool {
         if (cg.preconditioner().info() != Eigen::Success) {
             std::cout << "[PCG] CG failed due to preconditioner failure.\n";
@@ -225,7 +224,7 @@ void SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag
 
         T err = cg.error();
         if (cg.info() != Eigen::Success) {
-            if (err > T(1e-10)) { // Acceptable error threshold for PCG failure.
+            if (err > T(1e-8)) { // Acceptable error threshold for PCG failure.
                 std::cout << "[PCG] CG failed to converge. Error = " << err << "\n";
                 krylov_fail++;
                 return false;

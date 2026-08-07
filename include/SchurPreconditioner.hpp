@@ -311,8 +311,8 @@ private:
                 sol.P_hat.setFromTriplets(ldlt_build_trips_.begin(), ldlt_build_trips_.end());
                 sol.P_hat.makeCompressed();
 
-                std::cout << "[SchurPreconditioner] LDLT on P_hat of size " << sol.P_hat.rows() << " x " << sol.P_hat.cols()
-                          << " with nnz = " << sol.P_hat.nonZeros() << std::endl;
+                // std::cout << "[SchurPreconditioner] LDLT on P_hat of size " << sol.P_hat.rows() << " x " << sol.P_hat.cols()
+                //           << " with nnz = " << sol.P_hat.nonZeros() << std::endl;
 
                 // Cache each diagonal's flat storage index for diagonal updates below.
                 ldlt_diag_top_idx_.resize(n_act);
@@ -397,6 +397,9 @@ private:
                     sol.P.coeffRef(i, i) += T(1) / mu_;
                 sol.P.makeCompressed();
 
+                // std::cout << "[SchurPreconditioner] Cholesky on P of size " << sol.P.rows() << " x " << sol.P.cols()
+                //           << " with nnz = " << sol.P.nonZeros() << std::endl;
+
                 // Cache each diagonal's flat storage index for diagonal updates below.
                 diag_idx_chol_.resize(s);
                 for (Eigen::Index i = 0; i < s; ++i)
@@ -477,12 +480,12 @@ private:
         const int q = static_cast<int>(added_new_rows_.size());
         const int p = static_cast<int>(delta_K_idx_.size());
         const int rank = h + p + q;
-        const int threshold = 30;
+        const int threshold = 50;
 
         // if (rank > threshold)  std::cout << "[SchurPreconditioner] Skipping SMW update: rank=" << rank << ", threshold=" << threshold << std::endl;
         if (rank == 0 || rank > threshold) return false;
 
-        std::cout << "[SchurPreconditioner] Attempting SMW update: rank=" << rank  << ", threshold=" << threshold << std::endl;
+        // std::cout << "[SchurPreconditioner] Attempting SMW update: rank=" << rank  << ", threshold=" << threshold << std::endl;
 
         h_ = h; p_ = p; q_ = q; s_old_ = s_old;
 

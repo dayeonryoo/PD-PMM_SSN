@@ -34,11 +34,11 @@ PDPMMdata<T> build_problem(const std::string& problem_name, int nc) {
     } else if (problem_name == "l1l2_convdiff") {
         return pdegen::make_convdiff_l1l2_control<T>(nc, 1e-2, 1e-2);
     } else if (problem_name == "l2_poisson_control") {
-        return pdegen::make_poisson_l2_control<T>(nc, 1e-6, -inf, inf, 0, 300);
+        return pdegen::make_poisson_l2_control<T>(nc, 1e-2, -inf, inf, 0, 1);
     } else if (problem_name == "l2_poisson_state") {
         return pdegen::make_poisson_l2_state_control<T>(nc, 1e0, -0.1, 0.002, -inf, inf);
     } else if (problem_name == "l2_convdiff") {
-        return pdegen::make_convdiff_l2_control<T>(nc, 1e-1, 0.0, 0.2, -0.75, 0.75);
+        return pdegen::make_convdiff_l2_control<T>(nc, 1e-2, 0.0, 0.5, -2, 2);
     }
 
     throw std::invalid_argument("Unknown problem name: " + problem_name);
