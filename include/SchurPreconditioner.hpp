@@ -207,6 +207,8 @@ public:
         std::vector<int>().swap(ldlt_act_idx_);
         std::vector<Triplet>().swap(ldlt_build_trips_);
         E_diag_.resize(0);
+        active_K_eff_.resize(0);
+        std::vector<std::pair<int, int>>().swap(dense_col_nnz_);
         std::vector<int>().swap(diag_idx_chol_);
         std::vector<int>().swap(ldlt_diag_top_idx_);
         std::vector<int>().swap(ldlt_diag_bot_idx_);
@@ -242,6 +244,7 @@ private:
 
     void build() {
         use_smw_ = false;
+        if (base_dirty_) compute_active_K_eff();
 
         // Case 1. Skip build() and reuse the cached factorization via low-rank SMW update.
         if (initialized_ && info_ == Eigen::Success && try_build_smw())
@@ -261,11 +264,38 @@ private:
         }
     }
 
+    // Recompute active_K_eff_; called when base_dirty_ is true, i.e. active_K or active_W has changed.
+    void compute_active_K_eff() {
+        const BoolArr& active_K = *active_K_;
+        const SpMat&   G        = *G_;
+        const Eigen::Index n = active_K.size();
+
+        active_K_eff_ = active_K;
+        if (drop_dense_cols_ <= 0) return;
+
+        dense_col_nnz_.clear();
+        for (Eigen::Index i = 0; i < n; ++i) {
+            if (!active_K(i)) continue;
+            int nnz = G.isCompressed()
+                    ? G.outerIndexPtr()[i + 1] - G.outerIndexPtr()[i]
+                    : static_cast<int>(G.col(i).nonZeros());
+            dense_col_nnz_.emplace_back(nnz, static_cast<int>(i));
+        }
+
+        const int n_act_total = static_cast<int>(dense_col_nnz_.size());
+        const int d_eff = std::min(drop_dense_cols_, std::max(0, n_act_total - 1));
+        if (d_eff <= 0) return;
+
+        std::nth_element(dense_col_nnz_.begin(), dense_col_nnz_.end() - d_eff, dense_col_nnz_.end());
+        for (auto it = dense_col_nnz_.end() - d_eff; it != dense_col_nnz_.end(); ++it)
+            active_K_eff_(it->second) = false;
+    }
+
     // Build P_hat = [-H_act, G_act^T; G_act, (1/mu)I] and factorize with LDLT.
     void factorize_by_ldlt() {
         const SpMat&   G        = *G_;
         const Vec&     H_diag   = *H_diag_;
-        const BoolArr& active_K = *active_K_;
+        const BoolArr& active_K = active_K_eff_;
 
         const Eigen::Index s = G.rows();
         const Eigen::Index n = G.cols();
@@ -311,8 +341,8 @@ private:
                 sol.P_hat.setFromTriplets(ldlt_build_trips_.begin(), ldlt_build_trips_.end());
                 sol.P_hat.makeCompressed();
 
-                // std::cout << "[SchurPreconditioner] LDLT on P_hat of size " << sol.P_hat.rows() << " x " << sol.P_hat.cols()
-                //           << " with nnz = " << sol.P_hat.nonZeros() << std::endl;
+                std::cout << "[SchurPreconditioner] LDLT on P_hat of size " << sol.P_hat.rows() << " x " << sol.P_hat.cols()
+                          << " with nnz = " << sol.P_hat.nonZeros() << std::endl;
 
                 // Cache each diagonal's flat storage index for diagonal updates below.
                 ldlt_diag_top_idx_.resize(n_act);
@@ -363,7 +393,7 @@ private:
         const SpMat&   G        = *G_;
         const SpMat&   G_tr     = *G_tr_;
         const Vec&     H_diag   = *H_diag_;
-        const BoolArr& active_K = *active_K_;
+        const BoolArr& active_K = active_K_eff_;
 
         const Eigen::Index s = G.rows();
         const Eigen::Index n = G.cols();
@@ -397,8 +427,8 @@ private:
                     sol.P.coeffRef(i, i) += T(1) / mu_;
                 sol.P.makeCompressed();
 
-                // std::cout << "[SchurPreconditioner] Cholesky on P of size " << sol.P.rows() << " x " << sol.P.cols()
-                //           << " with nnz = " << sol.P.nonZeros() << std::endl;
+                std::cout << "[SchurPreconditioner] Cholesky on P of size " << sol.P.rows() << " x " << sol.P.cols()
+                          << " with nnz = " << sol.P.nonZeros() << std::endl;
 
                 // Cache each diagonal's flat storage index for diagonal updates below.
                 diag_idx_chol_.resize(s);
@@ -473,7 +503,7 @@ private:
         }
 
         for (int i = 0; i < N; ++i)
-            if (active_K_old_(i) != (*active_K_)(i))
+            if (active_K_old_(i) != active_K_eff_(i))
                 delta_K_idx_.push_back(i);
 
         const int h = static_cast<int>(deleted_old_rows_.size());
@@ -501,7 +531,7 @@ private:
                 touched.clear();
                 for (typename RowMajorSpMat::InnerIterator it(*B_rm_, added_W_src_[j]); it; ++it) {
                     const int col = it.col();
-                    if ((*active_K_)(col)) {
+                    if (active_K_eff_(col)) {
                         e_new_b(col) = it.value() / (*H_diag_)(col);
                         touched.push_back(col);
                     }
@@ -519,7 +549,7 @@ private:
         // Block 2: -C^-1 (diagonal p×p); C_jj = E_new[idx] - E_old[idx]
         for (int j = 0; j < p; ++j) {
             const int idx = delta_K_idx_[j];
-            M_sub(h + j, h + j) = (*active_K_)(idx) ? -(*H_diag_)(idx) : H_diag_old_(idx);
+            M_sub(h + j, h + j) = active_K_eff_(idx) ? -(*H_diag_)(idx) : H_diag_old_(idx);
         }
 
         // Block 3: W_+ = B_+ E_new B_+^T + (1/mu) I  (q×q).
@@ -531,7 +561,7 @@ private:
                 touched.clear();
                 for (typename RowMajorSpMat::InnerIterator it(*B_rm_, added_W_src_[j]); it; ++it) {
                     const int col = it.col();
-                    if ((*active_K_)(col)) {
+                    if (active_K_eff_(col)) {
                         e_new_b(col) = it.value() / (*H_diag_)(col);
                         touched.push_back(col);
                     }
@@ -649,7 +679,7 @@ private:
     void snapshot_state(bool structural_change) {
         if (structural_change) {
             G_old_        = *G_;
-            active_K_old_ = *active_K_;
+            active_K_old_ = active_K_eff_;
             if (active_W_) active_W_old_ = *active_W_;
         }
         H_diag_old_   = *H_diag_;
@@ -703,6 +733,10 @@ private:
     std::vector<int> ldlt_act_idx_;
     std::vector<Triplet> ldlt_build_trips_;
     Vec E_diag_; // factorize_by_chol's E diagonal (1/H_diag, zeroed at inactive K)
+
+    BoolArr active_K_eff_; // active_K with its drop_dense_cols_ densest active columns (by nnz in G) additionally set to false
+    int drop_dense_cols_ = 30;
+    std::vector<std::pair<int, int>> dense_col_nnz_; //  (nnz, col_idx) pair used in compute_active_K_eff()
 
     // Cached flat storage indices (into sol.P/sol.P_hat's valuePtr()).
     std::vector<int> diag_idx_chol_;

@@ -67,11 +67,18 @@ void SSN<T>::rebuild_G() {
     G_trips_.reserve(G_A_trips_.size() + B_rm.nonZeros());
     G_trips_.insert(G_trips_.end(), G_A_trips_.begin(), G_A_trips_.end());
 
+    // G_prec = [A_prec; active rows of B]: preconditioner-only variant of G.
+    G_prec_trips_.clear();
+    G_prec_trips_.reserve(G_A_prec_trips_.size() + B_rm.nonZeros());
+    G_prec_trips_.insert(G_prec_trips_.end(), G_A_prec_trips_.begin(), G_A_prec_trips_.end());
+
     int i_act = 0, i_inact = 0;
     for (int i = 0; i < l; ++i) {
         if (active_W(i)) {
-            for (RIt it(B_rm, i); it; ++it)
+            for (RIt it(B_rm, i); it; ++it) {
                 G_trips_.emplace_back(M + i_act, it.col(), it.value());
+                G_prec_trips_.emplace_back(M + i_act, it.col(), it.value());
+            }
             ++i_act;
         } else {
             for (RIt it(B_rm, i); it; ++it)
@@ -88,6 +95,11 @@ void SSN<T>::rebuild_G() {
     G.setFromTriplets(G_trips_.begin(), G_trips_.end());
     G.makeCompressed();
     G_tr = G.transpose();
+
+    G_prec.resize(M + n_act, N);
+    G_prec.setFromTriplets(G_prec_trips_.begin(), G_prec_trips_.end());
+    G_prec.makeCompressed();
+    G_prec_tr = G_prec.transpose();
 }
 
 template <typename T>
@@ -150,7 +162,8 @@ bool SSN<T>::choose_ldlt(const SpMat& G, const BoolArr& active_K) {
 }
 
 template <typename T>
-void SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv,
+void SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const SpMat& G_prec, const SpMat& G_prec_tr,
+                            const Vec& H_diag, const Vec& H_diag_inv,
                             const BoolArr& active_K, const Vec& r1, const Vec& r2,
                             T mu, T tol, int max_iter, bool update_prec, bool prec_pattern_changed,
                             bool use_ldlt, Vec& out) {
@@ -178,7 +191,7 @@ void SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag
     // force_rebuild=true skips SMW and recomputes G E G^T from scratch.
     auto setup_prec = [&](bool force_rebuild) {
         SSN_TIMER_BLOCK(timer_prec_setup);
-        cg.preconditioner().setData(G, G_tr, H_diag, active_K, active_W, B_rm, mu, rho,
+        cg.preconditioner().setData(G_prec, G_prec_tr, H_diag, active_K, active_W, B_rm, mu, rho,
                                     update_prec || force_rebuild, prec_pattern_changed);
         cg.preconditioner().set_use_ldlt(use_ldlt); // Factorization method for a preconditioner
         if (force_rebuild || cg.preconditioner().smw_suppressed())
@@ -650,7 +663,7 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
         // Determines the factorization method for a preconditioner; locked after the first 3 decisions.
         if ((pk_changed || pw_changed) && ldlt_decisions_made_ < 3) {
             SSN_TIMER_BLOCK(timer_prep);
-            use_ldlt = choose_ldlt(G, active_K);
+            use_ldlt = choose_ldlt(G_prec, active_K);
             ++ldlt_decisions_made_;
         }
 
@@ -660,7 +673,7 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
         {
         SSN_TIMER_BLOCK(timer_linear_solve);
         // Solve for dx and dy2_active_W.
-        solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, r1_, r2_, mu, krylov_tol, krylov_max_in_iter, update_prec, prec_pattern_changed, use_ldlt, dxdy_);
+        solve_using_cg(G, G_tr, G_prec, G_prec_tr, H_diag, H_diag_inv, active_K, r1_, r2_, mu, krylov_tol, krylov_max_in_iter, update_prec, prec_pattern_changed, use_ldlt, dxdy_);
 
         // Iterative refinement: correct the residual of K [dx;dy] = [r1_;r2_], K = [-H, G^T; G, (1/mu)I].
         s = static_cast<int>(r2_.size());
@@ -681,7 +694,7 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
 
             prev_dy_.resize(0); // cold-start for iterative refinement
             Vec correction;
-            solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K, rho1, rho2,
+            solve_using_cg(G, G_tr, G_prec, G_prec_tr, H_diag, H_diag_inv, active_K, rho1, rho2,
                            mu, krylov_tol, krylov_max_in_iter, false, false, use_ldlt, correction);
             dxdy_ += correction;
             prev_dy_ = dxdy_.tail(s); // warm-start for the next SSN iteration's main solve

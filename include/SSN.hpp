@@ -46,7 +46,7 @@ public:
     // Inputs
     const int Q_info;
     const Vec& Q_diag;
-    const SpMat& L, A, B;
+    const SpMat& L, A, B, A_prec;
     const Vec& D2_ext_inv, D1B_diag_inv; // for unscaling the SSN termination criterion
     const Vec& c, b, lx, ux, lw, uw;
     const int n, m, N, M, l;
@@ -67,13 +67,14 @@ public:
     Vec diag_P_K, diag_P_W;
     BoolArr active_W, inactive_W, active_K;
     int n_active_W, n_inactive_W;
-    SpMat B_inactive_W, G, G_tr;
+    SpMat B_inactive_W, G, G_tr, G_prec, G_prec_tr;
 
-    RowMajorSpMat B_rm;              // Row-major B for rebuilding G.
-    std::vector<Triplet> G_A_trips_; // A's contribution to G, computed once since A is const.
+    RowMajorSpMat B_rm;                   // Row-major B for rebuilding G.
+    std::vector<Triplet> G_A_trips_;      // A's contribution to G, computed once since A is const.
+    std::vector<Triplet> G_A_prec_trips_; // A_prec's contribution to G_prec, computed once since A_prec is const.
 
     // Scratch triplet buffers for rebuild_G() and solve_using_ldlt().
-    std::vector<Triplet> B_inact_trips_, G_trips_;
+    std::vector<Triplet> B_inact_trips_, G_trips_, G_prec_trips_;
     std::vector<Triplet> ldlt_trip_;
 
     // Printing
@@ -106,7 +107,7 @@ public:
 
     // Conjugate gradient parameters
     T krylov_tol = 1e-12;
-    int krylov_max_in_iter = 100;
+    int krylov_max_in_iter = 200;
 
     // Iterative refinement of the augmented system solve.
     int refine_max_iter = 3;
@@ -167,7 +168,7 @@ public:
     bool K_ldlt_built_ = false;
 
     SSN(const int Q_info, const Vec& Q_diag, const SpMat& L,
-        const SpMat& A, const SpMat& B, const SpMat& A_tr, const SpMat& B_tr,
+        const SpMat& A, const SpMat& B, const SpMat& A_prec, const SpMat& A_tr, const SpMat& B_tr,
         const Vec& c, const Vec& b,
         const Vec& D2_ext_inv, const Vec& D1B_diag_inv,
         const Vec& lx, const Vec& ux, const Vec& lw, const Vec& uw,
@@ -175,7 +176,7 @@ public:
         T ssn_tol, int ssn_max_in_iter, T eps_pinf, T eps_dinf,
         PrintWhen when = PrintWhen::NEVER, PrintWhat what = PrintWhat::NONE)
     : Q_info(Q_info), Q_diag(Q_diag), L(L),
-      A(A), B(B), A_tr(A_tr), B_tr(B_tr), c(c), b(b),
+      A(A), B(B), A_prec(A_prec), A_tr(A_tr), B_tr(B_tr), c(c), b(b),
       D2_ext_inv(D2_ext_inv), D1B_diag_inv(D1B_diag_inv),
       lx(lx), ux(ux), lw(lw), uw(uw),
       n(n), m(m), N(N), M(M), l(l),
@@ -205,6 +206,12 @@ public:
         for (int col = 0; col < A.outerSize(); ++col)
             for (typename SpMat::InnerIterator it(A, col); it; ++it)
                 G_A_trips_.emplace_back(it.row(), col, it.value());
+
+        // Cache A_prec's triplets for G_prec.
+        G_A_prec_trips_.reserve(A_prec.nonZeros());
+        for (int col = 0; col < A_prec.outerSize(); ++col)
+            for (typename SpMat::InnerIterator it(A_prec, col); it; ++it)
+                G_A_prec_trips_.emplace_back(it.row(), col, it.value());
 
     }
 
@@ -255,7 +262,7 @@ public:
     void rebuild_G();
     void retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);
     bool choose_ldlt(const SpMat& G, const BoolArr& active_K);
-    void solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool use_ldlt, Vec& out);
+    void solve_using_cg(const SpMat& G, const SpMat& G_tr, const SpMat& G_prec, const SpMat& G_prec_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool use_ldlt, Vec& out);
     Vec solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
                         const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx,

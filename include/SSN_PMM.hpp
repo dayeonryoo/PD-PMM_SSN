@@ -82,7 +82,8 @@ public:
     int N, M; // extended dimensions for general Q (N = n + m + l, M = m + l)
     int Q_info; // 0 = zero; 1 = diagonal; 2 = general
     Vec Q_diag;
-    SpMat L;
+    SpMat L; // Cholesky factor of Q (if Q is diagonal or general SPD)
+    SpMat A_prec; // preconditioner-only variant of A
     SpMat A_tr, B_tr;
 
     SpMat Q_ruiz, A_ruiz, B_ruiz;

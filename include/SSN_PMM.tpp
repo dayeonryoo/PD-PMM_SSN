@@ -401,6 +401,32 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
             A.setFromTriplets(trip.begin(), trip.end());
         }
 
+        // A_prec = [A_ruiz, 0; diag(sqrt(diag(Q))), -I]
+        {
+            const T diag_floor = std::sqrt(std::numeric_limits<T>::epsilon()); // mirrors set_L_from_LLT's delta
+            Vec sqrt_diag_Q_prec = (Q_ruiz.diagonal().cwiseMax(T(0)).array() + diag_floor).sqrt().matrix();
+
+            A_prec.resize(M, N);
+            std::vector<Triplet> trip;
+            trip.reserve(A_ruiz.nonZeros() + n + n);
+
+            if (A_ruiz.rows() != 0 && A_ruiz.cols() != 0) {
+                for (int k = 0; k < n; ++k) {
+                    for (typename SpMat::InnerIterator it(A_ruiz, k); it; ++it) {
+                        trip.emplace_back(it.row(), it.col(), it.value());
+                    }
+                }
+            }
+            for (int i = 0; i < n; ++i) {
+                trip.emplace_back(m + i, i, sqrt_diag_Q_prec(i));
+            }
+            for (int i = 0; i < n; ++i) {
+                trip.emplace_back(m + i, n + i, T(-1));
+            }
+            A_prec.setFromTriplets(trip.begin(), trip.end());
+        }
+        A_prec = A;
+
         // B = [B_ruiz, 0]
         B.resize(l, N);
         {
@@ -427,6 +453,7 @@ void SSN_PMM<T>::set_default(const Problem<T>& problem) {
         } else {
             A = A_ruiz;
         }
+        A_prec = A;
 
         if (problem.B.rows() == 0 || problem.B.cols() == 0) {
             B = SpMat(l, N);
@@ -787,7 +814,7 @@ Solution<T> SSN_PMM<T>::solve() {
 
     // Build the Newton system.
     SSN<T> NS(Q_info, Q_diag, L,
-            A, B, A_tr, B_tr, c, b,
+            A, B, A_prec, A_tr, B_tr, c, b,
             D2_ext_inv, D1B_diag_inv,
             lx, ux, lw, uw,
             n, m, N, M, l,
