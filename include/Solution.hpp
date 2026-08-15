@@ -1,6 +1,7 @@
 #pragma once
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
+#include <iostream>
 #include <limits>
 
 // =============================================================
@@ -11,20 +12,39 @@
 //           lw <= w <= uw.
 // =============================================================
 
+// PMM-level termination status, shared by KSP_QP::opt and Solution::opt.
+enum class TerminationStatus : int {
+    DualInfeasible   = -3, // termination due to dual infeasibility
+    PrimalInfeasible = -2, // termination due to primal infeasibility
+    NumericalError   = -1, // termination due to numerical errors (setup or solve exception)
+    Optimal          =  0, // optimal solution found
+    MaxPmmIterations =  1, // maximum number of PMM iterations reached
+    MaxSsnIterations =  2, // maximum number of SSN iterations reached
+    TimeLimit        =  3, // time limit exceeded
+    Interrupted      =  4, // solve was interrupted before converging
+};
+
+// Short status label per termination status.
+inline const char* to_string(TerminationStatus opt) {
+    switch (opt) {
+        case TerminationStatus::DualInfeasible:   return "dual infeasible";
+        case TerminationStatus::PrimalInfeasible: return "primal infeasible";
+        case TerminationStatus::NumericalError:   return "numerical error";
+        case TerminationStatus::Optimal:          return "optimal";
+        case TerminationStatus::MaxPmmIterations: return "max PMM iterations reached";
+        case TerminationStatus::MaxSsnIterations: return "max SSN iterations reached";
+        case TerminationStatus::TimeLimit:        return "time limit reached";
+        case TerminationStatus::Interrupted:      return "interrupted";
+    }
+    return "unknown status";
+}
+
 template <typename T>
 class Solution {
 public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
-    int opt;         // Termination status
-                     //  -3: termination due to dual infeasibility
-                     //  -2: termination due to primal infeasibility
-                     //  -1: termination due to numerical errors
-                     //   0: optimal solution found
-                     //   1: maximum number of PMM iterations reached
-                     //   2: maximum number of SSN iterations reached
-                     //   3: linesearch failed
-                     //   4: time limit exceeded
+    TerminationStatus opt; // Termination status; see TerminationStatus above.
 
     Vec x;           // Optimal primal solution vector
     Vec y1;          // Lagrangian multipliers for Ax = b
@@ -41,13 +61,13 @@ public:
     T pmm_tol_achieved; // Tolerance achieved by PMM
     T ssn_tol_achieved; // Tolerance achieved by SSN
 
-    double setup_time;   // Wall-clock time in seconds spent in the SSN_PMM constructor
+    double setup_time;   // Wall-clock time in seconds spent in the KSP_QP constructor
     double solve_time;   // Wall-clock time in seconds spent in solve()
     double run_time;     // setup_time + solve_time
     int linesearch_fail; // Number of linesearch failures
     int krylov_fail;     // Number of Krylov failures
 
-    Solution(int opt, const Vec& x, const Vec& y1, const Vec& y2, const Vec& z,
+    Solution(TerminationStatus opt, const Vec& x, const Vec& y1, const Vec& y2, const Vec& z,
              T obj_val, int pmm_iter, int ssn_iter, int krylov_iter, int fact, int smw_count,
              T pmm_tol_achieved, T ssn_tol_achieved,
              double setup_time, double solve_time, int linesearch_fail, int krylov_fail)
@@ -61,14 +81,33 @@ public:
     void print_summary() const {
         std::cout << "\n";
         std::cout << "Solution Summary:" << std::endl;
-        std::cout << "Termination status (opt): " << opt << std::endl;
+        std::cout << "Termination status (opt): " << to_string(opt) << " (" << static_cast<int>(opt) << ")" << std::endl;
         std::cout << "Problem dimensions: n = " << x.size() << ", m = " << y1.size() << ", l = " << y2.size() << std::endl;
-        if (opt == -2) {
-            std::cout << "Problem is primal infeasible.\n";
-        } else if (opt == -3) {
-            std::cout << "Problem is dual infeasible.\n";
+
+        if (opt == TerminationStatus::NumericalError) {
+            std::cout << "Solver terminated due to a numerical error during the solve.\n";
+            return;
+        }
+        if (opt == TerminationStatus::PrimalInfeasible) {
+            std::cout << "Problem detected primal infeasible via its infeasibility certificate.\n";
+            std::cout << "If you believe the problem is feasible, consider lowering eps_pinf directly (ksp_qp.hpp, near the 'Constant parameters' block).\n";
+        } else if (opt == TerminationStatus::DualInfeasible) {
+            std::cout << "Problem detected dual infeasible via its infeasibility certificate.\n";
+            std::cout << "If you believe the problem is feasible, consider lowering eps_dinf directly (ksp_qp.hpp, near the 'Constant parameters' block).\n";
         } else {
-            std::cout << "Optimal objective value (obj_val): " << obj_val << std::endl;
+            // Report the best iterate found so far, whether or not it is confirmed optimal.
+            if (opt == TerminationStatus::Optimal) {
+                std::cout << "Solver converged to an optimal solution.\n";
+            } else if (opt == TerminationStatus::MaxPmmIterations) {
+                std::cout << "Solver reached the maximum number of PMM iterations before converging.\n";
+            } else if (opt == TerminationStatus::MaxSsnIterations) {
+                std::cout << "Solver reached the maximum number of SSN iterations before converging.\n";
+            } else if (opt == TerminationStatus::TimeLimit) {
+                std::cout << "Solver reached the time limit before converging.\n";
+            } else if (opt == TerminationStatus::Interrupted) {
+                std::cout << "Solver was interrupted before converging.\n";
+            }
+            std::cout << "Objective value (obj_val): " << obj_val << std::endl;
             std::cout << "Number of PMM iterations (pmm_iter): " << pmm_iter << std::endl;
             std::cout << "Number of SSN iterations (ssn_iter): " << ssn_iter << std::endl;
             std::cout << "Number of Krylov iterations (krylov_iter): " << krylov_iter << std::endl;

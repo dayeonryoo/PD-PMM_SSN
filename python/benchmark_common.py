@@ -2,7 +2,7 @@
 Shared helpers for benchmark_*.py scripts (benchmark_mm.py, benchmark_pde.py, benchmark_smooth_pde.py):
 
   - QPALM / OSQP imports (with install hints) and status constants
-  - PDPMMdata -> QPALM/OSQP conversion and solver wrappers
+  - KSPQPdata -> QPALM/OSQP conversion and solver wrappers
   - crash-tolerant subprocess isolation
   - the per-problem three-solver runner shared by the PDE benchmarks
   - CSV read/write helpers
@@ -33,9 +33,9 @@ OSQP_SOLVED  = 1                   # osqp.constant("OSQP_SOLVED")
 
 
 # ---------------------------------------------------------------------------
-# Convert PDPMMdata dict (from ssn_pmm_bind) to QPALM/OSQP inputs.
+# Convert KSPQPdata dict (from ksp_qp_bind) to QPALM/OSQP inputs.
 #
-# PDPMMdata form:  min ½ xᵀQx + cᵀx   s.t.  Ax = b,  lw ≤ Bx ≤ uw,  lx ≤ x ≤ ux
+# KSPQPdata form:  min ½ xᵀQx + cᵀx   s.t.  Ax = b,  lw ≤ Bx ≤ uw,  lx ≤ x ≤ ux
 # QPALM/OSQP form: min ½ xᵀQx + qᵀx   s.t.  bmin ≤ Cx ≤ bmax
 #
 # Stacking:  C = [A; B; Iₙ],  bmin/bmax accordingly.
@@ -58,8 +58,8 @@ def _make_upper_triangular(Q):
     return sp.coo_matrix((vals, (rows, cols)), shape=Q.shape).tocsc()
 
 
-def pdpmm_to_qpalm(pd: dict):
-    """Build (Q_upper, q, C, bmin, bmax, n, m_total) from a PDPMMdata dict."""
+def kspqp_to_qpalm(pd: dict):
+    """Build (Q_upper, q, C, bmin, bmax, n, m_total) from a KSPQPdata dict."""
     n, ell = pd["n"], pd["l"]
     INF = 1e30   # QPALM/OSQP treat values beyond this as infinite
 
@@ -95,7 +95,7 @@ def pdpmm_to_qpalm(pd: dict):
 # ---------------------------------------------------------------------------
 
 def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
-    """Run QPALM on a problem already converted via pdpmm_to_qpalm."""
+    """Run QPALM on a problem already converted via kspqp_to_qpalm."""
     Q_upper, q, C, bmin, bmax, n, m_total = qpalm_data
 
     data      = qpalm.Data(n, m_total)
@@ -120,7 +120,7 @@ def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float
     return {
         "status":       int(info.status_val),
         # QPALM's Data has no constant-term field; it only ever reports 0.5 x'Qx + q'x,
-        # so obj_const is added back explicitly to compare against SSN-PMM's obj_val.
+        # so obj_const is added back explicitly to compare against KSP-QP's obj_val.
         "obj_val":      float(info.objective) + obj_const,
         "run_time":     float(info.run_time),
         "outer_iter":   int(info.iter_out),
@@ -130,7 +130,7 @@ def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float
 
 
 def run_osqp(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
-    """Run OSQP on a problem already converted via pdpmm_to_qpalm."""
+    """Run OSQP on a problem already converted via kspqp_to_qpalm."""
     Q_upper, q, C, bmin, bmax, *_ = qpalm_data
 
     prob = osqp.OSQP()
@@ -194,10 +194,10 @@ def run_solvers(result: dict, worker_args: tuple,
     worker_args are the problem-defining positional args for worker_ssn/
     worker_qpalm/worker_osqp, passed ahead of (tol, time_limit[, max_iter], conn).
     """
-    if "ssn-pmm" in solvers:
+    if "ksp-qp" in solvers:
         ssn_out = _run_isolated(worker_ssn, (*worker_args, tol, time_limit, max_iter))
         if "error" in ssn_out:
-            print(f"    SSN-PMM  ERROR — {ssn_out['error']}")
+            print(f"    KSP-QP  ERROR — {ssn_out['error']}")
             result.update(ssn_status=-99, ssn_solved=0, ssn_time=float("inf"),
                           pmm_iter=-1, ssn_iter=-1, pmm_tol_achieved=float("nan"),
                           ssn_obj=float("nan"))
@@ -211,7 +211,7 @@ def run_solvers(result: dict, worker_args: tuple,
                 ssn_obj=r["obj_val"],
             )
             ok = "OK" if r["status"] == 0 else f"status={r['status']}"
-            print(f"    SSN-PMM  {ok:8s}  t={r['run_time']:.2f}s  "
+            print(f"    KSP-QP  {ok:8s}  t={r['run_time']:.2f}s  "
                   f"{r['pmm_iter']}({r['ssn_iter']})[tol={r['pmm_tol_achieved']:.2e}]")
         if flush_cb is not None:
             flush_cb()

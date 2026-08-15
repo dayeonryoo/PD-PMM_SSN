@@ -5,31 +5,17 @@
 #include <string>
 #include <vector>
 #include <filesystem>
-#include "MpsParser.hpp"
+#include "mps_format_parser.hpp"
 
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
-/*
-#include "Highs.h"
-int main() {
-  std::string model_file = "qjh_quadobj.mps";
-  Highs h;
-  // Silence HiGHS with this option setting
-  //  h.setOptionValue("output_flag", false);
-  h.readModel(model_file);
-  HighsModel model = h.getModel();
-  // This solves the model with HiGHS
-  h.run();
-}
-*/
-
 int main() {
 /*
-    MpsParser<T> parser;
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/netlib/CYCLE.mps";
+    MpsFormatParser<T> parser;
+    std::string filename = "C:/Users/k24095864/C++project/KSP-QP/data/netlib/CYCLE.mps";
     ParsedModel<T> model = parser.parse(filename);
 
     Highs h;
@@ -66,7 +52,7 @@ int main() {
     // std::vector<std::string> kennington_names = {"CRE-A","CRE-B","CRE-C","CRE-D","KEN-07","KEN-11","KEN-13","KEN-18","OSA-07","OSA-14","OSA-30","OSA-60","PDS-02","PDS-06","PDS-10","PDS-20"};
 
     // Root
-    std::string root = "C:/Users/k24095864/C++project/PD-PMM_SSN/";
+    std::string root = "C:/Users/k24095864/C++project/KSP-QP/";
 
     for (const auto& name : netlib_names) {
 
@@ -84,7 +70,7 @@ int main() {
         h.readModel(filename);
         const HighsLp& lp = h.getLp();
 
-        MpsParser<T> parser;
+        MpsFormatParser<T> parser;
         ParsedModel<T> model = parser.parse(filename);
 
         if (model.num_rows != lp.num_row_ || model.num_cols != lp.num_col_) {
@@ -111,9 +97,9 @@ int main() {
     std::cout << "Testing completed.\n";
 */
 
-    std::string filename = "C:/Users/k24095864/C++project/PD-PMM_SSN/data/maros-meszaros/CVXQP2_M.SIF";
+    std::string filename = "C:/Users/k24095864/C++project/KSP-QP/data/maros-meszaros/CVXQP2_M.SIF";
 
-    MpsParser<T> parser;
+    MpsFormatParser<T> parser;
     ParsedModel<T> model = parser.parse(filename);
     std::cout << "Parsed model from " << filename << ":\n";
     std::cout << "  Number of rows: " << model.num_rows << "\n";

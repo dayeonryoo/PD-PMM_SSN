@@ -3,8 +3,8 @@
 #include <Eigen/Sparse>
 #include <limits>
 #include <optional>
-#include "Printing.hpp"
-#include "MpsParser.hpp"
+#include "printing.hpp"
+#include "ksp_qp_types.hpp"
 
 // =============================================================
 //      min  c^T x + 0.5 x^T Q x + obj_const,
@@ -26,7 +26,7 @@ public:
     Vec lx, ux, lw, uw;
     T obj_const = T(0);
 
-    int n, m, l;
+    int n = 0, m = 0, l = 0;
 
     T tol = 1e-6;
     int max_iter = 3000;
@@ -46,7 +46,7 @@ public:
       tol(tol_), max_iter(max_iter_), time_limit(time_limit_),
       when(when_), what(what_) {}
 
-    Problem(const PDPMMdata<T>& pd, T tol_, int max_iter_, double time_limit_,
+    Problem(const KSPQPdata<T>& pd, T tol_, int max_iter_, double time_limit_,
             PrintWhen when_, PrintWhat what_)
     : Problem(pd.Q, pd.A, pd.B, pd.c, pd.b, pd.obj_const,
               pd.lx, pd.ux, pd.lw, pd.uw,

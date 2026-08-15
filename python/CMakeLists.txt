@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ssn_pmm_python_bindings VERSION 0.1.0 LANGUAGES CXX)
+project(ksp_qp_python_bindings VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,22 +46,22 @@ FetchContent_MakeAvailable(eigen)
 # ----------------------
 # Python extension module
 # ----------------------
-pybind11_add_module(ssn_pmm_bind ssn_pmm_bind.cpp)
+pybind11_add_module(ksp_qp_bind ksp_qp_bind.cpp)
 
-target_include_directories(ssn_pmm_bind
+target_include_directories(ksp_qp_bind
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${eigen_SOURCE_DIR}
     ${eigen_SOURCE_DIR}/unsupported   # for MINRES / iterative solvers
 )
 
-target_link_libraries(ssn_pmm_bind
+target_link_libraries(ksp_qp_bind
   PRIVATE
     Eigen3::Eigen
 )
 
-# Output the .so next to this CMakeLists.txt so `import ssn_pmm_bind` works
+# Output the .so next to this CMakeLists.txt so `import ksp_qp_bind` works
 # from the python/ directory without any installation step.
-set_target_properties(ssn_pmm_bind PROPERTIES
+set_target_properties(ksp_qp_bind PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )

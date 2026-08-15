@@ -9,11 +9,11 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
-#include "SSN_PMM.hpp"
-#include "Problem.hpp"
-#include "Printing.hpp"
-#include "PDEgenerator.hpp"
-#include "CliArgs.hpp"
+#include "ksp_qp.hpp"
+#include "problem.hpp"
+#include "printing.hpp"
+#include "pde_generator.hpp"
+#include "cli_args.hpp"
 
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
@@ -24,9 +24,9 @@ static const std::vector<std::string> kAllProblems = {
     "l1l2_poisson", "l1l2_convdiff", "l2_poisson_control", "l2_poisson_state", "l2_convdiff"
 };
 
-// Builds the named PDE-constrained QP (see include/PDEgenerator.hpp for the generators).
+// Builds the named PDE-constrained QP (see include/pde_generator.hpp for the generators).
 // nc is the grid exponent passed straight through to the generator (grid size ~ 2^nc).
-PDPMMdata<T> build_problem(const std::string& problem_name, int nc) {
+KSPQPdata<T> build_problem(const std::string& problem_name, int nc) {
     double inf = std::numeric_limits<double>::infinity();
 
     if (problem_name == "l1l2_poisson") {
@@ -47,8 +47,8 @@ PDPMMdata<T> build_problem(const std::string& problem_name, int nc) {
 int main(int argc, char** argv) {
     if (cli::has_flag(argc, argv, "--help") || cli::has_flag(argc, argv, "-h")) {
         std::cout <<
-            "Usage: ssn_pmm_pde [--name PROBLEM|all] [--nc N] [--tol T] [--max-iter N] [--time-limit S]\n"
-            "  Builds and solves a PDE-constrained QP (see include/PDEgenerator.hpp).\n"
+            "Usage: ksp_qp_pde [--name PROBLEM|all] [--nc N] [--tol T] [--max-iter N] [--time-limit S]\n"
+            "  Builds and solves a PDE-constrained QP (see include/pde_generator.hpp).\n"
             "  --name PROBLEM   one of: l1l2_poisson, l1l2_convdiff, l2_poisson_control,\n"
             "                   l2_poisson_state, l2_convdiff, or \"all\" to solve every one\n"
             "                   in sequence (default: l2_convdiff)\n"
@@ -74,9 +74,9 @@ int main(int argc, char** argv) {
 
     for (const std::string& problem_name : problems) {
         std::cout << "========== Solving " << problem_name << " ==========\n";
-        PDPMMdata<T> data = build_problem(problem_name, nc);
+        KSPQPdata<T> data = build_problem(problem_name, nc);
         Problem<T> pb(data, tol, max_iter, time_limit, when, what);
-        SSN_PMM<T> solver(pb);
+        KSP_QP<T> solver(pb);
         Solution<T> sol = solver.solve();
         sol.print_summary();
     }

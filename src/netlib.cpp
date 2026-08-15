@@ -10,12 +10,12 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
-#include "SSN_PMM.hpp"
-#include "Problem.hpp"
-#include "Printing.hpp"
-#include "MpsParser.hpp"
-#include "RecordResult.hpp"
-#include "CliArgs.hpp"
+#include "ksp_qp.hpp"
+#include "problem.hpp"
+#include "printing.hpp"
+#include "mps_format_parser.hpp"
+#include "record_result.hpp"
+#include "cli_args.hpp"
 
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
@@ -27,7 +27,7 @@ using Triplet = Eigen::Triplet<T>;
 int main(int argc, char** argv) {
     if (cli::has_flag(argc, argv, "--help") || cli::has_flag(argc, argv, "-h")) {
         std::cout <<
-            "Usage: ssn_pmm_netlib [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE]\n"
+            "Usage: ksp_qp_netlib [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE]\n"
             "  Solves one Netlib LP from DIR/PROBLEM.mps, or sweeps the whole feasible set with --name all.\n"
             "  --root DIR       directory containing the .mps files (default: data/netlib/)\n"
             "  --name PROBLEM   problem name, without extension, or \"all\" to sweep every LP with a\n"
@@ -168,12 +168,12 @@ int main(int argc, char** argv) {
 
             try {
                 // Read problem data from the file
-                MpsParser<T> parser;
+                MpsFormatParser<T> parser;
                 ParsedModel<T> model = parser.parse(filename);
-                PDPMMdata<T> pd = parser.to_pdpmm(model);
+                KSPQPdata<T> pd = parser.to_kspqp(model);
 
                 Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
-                SSN_PMM<T> solver(prob);
+                KSP_QP<T> solver(prob);
 
                 std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
                 std::cout << "Compuation started at " << std::ctime(&curr_time);
@@ -188,12 +188,12 @@ int main(int argc, char** argv) {
                 bool agree = (abs_err < err_tol) || (rel_err < err_tol);
                 bool diverged = sol.pmm_tol_achieved > 1e0;
 
-                std::string system = solver.ldlt_used ? "L" : "S";
+                std::string system = solver.kkt_ldlt_used ? "L" : "S";
 
                 // Store result
                 TestResult<T> result = {
                     system,
-                    agree, sol.opt, diverged, lp_name,
+                    agree, static_cast<int>(sol.opt), diverged, lp_name,
                     abs_err, rel_err, sol.obj_val,
                     sol.pmm_iter, sol.ssn_iter, sol.krylov_iter, sol.fact, sol.smw_count,
                     sol.pmm_tol_achieved, sol.ssn_tol_achieved,
@@ -226,33 +226,16 @@ int main(int argc, char** argv) {
     std::string filename = root + name + ".mps";
     std::cout << "==================== Solving " + name << " ====================\n";
 
-    MpsParser<T> parser;
+    MpsFormatParser<T> parser;
     ParsedModel<T> model = parser.parse(filename);
-    PDPMMdata<T> pd = parser.to_pdpmm(model);
+    KSPQPdata<T> pd = parser.to_kspqp(model);
 
     Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
-    SSN_PMM<T> solver(prob);
+    KSP_QP<T> solver(prob);
 
     // Solve:
     Solution<T> sol = solver.solve();
     sol.print_summary();
-    std::cout << "\nPMM solver took " << sol.run_time << " s.\n";
-
-    // Check convergence
-    if (sol.opt == 0) {
-        std::cout << "Solver converged!\n";
-    } else if (sol.opt == 3) {
-        std::cout << "Lineserach failed. Solver terminated.\n";
-    } else if (sol.opt < 0) {
-        std::cout << "Solver detected infeasibility.\n";
-    } else if (sol.opt == 4) {
-        std::cout << "Solver hit the time limit.\n";
-    } else {
-        std::cout << "Solver hit the max iteration before converging.\n";
-    }
-    if (sol.opt <= 0 && sol.pmm_tol_achieved > 1e0) {
-        std::cout << "Solver possibly diverged.\n";
-    }
 
     return 0;
 }
@@ -326,12 +309,12 @@ int main(int argc, char** argv) {
 
         try {
             // Read problem data from the file
-            MpsParser<T> parser;
+            MpsFormatParser<T> parser;
             ParsedModel<T> model = parser.parse(filename);
-            PDPMMdata<T> pd = parser.to_pdpmm(model);
+            KSPQPdata<T> pd = parser.to_kspqp(model);
 
             Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
-            SSN_PMM<T> solver(prob);
+            KSP_QP<T> solver(prob);
 
             std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
             std::cout << "Compuation started at " << std::ctime(&curr_time);
@@ -340,12 +323,8 @@ int main(int argc, char** argv) {
             std::string system = "S";
 
             // Solve the LP
-            auto t0 = std::chrono::steady_clock::now();
             Solution<T> sol = solver.solve();
-            auto t1 = std::chrono::steady_clock::now();
-            double solving_time_sec = time_diff_s(t0, t1);
-            std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
-
+            
             // Store the result
             bool infeas_detected = (sol.opt == -2 || sol.opt == -3);
             std::ofstream csv(csv_path, std::ios::out | std::ios::app);
@@ -380,38 +359,25 @@ int main() {
     std::string name = "GOSH";
     std::string filename = root + name + ".mps";
 
-    // Parameters for PD-PMM_SSN solver
+    // Parameters for KSP-QP solver
     T tol = 1e-6;
     int max_iter = 1000;
     PrintWhen when = PrintWhen::EVERY10;
     PrintWhat what = PrintWhat::TUNING;
 
-    // Extract problem data from the mps file using our MpsParser and construct solver
-    MpsParser<T> parser;
+    // Extract problem data from the mps file using our MpsFormatParser and construct solver
+    MpsFormatParser<T> parser;
     ParsedModel<T> model = parser.parse(filename);
-    PDPMMdata<T> pd = parser.to_pdpmm(model);
+    KSPQPdata<T> pd = parser.to_kspqp(model);
 
     Problem<T> prob(pd, tol, max_iter, when, what);
-    SSN_PMM<T> solver(prob);
+    KSP_QP<T> solver(prob);
 
     std::cout << "================================================ Solving " << name << " =================================================\n";
 
-    // Chosen system
-    std::cout << "n = " << solver.n << ", m = " << solver.m << ", l = " << solver.l << "\n";
-    std::cout << "N = " << solver.N << ", M = " << solver.M << "\n";
-    std::cout << "Solving Schur (CG with LDLT fallback).\n";
-
     // Solve the LP
-    auto t0 = std::chrono::steady_clock::now();
     Solution<T> sol = solver.solve();
-    auto t1 = std::chrono::steady_clock::now();
-    double solving_time_sec = time_diff_s(t0, t1);
     sol.print_summary();
-    std::cout << "\nPD-PMM solver took " << solving_time_sec << " s.\n";
-    T obj_val = sol.obj_val;
-
-    // Check feasibility
-    // print_feasibility(pd, sol.x, tol);
 
     return 0;
 }

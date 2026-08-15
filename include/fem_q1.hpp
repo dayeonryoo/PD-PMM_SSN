@@ -18,7 +18,7 @@
 namespace pdegen {
 namespace fem {
 
-// Convection field w = [2 x2 (1 - x1^2), -2 x1 (1 - x2^2)]^T ,
+// Convection field w = [2 x2 (1 - x1^2), -2 x1 (1 - x2^2)]^T,
 // (circular wind). Used by gauss_transprt below.
 template <typename T>
 inline void velocity_field_w_circular(T x1, T x2, T& wx, T& wy) {

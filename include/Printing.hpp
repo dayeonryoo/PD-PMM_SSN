@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <functional>
 #include <chrono>
+#include <Eigen/Dense>
 
 enum class PrintWhen {
     NEVER,
@@ -24,7 +25,19 @@ inline double time_diff_s(const std::chrono::steady_clock::time_point& start,
     return duration<double>(end - start).count();
 }
 
-void print_header(PrintWhen when, PrintWhat what) {
+// One row of the PMM/SSN iteration trace, mirroring print()'s parameter list.
+template <typename T>
+struct IterationRecord {
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    int pmm_iter, ssn_iter, krylov_iter, fact;
+    T obj_val;
+    Vec res_norms;
+    T ssn_res, mu, rho, eps;
+    int linesearch_fail, krylov_fail;
+    bool show_pmm_iter = true;
+};
+
+inline void print_header(PrintWhen when, PrintWhat what) {
     if (when == PrintWhen::NEVER || what == PrintWhat::NONE) return;
 
     const int w_iter = 8;
@@ -61,7 +74,7 @@ void print_header(PrintWhen when, PrintWhat what) {
 }
 
 template <typename T, typename Vec>
-void print(PrintWhen when, PrintWhat what, int pmm_iter, int ssn_iter, int krylov_iter, int fact, T obj_val, const Vec& res_norms, T ssn_res, T mu, T rho, T eps, int linesearch_failures, int krylov_fail, bool show_pmm_iter = true) {
+inline void print(PrintWhen when, PrintWhat what, int pmm_iter, int ssn_iter, int krylov_iter, int fact, T obj_val, const Vec& res_norms, T ssn_res, T mu, T rho, T eps, int linesearch_failures, int krylov_fail, bool show_pmm_iter = true) {
     if (when == PrintWhen::NEVER || what == PrintWhat::NONE) return;
     if (when == PrintWhen::EVERY10 && pmm_iter % 10 != 0) return;
 

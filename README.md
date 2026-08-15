@@ -1,4 +1,4 @@
-# SSN-PMM: Semi-Smooth Newton Proximal Method of Multipliers
+# KSP-QP: Krylov Semismooth-Newton Proximal Method of Multipliers
 
 A C++17 solver for convex **Quadratic Programs (QPs)** and **Linear Programs (LPs)**, with Python bindings via pybind11. The solver implements a Primal-Dual Proximal Method of Multipliers (PMM) outer loop with a Semi-Smooth Newton (SSN) inner solver, accelerated by iterative Krylov methods.
 
@@ -6,7 +6,7 @@ A C++17 solver for convex **Quadratic Programs (QPs)** and **Linear Programs (LP
 
 ## Problem form
 
-SSN-PMM solves problems of the form:
+KSP-QP solves problems of the form:
 
 ```
 min   c^T x  +  (1/2) x^T Q x
@@ -36,8 +36,8 @@ where `Q` is a symmetric positive semi-definite matrix (set `Q = 0` for LPs).
 ## Getting the code
 
 ```bash
-git clone https://github.com/dayeonryoo/PD-PMM_SSN
-cd PD-PMM_SSN
+git clone https://github.com/dayeonryoo/KSP-QP
+cd KSP-QP
 ```
 
 ---
@@ -64,14 +64,14 @@ This produces four executables inside `build/`:
 
 | Executable | Source | Description |
 |---|---|---|
-| `ssn_pmm_netlib` | `src/netlib.cpp` | Runs the solver on Netlib LPs (`.mps`) |
-| `ssn_pmm_maros_meszaros` | `src/maros_meszaros.cpp` | Runs the solver on Maros-Meszaros QPs (`.SIF`) |
-| `ssn_pmm_pde` | `src/PDE.cpp` | Runs the solver on a PDE-constrained QP built by `PDEgenerator.hpp` |
-| `mps_parser` | `src/readingMps.cpp` | Standalone MPS/SIF file parser demo |
+| `ksp_qp_netlib` | `src/netlib.cpp` | Runs the solver on Netlib LPs (`.mps`) |
+| `ksp_qp_maros_meszaros` | `src/maros_meszaros.cpp` | Runs the solver on Maros-Meszaros QPs (`.SIF`) |
+| `ksp_qp_pde` | `src/pde.cpp` | Runs the solver on a PDE-constrained QP built by `pde_generator.hpp` |
+| `mps_parser` | `src/reading_mps.cpp` | Standalone MPS/SIF file parser demo |
 
-`ssn_pmm_netlib`, `ssn_pmm_maros_meszaros`, and `ssn_pmm_pde` each take `--name`, `--tol`,
+`ksp_qp_netlib`, `ksp_qp_maros_meszaros`, and `ksp_qp_pde` each take `--name`, `--tol`,
 `--max-iter`, and `--time-limit` flags. `--name` picks a single problem to solve, or `all` to
-sweep every problem the driver knows about (`ssn_pmm_netlib` and `ssn_pmm_maros_meszaros` also
+sweep every problem the driver knows about (`ksp_qp_netlib` and `ksp_qp_maros_meszaros` also
 take `--root` to point at a different data directory, and write a CSV when `--name all` is
 used). Run any of them with `--help` for the full flag list. Run them from the repo root so
 their default (relative) data paths resolve, or pass `--root`. Each driver still hardcodes its
@@ -91,8 +91,8 @@ cmake --build . --config Release
 cd ..
 ```
 
-This places `ssn_pmm_bind.cpython-<tag>-<platform>.so` directly in `python/`, so
-`import ssn_pmm_bind` works without any installation step.
+This places `ksp_qp_bind.cpython-<tag>-<platform>.so` directly in `python/`, so
+`import ksp_qp_bind` works without any installation step.
 
 ---
 
@@ -101,8 +101,8 @@ This places `ssn_pmm_bind.cpython-<tag>-<platform>.so` directly in `python/`, so
 ### C++ — solve a problem from matrices
 
 ```cpp
-#include "SSN_PMM.hpp"
-#include "Problem.hpp"
+#include "ksp_qp.hpp"
+#include "problem.hpp"
 
 using T   = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
@@ -151,7 +151,7 @@ int main() {
                     tol, max_iter, time_limit,
                     PrintWhen::EVERY10, PrintWhat::TUNING);
 
-    SSN_PMM<T> solver(prob);
+    KSP_QP<T> solver(prob);
     Solution<T> sol = solver.solve();
 
     sol.print_summary();
@@ -165,16 +165,16 @@ int main() {
 ### C++ — solve from an MPS/SIF file
 
 ```cpp
-#include "SSN_PMM.hpp"
-#include "Problem.hpp"
-#include "MpsParser.hpp"
+#include "ksp_qp.hpp"
+#include "problem.hpp"
+#include "mps_format_parser.hpp"
 
 using T = double;
 
 int main() {
-    MpsParser<T>   parser;
+    MpsFormatParser<T> parser;
     ParsedModel<T> model = parser.parse("path/to/problem.mps");
-    PDPMMdata<T>   pd    = parser.to_pdpmm(model);
+    KSPQPdata<T>   pd    = parser.to_kspqp(model);
 
     T   tol        = 1e-6;
     int max_iter   = 1000000;
@@ -182,7 +182,7 @@ int main() {
 
     Problem<T>  prob(pd, tol, max_iter, time_limit,
                      PrintWhen::EVERY10, PrintWhat::TUNING);
-    SSN_PMM<T>  solver(prob);
+    KSP_QP<T>  solver(prob);
     Solution<T> sol = solver.solve();
 
     sol.print_summary();
@@ -194,11 +194,11 @@ int main() {
 
 ```python
 import sys
-sys.path.insert(0, "path/to/PD-PMM_SSN/python")
-import ssn_pmm_bind
+sys.path.insert(0, "path/to/KSP-QP/python")
+import ksp_qp_bind
 
-result = ssn_pmm_bind.solve_from_sif(
-    "path/to/PD-PMM_SSN/data/maros_meszaros/QAFIRO.SIF",
+result = ksp_qp_bind.solve_from_sif(
+    "path/to/KSP-QP/data/maros_meszaros/QAFIRO.SIF",
     tol        = 1e-6,
     max_iter   = 1_000_000_000,
     time_limit = 600.0,
@@ -216,10 +216,10 @@ print("Krylov iters:", result["krylov_iter"])
 
 ```python
 import sys, scipy.sparse as sp, numpy as np
-sys.path.insert(0, "path/to/PD-PMM_SSN/python")
-import ssn_pmm_bind
+sys.path.insert(0, "path/to/KSP-QP/python")
+import ksp_qp_bind
 
-pd = ssn_pmm_bind.parse_sif("path/to/problem.SIF")
+pd = ksp_qp_bind.parse_sif("path/to/problem.SIF")
 
 # Reconstruct scipy sparse matrices
 Q = sp.csc_matrix((pd["Q_data"], pd["Q_indices"], pd["Q_indptr"]), shape=pd["Q_shape"])
@@ -281,7 +281,7 @@ n, m, l = pd["n"], pd["m"], pd["l"]
 | `3` | Line search failed |
 | `4` | Time limit exceeded |
 
-### Python `ssn_pmm_bind`
+### Python `ksp_qp_bind`
 
 **`solve_from_sif(filename, tol=1e-6, max_iter=1_000_000_000, time_limit=600.0)`**
 Parse and solve a SIF/MPS file. Returns a dict with keys:
@@ -301,10 +301,10 @@ defaults to paths relative to the repo root — **run them from the repo root**,
 to point at your clone from elsewhere. No editing or rebuilding is needed just to change `tol`,
 `max_iter`, `time_limit`, or (where applicable) which data file to load.
 
-### `ssn_pmm_netlib` — Netlib LPs (`src/netlib.cpp`)
+### `ksp_qp_netlib` — Netlib LPs (`src/netlib.cpp`)
 
 ```bash
-./build/ssn_pmm_netlib [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE]
+./build/ksp_qp_netlib [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE]
 ```
 
 Solves `<root>/<PROBLEM>.mps` (default: `data/netlib/AFIRO.mps`), printing the solution summary.
@@ -318,10 +318,10 @@ file (sweep the Netlib-infeasible set, or solve one infeasible LP by name) — t
 `--name` and still require editing `main()` (uncomment, remove the `/* ... */`, rebuild) since
 they check for *detected infeasibility* rather than an objective value.
 
-### `ssn_pmm_maros_meszaros` — Maros-Meszaros QPs (`src/maros_meszaros.cpp`)
+### `ksp_qp_maros_meszaros` — Maros-Meszaros QPs (`src/maros_meszaros.cpp`)
 
 ```bash
-./build/ssn_pmm_maros_meszaros [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE] [--cooldown S]
+./build/ksp_qp_maros_meszaros [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE] [--cooldown S]
 ```
 
 Solves `<root>/<PROBLEM>.SIF` (default: `data/maros_meszaros/AUG2DCQP.SIF`), printing the
@@ -332,13 +332,13 @@ reference objectives, appending a row to `<root>/results/maros_meszaros_all.csv`
 For comparing against QPALM/OSQP rather than just checking against reference objectives, use
 the Python benchmark instead (see below) — that's what produces performance profiles.
 
-### `ssn_pmm_pde` — PDE-constrained QPs (`src/PDE.cpp`)
+### `ksp_qp_pde` — PDE-constrained QPs (`src/pde.cpp`)
 
 ```bash
-./build/ssn_pmm_pde [--name PROBLEM|all] [--nc N] [--tol T] [--max-iter N] [--time-limit S]
+./build/ksp_qp_pde [--name PROBLEM|all] [--nc N] [--tol T] [--max-iter N] [--time-limit S]
 ```
 
-Builds and solves one named problem via `include/PDEgenerator.hpp`'s generators, printing the
+Builds and solves one named problem via `include/pde_generator.hpp`'s generators, printing the
 solution summary. `--name` is one of:
 
 | Name | Generator |
@@ -351,14 +351,14 @@ solution summary. `--name` is one of:
 
 `--name all` solves all five in sequence. `--nc` sets the grid exponent (grid size ~ `2^nc`)
 passed to whichever generator(s) run (default: 6). The other generator arguments (regularization
-weights, state/control bounds) are fixed per problem in `build_problem()` in `PDE.cpp` — editing
+weights, state/control bounds) are fixed per problem in `build_problem()` in `pde.cpp` — editing
 those still requires a rebuild.
 
 ---
 
 ## Running the benchmarks
 
-All three Python benchmark scripts compare **SSN-PMM vs QPALM vs OSQP** and live in `python/`.
+All three Python benchmark scripts compare **KSP-QP vs QPALM vs OSQP** and live in `python/`.
 Build the Python binding first (see "Building" above), then `pip install qpalm osqp numpy scipy
 matplotlib pandas`.
 
@@ -376,7 +376,7 @@ performance profiles (`results/performance_profile_mm*.pdf/.png`, by time and by
 --root DIR             override project root (default: parent of script)
 --tol 1e-6             primal-dual tolerance
 --time-limit 600       per-problem time limit in seconds
---solver {ssn-pmm,qpalm,osqp} [...]   which solvers to run (default: all three)
+--solver {ksp-qp,qpalm,osqp} [...]   which solvers to run (default: all three)
 --out PREFIX           output file prefix (default: comparison_mm)
 --cooldown 0           seconds to sleep between problems (avoids CPU throttling)
 ```
@@ -397,7 +397,7 @@ Produces four sweep tables (`poisson_vary_n`, `poisson_vary_a2`, `convdiff_vary_
 --time-limit 600        per-problem time limit in seconds (10 min default)
 --table {poisson_vary_n,poisson_vary_a2,convdiff_vary_n,convdiff_vary_a2} [...]   default: all four
 --nc N [N ...]          grid exponents to sweep for vary-n tables (default: 6 7 8 9 10)
---solver {ssn-pmm,qpalm,osqp} [...]   default: all three
+--solver {ksp-qp,qpalm,osqp} [...]   default: all three
 --cooldown 0            seconds to sleep between problems
 --out PREFIX            output file prefix
 ```
@@ -423,7 +423,7 @@ The solver has two independent knobs for diagnosing/tuning performance: **runtim
 and a **compile-time step timer** (per-phase wall-clock breakdown of the SSN inner loop,
 printed to stderr).
 
-### Runtime printing — `PrintWhen` / `PrintWhat` (`include/Printing.hpp`)
+### Runtime printing — `PrintWhen` / `PrintWhat` (`include/printing.hpp`)
 
 `PrintWhen` controls *how often* a line is printed per PMM iteration:
 
@@ -449,14 +449,14 @@ PMM/SSN hyperparameters — it shows residuals, `mu`/`rho`/`eps`, and failure co
 Turning printing off (`PrintWhen::NEVER` or `PrintWhat::NONE`) removes the stdout overhead
 entirely, which matters when timing large sweeps.
 
-### Compile-time step timers — `SSN_ENABLE_TIMERS` (`include/SSN.hpp`)
+### Compile-time step timers — `SSN_ENABLE_TIMERS` (`include/ssn.hpp`)
 
 A separate, more granular timer instruments the phases inside each SSN iteration (system prep,
 linear solve, preconditioner assembly/analyze/factorize, Krylov solve, LDLT fallback,
 line search, state update). It is gated by a macro so it compiles to zero overhead when off:
 
 ```cpp
-// include/SSN.hpp
+// include/ssn.hpp
 #ifndef SSN_ENABLE_TIMERS
 #define SSN_ENABLE_TIMERS 0   // set to 1 to enable
 #endif
@@ -488,25 +488,26 @@ across iterations.
 ## Project structure
 
 ```
-PD-PMM_SSN/
+KSP-QP/
 ├── include/
-│   ├── Problem.hpp          # Problem data structure
-│   ├── Solution.hpp         # Solution data structure
-│   ├── SSN_PMM.hpp/.tpp     # Main solver
-│   ├── SSN.hpp/.tpp         # SSN inner solver
-│   ├── MpsParser.hpp/.tpp   # MPS/SIF file parser
-│   ├── SchurOperator.hpp    # Schur complement linear operator
-│   ├── SchurPreconditioner.hpp
-│   ├── PDEgenerator.hpp     # Builds PDE-constrained QPs (Q1 FEM) for PDE.cpp
-│   ├── Printing.hpp         # PrintWhen/PrintWhat runtime printing
-│   └── RecordResult.hpp
+│   ├── problem.hpp          # Problem data structure
+│   ├── solution.hpp         # Solution data structure
+│   ├── ksp_qp.hpp/.tpp     # Main solver
+│   ├── ssn.hpp/.tpp         # SSN inner solver
+│   ├── mps_format_parser.hpp/.tpp # MPS/SIF/QPS file parser
+│   ├── ksp_qp_types.hpp       # ParsedModel/KSPQPdata data structures
+│   ├── schur_operator.hpp    # Schur complement linear operator
+│   ├── schur_preconditioner.hpp
+│   ├── pde_generator.hpp     # Builds PDE-constrained QPs (Q1 FEM) for pde.cpp
+│   ├── printing.hpp         # PrintWhen/PrintWhat runtime printing
+│   └── record_result.hpp
 ├── src/
 │   ├── netlib.cpp           # Netlib LP benchmark runner
 │   ├── maros_meszaros.cpp   # Maros-Meszaros QP benchmark runner
-│   ├── PDE.cpp              # PDE-constrained problem runner
-│   └── readingMps.cpp       # MPS parser demo
+│   ├── pde.cpp              # PDE-constrained problem runner
+│   └── reading_mps.cpp       # MPS parser demo
 ├── python/
-│   ├── ssn_pmm_bind.cpp          # pybind11 bindings
+│   ├── ksp_qp_bind.cpp          # pybind11 bindings
 │   ├── benchmark_common.py       # shared QPALM/OSQP conversion + runner helpers
 │   ├── benchmark_mm.py           # Maros-Meszaros benchmark vs QPALM/OSQP
 │   ├── benchmark_pde.py          # L1/L2 PDE-constrained benchmark vs QPALM/OSQP

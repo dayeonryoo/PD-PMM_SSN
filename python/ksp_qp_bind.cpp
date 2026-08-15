@@ -5,10 +5,10 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
-#include "SSN_PMM.hpp"
-#include "Problem.hpp"
-#include "MpsParser.hpp"
-#include "PDEgenerator.hpp"
+#include "ksp_qp.hpp"
+#include "problem.hpp"
+#include "mps_format_parser.hpp"
+#include "pde_generator.hpp"
 
 namespace py = pybind11;
 using T      = double;
@@ -68,12 +68,12 @@ Returned dict keys:
   obj_const                    – scalar constant in objective
 -----------------------------------------------------------------------*/
 py::dict parse_sif(const std::string& filename) {
-    PDPMMdata<T> pd;
+    KSPQPdata<T> pd;
     {
         py::gil_scoped_release release;
-        MpsParser<T>   parser;
+        MpsFormatParser<T>   parser;
         ParsedModel<T> model = parser.parse(filename);
-        pd = parser.to_pdpmm(model);
+        pd = parser.to_kspqp(model);
     }
 
     py::dict out;
@@ -101,12 +101,12 @@ py::dict parse_sif(const std::string& filename) {
 }
 
 /*-----------------------------------------------------------------------
-solve_from_sif: parse a SIF/MPS file and run the SSN-PMM solver.
+solve_from_sif: parse a SIF/MPS file and run the KSP-QP solver.
 
 Returns dict:
   status            – opt field (0 = optimal, <0 = infeasible, >0 = limit hit)
   obj_val           – primal objective value
-  setup_time        – wall-clock time in seconds spent in the SSN_PMM constructor
+  setup_time        – wall-clock time in seconds spent in the KSP_QP constructor
   solve_time        – wall-clock time in seconds spent in solve()
   run_time          – setup_time + solve_time
   pmm_iter          – PMM outer iterations
@@ -114,22 +114,22 @@ Returns dict:
   pmm_tol_achieved  – tolerance achieved by PMM at termination
 -----------------------------------------------------------------------*/
 py::dict solve_from_sif(const std::string& filename,
-                        double tol        = 1e-6,
+                        double tol         = 1e-6,
                         long long max_iter = 1'000'000'000LL,
                         double time_limit  = 600.0) {
     int opt, pmm_iter, ssn_iter;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
     {
         py::gil_scoped_release release;
-        MpsParser<T>   parser;
+        MpsFormatParser<T>   parser;
         ParsedModel<T> model  = parser.parse(filename);
-        PDPMMdata<T>   pd     = parser.to_pdpmm(model);
+        KSPQPdata<T>   pd     = parser.to_kspqp(model);
 
         Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
                          PrintWhen::NEVER, PrintWhat::NONE);
-        SSN_PMM<T>  solver(prob);
+        KSP_QP<T>  solver(prob);
         Solution<T> sol = solver.solve();
-        opt              = sol.opt;
+        opt              = static_cast<int>(sol.opt);
         obj_val          = (double)sol.obj_val;
         setup_time       = sol.setup_time;
         solve_time       = sol.solve_time;
@@ -152,10 +152,10 @@ py::dict solve_from_sif(const std::string& filename,
 }
 
 /*-----------------------------------------------------------------------
-Helper: reconstruct PDPMMdata<T> from a parse_sif dict.
+Helper: reconstruct KSPQPdata<T> from a parse_sif dict.
 -----------------------------------------------------------------------*/
-static PDPMMdata<T> dict_to_pdpmm(const py::dict& d) {
-    PDPMMdata<T> pd;
+static KSPQPdata<T> dict_to_kspqp(const py::dict& d) {
+    KSPQPdata<T> pd;
     pd.n         = d["n"].cast<int>();
     pd.m         = d["m"].cast<int>();
     pd.l         = d["l"].cast<int>();
@@ -203,7 +203,7 @@ static PDPMMdata<T> dict_to_pdpmm(const py::dict& d) {
 }
 
 /*-----------------------------------------------------------------------
-solve_from_data: run the SSN-PMM solver on already-parsed problem data.
+solve_from_data: run the KSP-QP solver on already-parsed problem data.
 Takes a dict as returned by parse_sif.
 Returns dict with the same keys as solve_from_sif.
 -----------------------------------------------------------------------*/
@@ -211,7 +211,7 @@ py::dict solve_from_data(const py::dict& pd_dict,
                          double tol         = 1e-6,
                          long long max_iter = 1'000'000'000LL,
                          double time_limit  = 600.0) {
-    PDPMMdata<T> pd = dict_to_pdpmm(pd_dict); // reads Python objects
+    KSPQPdata<T> pd = dict_to_kspqp(pd_dict); // reads Python objects
 
     int opt, pmm_iter, ssn_iter;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
@@ -219,9 +219,9 @@ py::dict solve_from_data(const py::dict& pd_dict,
         py::gil_scoped_release release;
         Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
                          PrintWhen::NEVER, PrintWhat::NONE);
-        SSN_PMM<T>  solver(prob);
+        KSP_QP<T>  solver(prob);
         Solution<T> sol = solver.solve();
-        opt              = sol.opt;
+        opt              = static_cast<int>(sol.opt);
         obj_val          = (double)sol.obj_val;
         setup_time       = sol.setup_time;
         solve_time       = sol.solve_time;
@@ -244,9 +244,9 @@ py::dict solve_from_data(const py::dict& pd_dict,
 }
 
 /*-----------------------------------------------------------------------
-Helper: PDPMMdata<T> → Python dict (same format as parse_sif output)
+Helper: KSPQPdata<T> → Python dict (same format as parse_sif output)
 -----------------------------------------------------------------------*/
-static py::dict pdpmm_to_dict(const PDPMMdata<T>& pd) {
+static py::dict kspqp_to_dict(const KSPQPdata<T>& pd) {
     py::dict out;
     out["n"] = pd.n;
     out["m"] = pd.m;
@@ -284,7 +284,7 @@ py::dict generate_pde_l1l2_qp(const std::string& choice,
     if (choice != "poisson" && choice != "convdiff")
         throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
 
-    PDPMMdata<T> pd;
+    KSPQPdata<T> pd;
     {
         py::gil_scoped_release release;
         pd = (choice == "poisson")
@@ -293,7 +293,7 @@ py::dict generate_pde_l1l2_qp(const std::string& choice,
                : pdegen::make_convdiff_l1l2_control<T>(nc, (T)alpha1, (T)alpha2, T(-2), T(1.5), T(0.02),
                                                         (T)y_lower, (T)y_upper);
     }
-    return pdpmm_to_dict(pd);
+    return kspqp_to_dict(pd);
 }
 
 /*-----------------------------------------------------------------------
@@ -317,7 +317,7 @@ py::dict generate_pde_l2_qp(const std::string& choice,
         throw std::invalid_argument(
             "choice must be one of 'poisson', 'poisson_state', 'convdiff'");
 
-    PDPMMdata<T> pd;
+    KSPQPdata<T> pd;
     {
         py::gil_scoped_release release;
         if (choice == "poisson") {
@@ -331,14 +331,14 @@ py::dict generate_pde_l2_qp(const std::string& choice,
                                                     (T)u_lower, (T)u_upper, (T)eps);
         }
     }
-    return pdpmm_to_dict(pd);
+    return kspqp_to_dict(pd);
 }
 
 /*-----------------------------------------------------------------------
 Module
 -----------------------------------------------------------------------*/
-PYBIND11_MODULE(ssn_pmm_bind, m) {
-    m.doc() = "Python bindings for the SSN-PMM quadratic programming solver";
+PYBIND11_MODULE(ksp_qp_bind, m) {
+    m.doc() = "Python bindings for the KSP-QP quadratic programming solver";
 
     m.def("parse_sif", &parse_sif,
           py::arg("filename"),
@@ -352,7 +352,7 @@ The sparse matrices are in CSC format (data / indices / indptr / shape).)");
           py::arg("tol")        = 1e-6,
           py::arg("max_iter")   = 1'000'000'000LL,
           py::arg("time_limit") = 600.0,
-          R"(Parse a SIF/MPS file and solve it with the SSN-PMM solver.
+          R"(Parse a SIF/MPS file and solve it with the KSP-QP solver.
 
 Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter, pmm_tol_achieved.
 status == 0  → optimal solution found
@@ -375,7 +375,7 @@ y_lower/y_upper = state bounds (default ±inf, i.e. control-constrained only;
 Uses Q1 finite-element discretisation with the consistent mass matrix.
 
 Returns the same dict format as parse_sif(), so the result can be passed
-directly to solve_from_data() and used with pdpmm_to_qpalm().)");
+directly to solve_from_data() and used with kspqp_to_qpalm().)");
 
     m.def("generate_pde_l2_qp", &generate_pde_l2_qp,
           py::arg("choice"), py::arg("nc"), py::arg("beta"),
@@ -395,14 +395,14 @@ eps = diffusion coefficient, 'convdiff' only.
 Uses Q1 finite-element discretisation with the consistent mass matrix.
 
 Returns the same dict format as parse_sif(), so the result can be passed
-directly to solve_from_data() and used with pdpmm_to_qpalm().)");
+directly to solve_from_data() and used with kspqp_to_qpalm().)");
 
     m.def("solve_from_data", &solve_from_data,
           py::arg("pd"),
           py::arg("tol")        = 1e-6,
           py::arg("max_iter")   = 1'000'000'000LL,
           py::arg("time_limit") = 600.0,
-          R"(Solve with SSN-PMM using already-parsed problem data (dict from parse_sif).
+          R"(Solve with KSP-QP using already-parsed problem data (dict from parse_sif).
 
 Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter, pmm_tol_achieved.)");
 }

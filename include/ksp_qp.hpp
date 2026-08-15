@@ -1,14 +1,17 @@
 #pragma once
+#include <chrono>
+#include <functional>
 #include <limits>
+#include <optional>
 #include <vector>
 #include <stdexcept>
 #include <iostream>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
-#include "Problem.hpp"
-#include "Solution.hpp"
-#include "SSN.hpp"
-#include "Printing.hpp"
+#include "problem.hpp"
+#include "solution.hpp"
+#include "ssn.hpp"
+#include "printing.hpp"
 
 // =============================================================
 //      min  c^T x + 0.5 x^T Q x + obj_const,
@@ -36,16 +39,8 @@
 // =============================================================
 // OUTPUT: Solution
 // --------------------------------------------------------------
-// A class containing the solution of the PMM_SSN solver:
-//    .opt     -> Integer indicating the termination status:
-//                 -3: termination due to dual infeasibility
-//                 -2: termination due to primal infeasibility
-//                 -1: termination due to numerical errors
-//                  0: optimal solution found
-//                  1: maximum number of PMM iterations reached
-//                  2: maximum number of SSN iterations reached
-//                  3: termination due to line search failure
-//                  4: termination due to time limit
+// A class containing the solution of the KSP_QP solver:
+//    .opt     -> TerminationStatus (see solution.hpp) indicating the termination status
 //    .x       -> Optimal primal solution vector
 //    .y1      -> Lagrangian multipliers corresponding to Ax = b
 //    .y2      -> Lagrangian multipliers corresponding to Bx = w
@@ -58,7 +53,7 @@
 //    .smw_count   -> number of SMW preconditioner applications performed to terminate
 //    .pmm_tol_achieved -> final tolerance achieved by PMM
 //    .ssn_tol_achieved -> final tolerance achieved by SSN
-//    .setup_time       -> wall-clock time in seconds spent in the SSN_PMM constructor
+//    .setup_time       -> wall-clock time in seconds spent in the KSP_QP constructor
 //    .solve_time       -> wall-clock time in seconds spent in solve()
 //    .run_time         -> setup_time + solve_time
 //    .linesearch_fail  -> number of linesearch failures
@@ -66,7 +61,7 @@
 // --------------------------------------------------------------
 
 template <typename T>
-class SSN_PMM {
+class KSP_QP {
 public:
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using ResVec = Eigen::Matrix<T, 4, 1>;
@@ -102,8 +97,8 @@ public:
     // Pre-allocated scratch vectors for compute_residual_unscaled_inf_norms
     Vec A_tr_y1_scratch_, B_tr_y2_scratch_;         // size N
     Vec num_scratch_;                               // size N
-    Vec proj_K_scratch_, proj_K_unscaled_scratch_;  // size N
-    Vec proj_W_scratch_, proj_W_unscaled_scratch_;  // size l
+    Vec proj_K_unscaled_scratch_;                   // size N
+    Vec proj_W_unscaled_scratch_;                   // size l
     Vec Ax_unscaled_scratch_;                       // size M
     Vec z_unscaled_scratch_, num_unscaled_scratch_; // size N
     Vec x_unscaled_scratch_;                        // size N
@@ -111,6 +106,10 @@ public:
 
     T inf = std::numeric_limits<T>::infinity();
     T eps_zero = T(100) * std::numeric_limits<T>::epsilon(); // ~2.2e-14 for double
+
+    // Ruiz scaling constants (see ruiz_scaling() in ksp_qp.tpp)
+    static constexpr int kMaxRuizIter = 10;
+    static constexpr T   kRuizTol     = T(1e-3);
 
     // Constant parameters
     T tol = 1e-6;
@@ -120,11 +119,13 @@ public:
     T eps_limit = 1e-3 * tol;
     T mu_limit = 1e9;
     T rho_limit = 1e9;
-    T eps_pinf = 1e-1 * tol;
-    T eps_dinf = 1e-1 * tol;
     T alpha = 0.95;
     double time_limit = 60.0; // in seconds
     int linesearch_fail = 0;
+
+    // Primal/dual infeasibility certificate tolerances.
+    T eps_pinf = 1e-1 * tol;
+    T eps_dinf = 1e-1 * tol;
 
     // Updated parameters
     T mu0 = 1e0;
@@ -134,29 +135,44 @@ public:
     T ssn_tol = 1e-2;
      
     // Outputs:
-    int opt = -1;
+    TerminationStatus opt = TerminationStatus::NumericalError;
     Vec x, y1, y2, z;
     T obj_val;
     int pmm_iter, ssn_iter;
     int krylov_iter = 0, fact = 0, krylov_fail = 0;
     T pmm_tol_achieved, ssn_tol_achieved;
     ResVec res_norms;
-    ResVec res_norms_scaled;
-    bool ldlt_used = false;
+    bool kkt_ldlt_used = false; // mirrors SSN::kkt_ldlt_used: was the full-KKT LDLT fallback used
     double setup_time = 0.0;   // wall-clock time spent in this constructor, in seconds
     bool setup_failed = false; // true if an error occurred during setup
+
+    // Clock used for setup_time/solve_time and the time_limit check in solve(); overridable so
+    // tests can inject a deterministic fake clock instead of depending on real wall-clock timing.
+    std::function<std::chrono::steady_clock::time_point()> now_ = [] { return std::chrono::steady_clock::now(); };
+
+    // Interruption check, polled once per PMM iteration in solve() (and forwarded into the inner
+    // SSN solve, polled once per SSN iteration too). Defaults to never-interrupted; overridable
+    // (e.g. by tests, or by a caller wiring up a signal handler) to request early termination.
+    std::function<bool()> interrupted_ = [] { return false; };
 
     // Printing
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::NONE;
 
+    // Iteration-trace hook; defaults to the class's own print() call. Overridable (e.g. by tests)
+    // to capture the trace without redirecting std::cout.
+    std::function<void(const IterationRecord<T>&)> report_ = [this](const IterationRecord<T>& r) {
+        print<T, Vec>(when, what, r.pmm_iter, r.ssn_iter, r.krylov_iter, r.fact, r.obj_val, r.res_norms,
+                      r.ssn_res, r.mu, r.rho, r.eps, r.linesearch_fail, r.krylov_fail, r.show_pmm_iter);
+    };
+
     // Constructor
-    SSN_PMM(const Problem<T>& problem)
+    KSP_QP(const Problem<T>& problem)
     : tol(problem.tol), max_iter(problem.max_iter), time_limit(problem.time_limit),
       n(problem.n), m(problem.m), l(problem.l), obj_const(problem.obj_const),
       when(problem.when), what(problem.what)
     {
-        auto setup_start = std::chrono::steady_clock::now();
+        auto setup_start = now_();
 
         try {
             get_Q_info(problem.Q);
@@ -201,12 +217,12 @@ public:
             A_tr = A.transpose();
             B_tr = B.transpose();
         } catch (const std::exception& e) {
-            std::cerr << "[SSN_PMM] Setup error: " << e.what() << "\n";
+            std::cerr << "[KSP_QP] Setup error: " << e.what() << "\n";
             setup_failed = true;
-            opt = -1;
+            opt = TerminationStatus::NumericalError;
         }
 
-        auto setup_end = std::chrono::steady_clock::now();
+        auto setup_end = now_();
         setup_time = time_diff_s(setup_start, setup_end); // in seconds
     }
 
@@ -228,13 +244,34 @@ public:
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
     }
-    ResVec compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx, ResVec& res_norms_scaled);
+    ResVec compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx);
     T objective_value(const Vec& x_orig);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
-    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, int ssn_opt, T ssn_res, int ssn_inner_iters);
+    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, typename SSN<T>::TerminationStatus ssn_opt, T ssn_res, int ssn_inner_iters);
     bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
     bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     Solution<T> solve();
+
+    // Accepts the SSN inner solve's iterate (x, y2) and refreshes the Ax/Bx/Qx/Adx/Bdx scratch
+    // vectors used by the infeasibility checks and residual computation that follow it in solve().
+    // Directly unit-tested (see tests/test_ksp_qp.cpp) in addition to being exercised via solve().
+    void accept_ssn_iterate(const SSN<T>& NS);
+    // Updates y1/z (and their PMM-level deltas, delta_y1/delta_z -- owned by solve(), since they
+    // must persist as the primal/dual infeasibility certificate across PMM iterations even when
+    // this update is skipped) from the newly-accepted x, y2 -- but only when the SSN solve was
+    // accurate enough (NS.opt == SSN<T>::TerminationStatus::Optimal, or ssn_tol_achieved within
+    // 100x pmm_tol_achieved); otherwise y1/z/delta_y1/delta_z are all carried forward unchanged
+    // from the previous PMM iteration.
+    void update_multipliers_if_accurate(typename SSN<T>::TerminationStatus ssn_opt, Vec& delta_y1, Vec& delta_z);
+
+    // Releases scratch/derived buffers not referenced by the still-alive SSN<T> NS instance in
+    // solve() (NS holds references into Q_diag/L/A/B/A_tr/B_tr/c/b/D2_ext_inv/D1B_diag_inv/
+    // lx/ux/lw/uw -- those must never be freed here). Only called on early-exit statuses where the
+    // caller gave up rather than converging (TerminationStatus::Interrupted, TimeLimit) -- other
+    // exit paths leave the object to be destroyed normally within the same call chain, so there's
+    // no meaningful gap for this to close. Called right where the main loop breaks, so this
+    // iteration's helper calls have already completed and won't run again.
+    void free_scratch_memory();
 };
 
-#include "SSN_PMM.tpp"
+#include "ksp_qp.tpp"

@@ -8,7 +8,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
-#include "Problem.hpp"
+#include "problem.hpp"
 
 template <typename T>
 struct TestResult {
@@ -36,12 +36,12 @@ struct TestResult {
 };
 
 template <typename T>
-void print_feasibility(const PDPMMdata<T>& pd,
+void print_feasibility(const KSPQPdata<T>& pd,
                        const Eigen::Matrix<T, Eigen::Dynamic, 1>& x,
                        const T tol) {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
-    std::cout << "\nChecking feasibility of solution x from PMM_SSN solver:\n";
+    std::cout << "\nChecking feasibility of solution x from KSP_QP solver:\n";
 
     std::cout << "  ||Ax - b||_2 = ";
     if (pd.A.rows() == 0) {

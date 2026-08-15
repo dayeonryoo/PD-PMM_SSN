@@ -1,12 +1,14 @@
 #pragma once
 #include <string>
 #include <limits>
+#include <functional>
+#include <optional>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <unsupported/Eigen/IterativeSolvers>
-#include "Printing.hpp"
-#include "SchurOperator.hpp"
-#include "SchurPreconditioner.hpp"
+#include "printing.hpp"
+#include "schur_operator.hpp"
+#include "schur_preconditioner.hpp"
 
 // TIMER: master switch for per-step SSN-loop timer.
 // Set to 1 (here, or via -DSSN_ENABLE_TIMERS=1) to print a step-by-step timer of solve_ssn();
@@ -32,6 +34,46 @@ struct SsnScopedTimer {
 #endif
 
 
+// ----- exact_line_search: testable function, independent of SSN class -----
+template <typename T> 
+struct SsnBreakpoint { T t; T slope_change; }; 
+
+template <typename T>
+struct SsnLineSearchParams {
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using SpMat = Eigen::SparseMatrix<T>;
+
+    T mu, rho, alpha, eps_zero, eps_direction, inf;
+    int Q_info, N, l;
+    const Vec& lx; const Vec& ux; const Vec& lw; const Vec& uw;
+    const Vec& z;         // PMM box multiplier
+    const Vec& y2;        // PMM outer iterate (distinct from exact_line_search's y2_curr argument)
+    const Vec& x;         // PMM outer iterate (distinct from exact_line_search's x_curr argument)
+    const Vec& c;
+    const Vec& A_tr_y1;
+    const Vec& Q_diag;
+    const SpMat& A_tr;
+    const Vec& b;
+};
+
+template <typename T>
+T exact_line_search(const SsnLineSearchParams<T>& p,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& x_curr,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& y2_curr,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& dx,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& dy2,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& Ax_curr,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& Bx_curr,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& Adx,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& Bdx,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& dist_K_s,
+                     const Eigen::Matrix<T, Eigen::Dynamic, 1>& dist_W_v,
+                     Eigen::Matrix<T, Eigen::Dynamic, 1>& ls_s_scratch,
+                     Eigen::Matrix<T, Eigen::Dynamic, 1>& ls_v_scratch,
+                     Eigen::Matrix<T, Eigen::Dynamic, 1>& ls_dv_scratch,
+                     std::vector<SsnBreakpoint<T>>& breakpoints_scratch);
+// -------------------------------------------------------------------------------
+
 template <typename T>
 class SSN {
 public:
@@ -41,7 +83,17 @@ public:
     using BoolArr = Eigen::Array<bool, Eigen::Dynamic, 1>;
     using Triplet = Eigen::Triplet<T>;
 
-    struct Breakpoint { T t; T slope_change; };
+    using Breakpoint = SsnBreakpoint<T>;
+
+    // Inner (SSN-level) termination status; distinct from the outer TerminationStatus in solution.hpp.
+    enum class TerminationStatus : int {
+        Optimal            = 0, // genuine optimal achieved, or weaker optimal achieved by line search or stagnation check
+        MaxInnerIterations = 1, // maximum number of SSN inner iterations reached without convergence
+        LineSearchFailed   = 2, // line search failed even after the steepest-descent fallback
+        Stagnated          = 3, // ||grad M|| stagnated for 10 iterations without a confirmed optimum
+        Interrupted        = 4, // interrupted_() returned true before ssn_max_in_iter was reached
+        TimeLimit          = 5, // time_limit_exceeded_() returned true before ssn_max_in_iter was reached
+    };
 
     // Inputs
     const int Q_info;
@@ -58,8 +110,8 @@ public:
 
     // Useful vectors and matrices
     T inf = std::numeric_limits<T>::infinity();
-    T eps_zero      = T(100)  * std::numeric_limits<T>::epsilon();  // relative tolerance for boundary/slope checks.
-    T eps_direction = std::sqrt(std::numeric_limits<T>::epsilon()); // threshold for skipping near-zero Newton step components.
+    T eps_zero      = T(100)  * std::numeric_limits<T>::epsilon();  // relative tolerance for boundary/slope checks
+    T eps_direction = std::sqrt(std::numeric_limits<T>::epsilon()); // threshold for skipping near-zero Newton step components
     Vec ones_N, ones_M, ones_l;
 
     const SpMat& A_tr, B_tr;
@@ -72,7 +124,7 @@ public:
     RowMajorSpMat B_rm;              // Row-major B for rebuilding G.
     std::vector<Triplet> G_A_trips_; // A's contribution to G, computed once since A is const.
 
-    // Scratch triplet buffers for rebuild_G() and solve_using_ldlt().
+    // Scratch triplet buffers for rebuild_G() and solve_using_ldlt()
     std::vector<Triplet> B_act_trips_, B_inact_trips_, G_trips_;
     std::vector<Triplet> ldlt_trip_;
 
@@ -80,8 +132,19 @@ public:
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::NONE;
 
+    // Iteration-trace hook
+    std::function<void(const IterationRecord<T>&)> report_ = [this](const IterationRecord<T>& r) {
+        print<T, Vec>(when, what, r.pmm_iter, r.ssn_iter, r.krylov_iter, r.fact, r.obj_val, r.res_norms,
+                      r.ssn_res, r.mu, r.rho, r.eps, r.linesearch_fail, r.krylov_fail, r.show_pmm_iter);
+    };
+
+    // Interruption and time-limit checks, both polled once per SSN inner iteration in solve_ssn().
+    std::function<bool()> interrupted_ = [] { return false; };
+    std::function<bool()> time_limit_exceeded_ = [] { return false; };
+
     // Outputs
-    int opt, iter, ssn_iter;
+    TerminationStatus opt;
+    int iter, ssn_iter;
     T tol_achieved, obj_val;
     int krylov_iter = 0, fact = 0, smw_count = 0;
     int linesearch_fail = 0, krylov_fail = 0;
@@ -104,18 +167,19 @@ public:
     double timer_state_update   = 0.0; // x, y2 update + termination check
 #endif
 
-    // Conjugate gradient parameters
+    // Kylov (conjugate gradient) parameters
     T krylov_tol = 1e-12;
     int krylov_max_in_iter = 100;
 
-    // Iterative refinement of the augmented system solve.
+    // Iterative refinement parameters
     int refine_max_iter = 3;
     T refine_rel_tol = 1e-10;
     T refine_abs_tol = 1e-12;
 
-    bool use_ldlt = false;        // Factorize a preconditioner via LDLT.
-    int ldlt_decisions_made_ = 0; // choose_ldlt() call count; locked after the first 3.
-    bool ldlt_used = false;       // PCG on normal eqn failed so LDLT on KKT system was used at least once.
+    // Preconditioner factorization method
+    bool schur_use_ldlt = false;        // choose_schur_ldlt()'s return; default=false means use Cholesky to factorize a preconditioner.
+    int schur_ldlt_decisions_made_ = 0; // choose_schur_ldlt() call count; locked after the first 3.
+    static constexpr double kSchurLdltRatioThreshold = 0.1; // schur_use_ldlt=true if the estimated work ratio is below this cutoff.
 
     using CGSolver = Eigen::ConjugateGradient<
         SchurOperator<T>,
@@ -123,13 +187,6 @@ public:
         SchurPreconditioner<T>
     >;
     CGSolver cg;
-
-    using MINRESSolver = Eigen::MINRES<
-        SchurOperator<T>,
-        Eigen::Lower | Eigen::Upper,
-        SchurPreconditioner<T>
-    >;
-    MINRESSolver minres;
 
     Vec prev_dy_;
     Vec prev_dx_primal_;
@@ -146,6 +203,7 @@ public:
     Vec dy2_inactive_W_;                      // size l (set to max size)
     Vec r1_, r2_;                             // size N, M+n_active_W
     Vec dxdy_;                                // size N+M+n_active_W
+    Vec dx_;                                  // size N (Newton direction for x, split from dxdy_)
     Vec dy2_;                                 // size l
     Vec Adx_, Bdx_;                           // size M, l
     Vec grad_L_;                              // size N+l
@@ -159,19 +217,19 @@ public:
     Vec cg_dx_;                               // size n = N
     Vec ldlt_solve_rhs_;                      // size n+s
 
-    // Stored LDLT factorization for the KKT system [-H, G^T; G, (1/mu)I].
-    // ldlt_pattern_dirty_: true when K's dimension changed (n_active_W changed), requires analyzePattern.
-    // ldlt_numeric_dirty_: true when K's values changed (H_diag or G rows swapped), requires factorize.
-    Eigen::SimplicialLDLT<SpMat> ldlt_;
-    bool ldlt_pattern_dirty_ = true;
-    bool ldlt_numeric_dirty_ = true;
+    // Fallback of PCG: LDLT on KKT system [-H, G^T; G, (1/mu)I].
+    bool kkt_ldlt_used = false; // True means LDLT on KKT system was used at least once.
 
     // Cached KKT matrix K = [-H, G^T; G, (1/mu)I].
     // When active_W changes (G's sparsity changes): rebuild K from triplets.
-    // When only H_diag or mu changes (diagonal-only update): set diagonal entries in-place,
-    // skipping the triplet build, setFromTriplets, and makeCompressed calls.
+    // When only H_diag or mu changes (diagonal-only update): set diagonal entries in-place.
     SpMat K_ldlt_;
     bool K_ldlt_built_ = false;
+
+    // Stored LDLT factorization of K.
+    Eigen::SimplicialLDLT<SpMat> ldlt_;
+    bool ldlt_pattern_dirty_ = true; // means K's dimension changed (n_active_W changed), requires analyzePattern.
+    bool ldlt_numeric_dirty_ = true; // means K's values changed (H_diag or G rows swapped), requires factorize.
 
     SSN(const int Q_info, const Vec& Q_diag, const SpMat& L,
         const SpMat& A, const SpMat& B, const SpMat& A_tr, const SpMat& B_tr,
@@ -261,14 +319,27 @@ public:
     void split_by_mask(const Vec& u, const BoolArr& mask, int t, Vec& u_sel, Vec& u_unsel);
     void rebuild_G();
     void retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);
-    bool choose_ldlt(const SpMat& G, const BoolArr& active_K);
-    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool use_ldlt);
+    bool choose_schur_ldlt(const SpMat& G, const BoolArr& active_K);
+    Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool schur_use_ldlt);
     Vec solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
-    T exact_line_search(const Vec& x_curr, const Vec& y2_curr, const Vec& dx, const Vec& dy2,
-                        const Vec& Ax_curr, const Vec& Bx_curr, const Vec& Adx, const Vec& Bdx,
-                        const Vec& dist_K_u, const Vec& dist_W_v);
+    void iterative_refine_dxdy();
+    SsnLineSearchParams<T> make_line_search_params() const;
     void solve_ssn(const T ssn_tol);
 
+    // Tracks active set change; computed once per SSN iteration in prepare_newton_system() call.
+    struct ActiveSetDelta { bool k_changed; bool w_changed; };
+
+    // update_prec=true means rebuild P; prec_pattern_changed=true means analyzePattern() is needed.
+    struct PrepResult { bool update_prec; bool prec_pattern_changed; };
+
+    enum class LineSearchOutcome { Proceed, AcceptOptimal, Fail };
+    struct LineSearchResult { LineSearchOutcome outcome; T tau; };
+
+    PrepResult prepare_newton_system();
+    void solve_newton_direction(bool update_prec, bool prec_pattern_changed);
+    LineSearchResult line_search_with_steepest_descent_fallback(T ssn_tol);
+    void update_iterate(T tau, int ssn_iter_count);
+    std::optional<TerminationStatus> check_ssn_termination(T ssn_tol, int& stagnation, T& prev_tol_achieved);
 };
 
-#include "SSN.tpp"
+#include "ssn.tpp"

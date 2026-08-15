@@ -1,5 +1,5 @@
 """
-Benchmark SSN-PMM vs QPALM vs OSQP on L2-regularized PDE-constrained QP problems (see include/PDEgenerator.hpp).
+Benchmark KSP-QP vs QPALM vs OSQP on L2-regularized PDE-constrained QP problems (see include/PDEgenerator.hpp).
 
 Three named tables are produced:
 
@@ -24,7 +24,7 @@ Step 1 - Install dependencies
 ----------------------------
   pip install numpy scipy qpalm osqp
 
-Step 2 - Build the SSN-PMM Python binding (if not already built)
+Step 2 - Build the KSP-QP Python binding (if not already built)
 -----------------------------------------------------------------
   cd python && mkdir -p build && cd build
   cmake .. -DPython3_EXECUTABLE=$(which python3)
@@ -38,7 +38,7 @@ python3 benchmark_smooth_pde.py
 Settings: tol = 1e-6, time limit = 600 s (10 min), max iterations = infinity by default.
         --root:       to change the output directory (default: results/).
         --out:       to change the output file prefix (default: smooth_*.csv).
-        --solver:     to select which solvers to run among ssn-pmm, qpalm, osqp (default: all three).
+        --solver:     to select which solvers to run among ksp-qp, qpalm, osqp (default: all three).
         --table:      to select which tables to run among poisson_control, poisson_state, convdiff_both (default: all three).
         --nc:         to select which grid exponents to run for vary-n tables (default: 7 8 9 10; see sweep parameters).
         --tol:        to change the solver tolerance (default: 1e-9).
@@ -56,17 +56,17 @@ HERE = Path(__file__).parent.resolve()
 sys.path.insert(0, str(HERE))
 
 try:
-    import ssn_pmm_bind
+    import ksp_qp_bind
 except ModuleNotFoundError:
     sys.exit(
-        "Cannot find ssn_pmm_bind. "
+        "Cannot find ksp_qp_bind. "
         "Build it first:\n"
         "  cd python && mkdir build && cd build\n"
         "  cmake .. && cmake --build . --config Release"
     )
 
 from benchmark_common import (
-    pdpmm_to_qpalm,
+    kspqp_to_qpalm,
     run_qpalm,
     run_osqp,
     run_solvers,
@@ -125,7 +125,7 @@ def _fmt_bound(v: float) -> str:
 # ---------------------------------------------------------------------------
 
 def _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps):
-    return ssn_pmm_bind.generate_pde_l2_qp(
+    return ksp_qp_bind.generate_pde_l2_qp(
         choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps
     )
 
@@ -136,7 +136,7 @@ def _worker_ssn(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
     try:
         pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps)
         result["n_vars"] = pd_data["n"]
-        result["res"] = ssn_pmm_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
+        result["res"] = ksp_qp_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)
@@ -148,7 +148,7 @@ def _worker_qpalm(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
     result = {}
     try:
         pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps)
-        qpalm_data = pdpmm_to_qpalm(pd_data)
+        qpalm_data = kspqp_to_qpalm(pd_data)
         result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
@@ -161,7 +161,7 @@ def _worker_osqp(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
     result = {}
     try:
         pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps)
-        qpalm_data = pdpmm_to_qpalm(pd_data)
+        qpalm_data = kspqp_to_qpalm(pd_data)
         result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
@@ -303,9 +303,9 @@ def main() -> None:
                         choices=ALL_TABLES, metavar="TABLE",
                         help=f"Which tables to run (default: all). "
                              f"Choices: {' '.join(ALL_TABLES)}")
-    parser.add_argument("--solver",     nargs="+",  default=["ssn-pmm", "qpalm", "osqp"],
-                        choices=["ssn-pmm", "qpalm", "osqp"], metavar="SOLVER",
-                        help="Solvers to run (default: all three). Choices: ssn-pmm qpalm osqp")
+    parser.add_argument("--solver",     nargs="+",  default=["ksp-qp", "qpalm", "osqp"],
+                        choices=["ksp-qp", "qpalm", "osqp"], metavar="SOLVER",
+                        help="Solvers to run (default: all three). Choices: ksp-qp qpalm osqp")
     parser.add_argument("--cooldown",   type=float, default=0.0,
                         help="Seconds to sleep between solver runs to prevent CPU throttling (default: 0)")
     parser.add_argument("--out",       default="",

@@ -11,12 +11,12 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
-#include "SSN_PMM.hpp"
-#include "Problem.hpp"
-#include "Printing.hpp"
-#include "MpsParser.hpp"
-#include "RecordResult.hpp"
-#include "CliArgs.hpp"
+#include "ksp_qp.hpp"
+#include "problem.hpp"
+#include "printing.hpp"
+#include "mps_format_parser.hpp"
+#include "record_result.hpp"
+#include "cli_args.hpp"
 
 using T = double;
 using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
@@ -28,7 +28,7 @@ using Triplet = Eigen::Triplet<T>;
 int main(int argc, char** argv) {
     if (cli::has_flag(argc, argv, "--help") || cli::has_flag(argc, argv, "-h")) {
         std::cout <<
-            "Usage: ssn_pmm_maros_meszaros [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE] [--cooldown S]\n"
+            "Usage: ksp_qp_maros_meszaros [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE] [--cooldown S]\n"
             "  Solves one Maros-Meszaros QP from DIR/PROBLEM.SIF, or sweeps the whole set with --name all.\n"
             "  --root DIR       directory containing the .SIF files (default: data/maros_meszaros/)\n"
             "  --name PROBLEM   problem name, without extension, or \"all\" to sweep every QP with a\n"
@@ -214,13 +214,13 @@ int main(int argc, char** argv) {
 
             try {
                 // Read problem data from the file
-                MpsParser<T> parser;
+                MpsFormatParser<T> parser;
                 ParsedModel<T> model = parser.parse(filename);
-                PDPMMdata<T> pd = parser.to_pdpmm(model);
+                KSPQPdata<T> pd = parser.to_kspqp(model);
 
                 // Construct the problem and solver
                 Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
-                SSN_PMM<T> solver(prob);
+                KSP_QP<T> solver(prob);
 
                 // Solve the QP
                 Solution<T> sol = solver.solve();
@@ -233,11 +233,11 @@ int main(int argc, char** argv) {
                 bool diverged = sol.pmm_tol_achieved > 1e0;
 
                 // Record result
-                std::string system = solver.ldlt_used ? "L" : "S";
+                std::string system = solver.kkt_ldlt_used ? "L" : "S";
 
                 TestResult<T> result = {
                     system,
-                    agree, sol.opt, diverged, qp_name,
+                    agree, static_cast<int>(sol.opt), diverged, qp_name,
                     abs_err, rel_err,
                     sol.obj_val, sol.pmm_iter, sol.ssn_iter, sol.krylov_iter, sol.fact, sol.smw_count,
                     sol.pmm_tol_achieved, sol.ssn_tol_achieved,
@@ -273,36 +273,16 @@ int main(int argc, char** argv) {
 
     std::cout << "==================== Solving " + name << " ====================\n";
 
-    MpsParser<T> parser;
+    MpsFormatParser<T> parser;
     ParsedModel<T> model = parser.parse(filename);
-    PDPMMdata<T> pd = parser.to_pdpmm(model);
+    KSPQPdata<T> pd = parser.to_kspqp(model);
 
     Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
-    SSN_PMM<T> solver(prob);
+    KSP_QP<T> solver(prob);
 
     // Solve:
     Solution<T> sol = solver.solve();
     sol.print_summary();
-    std::cout << "\nPMM solver took " << sol.run_time << " s.\n";
-
-    // Check feasibility
-    // print_feasibility(pd, sol.x, tol);
-
-    // Check convergence
-    if (sol.opt == 0) {
-        std::cout << "Solver converged!\n";
-    } else if (sol.opt == 3) {
-        std::cout << "Lineserach failed. Solver terminated.\n";
-    } else if (sol.opt < 0) {
-        std::cout << "Solver detected infeasibility.\n";
-    } else  if (sol.opt == 4){
-        std::cout << "Solver hit the time limit.\n";
-    } else {
-        std::cout << "Solver hit the max iteration before converging.\n";
-    }
-    if (sol.opt <= 0 && sol.pmm_tol_achieved > 1e0) {
-        std::cout << "Solver possibly diverged.\n";
-    }
 
     return 0;
 }

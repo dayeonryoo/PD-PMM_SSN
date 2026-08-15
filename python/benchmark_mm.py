@@ -1,5 +1,5 @@
 """
-Benchmark SSN-PMM vs QPALM vs OSQP on the Maros-Meszaros QP test set.
+Benchmark KSP-QP vs QPALM vs OSQP on the Maros-Meszaros QP test set.
 
 Outputs
 -------
@@ -13,9 +13,9 @@ Step 1 - Install Python dependencies
 -------------------------------------
   pip install qpalm osqp numpy scipy matplotlib pandas
 
-Step 2 - Build the SSN-PMM Python binding
+Step 2 - Build the KSP-QP Python binding
 ------------------------------------------
-  All commands are run from the PD-PMM_SSN/python/ directory.
+  All commands are run from the KSP-QP/python/ directory.
 
   mkdir build
   cd build
@@ -23,7 +23,7 @@ Step 2 - Build the SSN-PMM Python binding
   cmake --build . --config Release
   cd ..
 
-  This produces ssn_pmm_bind.cpython-<tag>-darwin.so in python/.
+  This produces ksp_qp_bind.cpython-<tag>-darwin.so in python/.
   You only need to rebuild if the C++ solver source changes.
 
 Step 3 - Run the benchmark
@@ -33,7 +33,7 @@ Step 3 - Run the benchmark
 Settings: tol = 1e-6, time limit = 60 s, max iterations = infinity.
         --root:       to change the output directory (default: results/).
         --out:        to change the output file prefix (default: comparison_mm).
-        --solver:     to select which solvers to run among ssn-pmm, qpalm, osqp (default: all three).
+        --solver:     to select which solvers to run among ksp-qp, qpalm, osqp (default: all three).
         --tol:        to change the solver tolerance (default: 1e-6).
         --time-limit: to change the solver time limit in seconds (default: 60).
         --cooldown:   to change the cooldown time in seconds between solver runs (default: 0).
@@ -59,17 +59,17 @@ HERE = Path(__file__).parent.resolve()
 sys.path.insert(0, str(HERE))
 
 try:
-    import ssn_pmm_bind
+    import ksp_qp_bind
 except ModuleNotFoundError:
     sys.exit(
-        "Cannot find ssn_pmm_bind. "
+        "Cannot find ksp_qp_bind. "
         "Build it first:\n"
         "  cd python && mkdir build && cd build\n"
         "  cmake .. && cmake --build . --config Release"
     )
 
 from benchmark_common import (
-    pdpmm_to_qpalm,
+    kspqp_to_qpalm,
     run_qpalm,
     run_osqp,
     _run_isolated,
@@ -274,9 +274,9 @@ def plot_performance_profile(csv_path: Path, out_prefix: Path,
                              tol: float = 1e-6, time_limit: float = 600.0,
                              solvers: set | None = None) -> None:
     if solvers is None:
-        solvers = {"ssn-pmm", "qpalm", "osqp"}
+        solvers = {"ksp-qp", "qpalm", "osqp"}
     _meta = [
-        ("ssn-pmm", "ssn_solved",   "ssn_time",   "SSN-PMM", "#1f77b4", "-"),
+        ("ksp-qp", "ssn_solved",   "ssn_time",   "KSP-QP", "#1f77b4", "-"),
         ("qpalm",   "qpalm_solved", "qpalm_time", "QPALM",   "#ff7f0e", "--"),
         ("osqp",    "osqp_solved",  "osqp_time",  "OSQP",    "#2ca02c", "-."),
     ]
@@ -325,13 +325,13 @@ def plot_performance_profile_iters(csv_path: Path, out_prefix: Path,
                                    solvers: set | None = None) -> None:
     """Dolan-Moré performance profile using iteration counts as the metric.
 
-    SSN-PMM uses pmm_iter (total PMM iterations).
+    KSP-QP uses pmm_iter (total PMM iterations).
     QPALM and OSQP use their native iteration counters.
     """
     if solvers is None:
-        solvers = {"ssn-pmm", "qpalm", "osqp"}
+        solvers = {"ksp-qp", "qpalm", "osqp"}
     _meta = [
-        ("ssn-pmm", "ssn_solved",   "pmm_iter",   "SSN-PMM", "#1f77b4", "-"),
+        ("ksp-qp", "ssn_solved",   "pmm_iter",   "KSP-QP", "#1f77b4", "-"),
         ("qpalm",   "qpalm_solved", "qpalm_iter", "QPALM",   "#ff7f0e", "--"),
         ("osqp",    "osqp_solved",  "osqp_iter",  "OSQP",    "#2ca02c", "-."),
     ]
@@ -380,18 +380,18 @@ def plot_performance_profile_inner_iters(csv_path: Path, out_prefix: Path,
                                          solvers: set | None = None) -> None:
     """Dolan-Moré performance profile using inner iteration counts.
 
-    SSN-PMM uses ssn_iter (total SSN Newton iterations).
+    KSP-QP uses ssn_iter (total SSN Newton iterations).
     QPALM uses qpalm_inner_iter (total inner QPALM iterations).
     OSQP is excluded (no meaningful inner iterations).
     """
     if solvers is None:
-        solvers = {"ssn-pmm", "qpalm"}
-    solvers = solvers & {"ssn-pmm", "qpalm"}   # inner iters only defined for these two
+        solvers = {"ksp-qp", "qpalm"}
+    solvers = solvers & {"ksp-qp", "qpalm"}   # inner iters only defined for these two
     if not solvers:
         return
 
     _meta = [
-        ("ssn-pmm", "ssn_solved",   "ssn_iter",         "SSN-PMM", "#1f77b4", "-"),
+        ("ksp-qp", "ssn_solved",   "ssn_iter",         "KSP-QP", "#1f77b4", "-"),
         ("qpalm",   "qpalm_solved", "qpalm_inner_iter", "QPALM",   "#ff7f0e", "--"),
     ]
     df = pd.read_csv(csv_path)
@@ -441,8 +441,8 @@ def plot_performance_profile_inner_iters(csv_path: Path, out_prefix: Path,
 def _worker_ssn_mm(sif_path, tol, time_limit, max_iter, conn):
     result = {}
     try:
-        pd_data = ssn_pmm_bind.parse_sif(sif_path)
-        result["res"] = ssn_pmm_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
+        pd_data = ksp_qp_bind.parse_sif(sif_path)
+        result["res"] = ksp_qp_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)
@@ -452,8 +452,8 @@ def _worker_ssn_mm(sif_path, tol, time_limit, max_iter, conn):
 def _worker_qpalm_mm(sif_path, tol, time_limit, conn):
     result = {}
     try:
-        pd_data = ssn_pmm_bind.parse_sif(sif_path)
-        qpalm_data = pdpmm_to_qpalm(pd_data)
+        pd_data = ksp_qp_bind.parse_sif(sif_path)
+        qpalm_data = kspqp_to_qpalm(pd_data)
         result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
@@ -464,8 +464,8 @@ def _worker_qpalm_mm(sif_path, tol, time_limit, conn):
 def _worker_osqp_mm(sif_path, tol, time_limit, conn):
     result = {}
     try:
-        pd_data = ssn_pmm_bind.parse_sif(sif_path)
-        qpalm_data = pdpmm_to_qpalm(pd_data)
+        pd_data = ksp_qp_bind.parse_sif(sif_path)
+        qpalm_data = kspqp_to_qpalm(pd_data)
         result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
         result["error"] = str(e)
@@ -482,7 +482,7 @@ def main() -> None:
     parser.add_argument(
         "--root",
         default=str(HERE.parent),
-        help="Path to the PD-PMM_SSN project root (default: parent of this script)",
+        help="Path to the KSP-QP project root (default: parent of this script)",
     )
     parser.add_argument(
         "--tol",        type=float, default=1e-6,  help="Primal-dual tolerance (default: 1e-6)"
@@ -494,9 +494,9 @@ def main() -> None:
         "--out", default="", help="Prefix for output filenames (e.g. '0508' → '0508_comparison_mm.csv')"
     )
     parser.add_argument(
-        "--solver", nargs="+", default=["ssn-pmm", "qpalm", "osqp"],
-        choices=["ssn-pmm", "qpalm", "osqp"], metavar="SOLVER",
-        help="Solvers to run (default: all three). Choices: ssn-pmm qpalm osqp",
+        "--solver", nargs="+", default=["ksp-qp", "qpalm", "osqp"],
+        choices=["ksp-qp", "qpalm", "osqp"], metavar="SOLVER",
+        help="Solvers to run (default: all three). Choices: ksp-qp qpalm osqp",
     )
     parser.add_argument(
         "--cooldown", type=float, default=0.0,
@@ -514,7 +514,7 @@ def main() -> None:
     tol        = args.tol
     time_limit = args.time_limit
     cooldown   = args.cooldown
-    max_iter   = 10_000_000_000   # effectively infinite for SSN-PMM
+    max_iter   = 10_000_000_000   # effectively infinite for KSP-QP
 
     prefix = f"{args.out}_" if args.out else ""
     csv_path = result_dir / f"{prefix}comparison_mm.csv"
@@ -542,11 +542,11 @@ def main() -> None:
         row: dict = {"name": name}
         rows.append(row)
 
-        # ---- SSN-PMM ------------------------------------------------
-        if "ssn-pmm" in solvers:
+        # ---- KSP-QP ------------------------------------------------
+        if "ksp-qp" in solvers:
             ssn_out = _run_isolated(_worker_ssn_mm, (sif_path, tol, time_limit, max_iter))
             if "error" in ssn_out:
-                print(f"  SSN-PMM : ERROR — {ssn_out['error']}")
+                print(f"  KSP-QP : ERROR — {ssn_out['error']}")
                 row.update(ssn_status=-99, ssn_solved=0, ssn_time=np.inf,
                            pmm_iter=np.inf, ssn_iter=np.inf,
                            ssn_obj=np.nan, pmm_tol_achieved=np.nan)
@@ -560,7 +560,7 @@ def main() -> None:
                 row["ssn_obj"]          = r["obj_val"]
                 row["pmm_tol_achieved"] = r["pmm_tol_achieved"]
                 status_str = "OPTIMAL" if r["status"] == 0 else f"status={r['status']}"
-                print(f"  SSN-PMM : {status_str:12s}  t = {r['run_time']:.3f} s  "
+                print(f"  KSP-QP : {status_str:12s}  t = {r['run_time']:.3f} s  "
                       f"pmm={r['pmm_iter']} ssn={r['ssn_iter']}  "
                       f"tol={r['pmm_tol_achieved']:.2e}  obj = {r['obj_val']:.6g}")
             _flush()

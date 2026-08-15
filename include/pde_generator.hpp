@@ -1,4 +1,15 @@
 #pragma once
+
+#include <Eigen/Sparse>
+#include <Eigen/Dense>
+#include <vector>
+#include <array>
+#include <cmath>
+#include <limits>
+
+#include "fem_q1.hpp"
+#include "problem.hpp"
+
 /*-----------------------------------------------------------------------
 Q1 bilinear finite-element assembly and PDE-constrained QP generation.
 
@@ -11,17 +22,9 @@ Copyright (c) 2005 D.J. Silvester, H.C. Elman, A. Ramage
   nonzerobc_input.m  - IFISS function: DJS, JWP; 27 June 2012
 Copyright (c) 2012 D.J. Silvester, H.C. Elman, A. Ramage, J.W. Pearson
 
-See also FemQ1.hpp for the element-level kernels (shape/deriv/gauss_*)
+See also fem_q1.hpp for the element-level kernels (shape/deriv/gauss_*)
 and its own IFISS citations.
 -----------------------------------------------------------------------*/
-#include <Eigen/Sparse>
-#include <Eigen/Dense>
-#include <vector>
-#include <array>
-#include <cmath>
-#include <limits>
-#include "FemQ1.hpp"
-#include "Problem.hpp"
 
 namespace pdegen {
 
@@ -349,9 +352,9 @@ Constraints:
 (Gondzio, Pougkakiotis & Pearson 2022) 
 -----------------------------------------------------------------------*/
 template <typename T>
-static PDPMMdata<T> make_problem_l1l2_from_mats(
+static KSPQPdata<T> make_problem_l1l2_from_mats(
     const Eigen::SparseMatrix<T>& D_op,
-    const Eigen::SparseMatrix<T>& M_lump,
+    const Eigen::SparseMatrix<T>& M,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& yhat,
     T alpha1,
@@ -361,7 +364,7 @@ static PDPMMdata<T> make_problem_l1l2_from_mats(
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper = std::numeric_limits<T>::infinity()
 ) {
-    PDPMMdata<T> pb;
+    KSPQPdata<T> pb;
     using SpMat = typename Problem<T>::SpMat;
     using Vec   = typename Problem<T>::Vec;
     using Trip  = Eigen::Triplet<T>;
@@ -376,18 +379,18 @@ static PDPMMdata<T> make_problem_l1l2_from_mats(
     pb.l = np;
 
 
-    // --- Build R (lumped L1 weights) as row-sum of M_lump ---
+    // --- Build R (lumped L1 weights) as row-sum of M ---
     Vec R(np);
     R.setZero();
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             R(it.row()) += it.value();
         }
     }
 
     // --- c vector ---
     // c = 0.5 y^T M y - (M yhat)^T y + const
-    Vec Myhat = M_lump * yhat;
+    Vec Myhat = M * yhat;
 
     pb.obj_const = T(0.5) * yhat.dot(Myhat);
 
@@ -403,11 +406,11 @@ static PDPMMdata<T> make_problem_l1l2_from_mats(
     //      [ 0,  alpha2 M, -alpha2 M],
     //      [ 0, -alpha2 M,  alpha2 M]]
     std::vector<Trip> Qt;
-    Qt.reserve(std::size_t(1) * (M_lump.nonZeros() * 5));
+    Qt.reserve(std::size_t(1) * (M.nonZeros() * 5));
 
     // Insert M in y block
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             const int i = it.row();
             const int j = it.col();
             const T v   = it.value();
@@ -428,9 +431,9 @@ static PDPMMdata<T> make_problem_l1l2_from_mats(
     pb.Q.makeCompressed();
 
     // --- A x = b : PDE in terms of (y, u+, u-) ---
-    // A = [ D_op , -M_lump , +M_lump ], b = rhs
+    // A = [ D_op , -M , +M ], b = rhs
     std::vector<Trip> At;
-    At.reserve(D_op.nonZeros() + 2 * M_lump.nonZeros());
+    At.reserve(D_op.nonZeros() + 2 * M.nonZeros());
 
     // D_op block on y
     for (int k = 0; k < D_op.outerSize(); ++k) {
@@ -439,8 +442,8 @@ static PDPMMdata<T> make_problem_l1l2_from_mats(
         }
     }
     // -M on u+, +M on u-
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             const int r = it.row();
             const int c = it.col();
             const T v   = it.value();
@@ -505,9 +508,9 @@ L2-regularized PDE-constrained QP:
 Note: B is an empty 0 x n matrix, i.e. l = 0.
 -----------------------------------------------------------------------*/
 template <typename T>
-static PDPMMdata<T> make_problem_l2_from_mats(
+static KSPQPdata<T> make_problem_l2_from_mats(
     const Eigen::SparseMatrix<T>& D_op,
-    const Eigen::SparseMatrix<T>& M_lump,
+    const Eigen::SparseMatrix<T>& M,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& rhs,
     const Eigen::Matrix<T, Eigen::Dynamic, 1>& yhat,
     T beta,
@@ -516,7 +519,7 @@ static PDPMMdata<T> make_problem_l2_from_mats(
     T u_lower = -std::numeric_limits<T>::infinity(),
     T u_upper =  std::numeric_limits<T>::infinity()
 ) {
-    PDPMMdata<T> pb;
+    KSPQPdata<T> pb;
     using SpMat = typename Problem<T>::SpMat;
     using Vec   = typename Problem<T>::Vec;
     using Trip  = Eigen::Triplet<T>;
@@ -528,7 +531,7 @@ static PDPMMdata<T> make_problem_l2_from_mats(
     pb.m = np;
     pb.l = 0;
 
-    Vec Myhat = M_lump * yhat;
+    Vec Myhat = M * yhat;
     pb.obj_const = T(0.5) * yhat.dot(Myhat);
 
     pb.c.resize(nx);
@@ -539,9 +542,9 @@ static PDPMMdata<T> make_problem_l2_from_mats(
     // Q = [[M      0   ],
     //      [0, beta * M]]
     std::vector<Trip> Qt;
-    Qt.reserve(std::size_t(2) * M_lump.nonZeros());
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    Qt.reserve(std::size_t(2) * M.nonZeros());
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             const int i = it.row();
             const int j = it.col();
             const T v   = it.value();
@@ -553,16 +556,16 @@ static PDPMMdata<T> make_problem_l2_from_mats(
     pb.Q.setFromTriplets(Qt.begin(), Qt.end());
     pb.Q.makeCompressed();
 
-    // A = [D_op, -M_lump], b = rhs
+    // A = [D_op, -M], b = rhs
     std::vector<Trip> At;
-    At.reserve(D_op.nonZeros() + M_lump.nonZeros());
+    At.reserve(D_op.nonZeros() + M.nonZeros());
     for (int k = 0; k < D_op.outerSize(); ++k) {
         for (typename SpMat::InnerIterator it(D_op, k); it; ++it) {
             At.emplace_back(it.row(), it.col(), it.value());
         }
     }
-    for (int k = 0; k < M_lump.outerSize(); ++k) {
-        for (typename SpMat::InnerIterator it(M_lump, k); it; ++it) {
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
             At.emplace_back(it.row(), np + it.col(), -it.value());
         }
     }
@@ -598,7 +601,7 @@ static PDPMMdata<T> make_problem_l2_from_mats(
     yhat = exp(-64((x1 - 0.5)^2 + (x2 - 0.5)^2)).
 -----------------------------------------------------------------------*/
 template <typename T>
-PDPMMdata<T> make_poisson_l2_control(
+KSPQPdata<T> make_poisson_l2_control(
     int nc, T beta,
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
@@ -638,7 +641,7 @@ PDPMMdata<T> make_poisson_l2_control(
     yhat = sin(pi x1) sin(pi x2).
 -----------------------------------------------------------------------*/
 template <typename T>
-PDPMMdata<T> make_poisson_l2_state_control(
+KSPQPdata<T> make_poisson_l2_state_control(
     int nc, T beta,
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
@@ -679,7 +682,7 @@ PDPMMdata<T> make_poisson_l2_state_control(
     yhat = exp(-64((x1 - 0.5)^2 + (x2 - 0.5)^2)).
 -----------------------------------------------------------------------*/
 template <typename T>
-PDPMMdata<T> make_convdiff_l2_control(
+KSPQPdata<T> make_convdiff_l2_control(
     int nc, T beta,
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
@@ -722,7 +725,7 @@ L1/L2-regularized Poisson-constrained QP.
     y_lower <= y <= y_upper (free by default).
 -----------------------------------------------------------------------*/
 template <typename T>
-PDPMMdata<T> make_poisson_l1l2_control(
+KSPQPdata<T> make_poisson_l1l2_control(
     int nc, T alpha1, T alpha2,
     T u_lower = T(-2), T u_upper = T(1.5),
     T y_lower = -std::numeric_limits<T>::infinity(),
@@ -762,7 +765,7 @@ L1/L2-regularized convection-diffusion-constrained QP.
     y_lower <= y <= y_upper (free by default).
 -----------------------------------------------------------------------*/
 template <typename T>
-PDPMMdata<T> make_convdiff_l1l2_control(
+KSPQPdata<T> make_convdiff_l1l2_control(
     int nc, T alpha1, T alpha2,
     T u_lower = T(-2), T u_upper = T(1.5), T eps = T(0.02),
     T y_lower = -std::numeric_limits<T>::infinity(),
