@@ -111,6 +111,12 @@ public:
     static constexpr int kMaxRuizIter = 10;
     static constexpr T   kRuizTol     = T(1e-3);
 
+    // set_L_from_LLT regularization constants (see ksp_qp.tpp): on a negative LDLT pivot beyond
+    // noise level, the diagonal regularization is escalated by 10x, up to this many attempts,
+    // before giving up rather than silently clamping.
+    static constexpr int kLdltMaxAttempts = 6;
+    static constexpr T   kLdltVerifyTol   = T(1e-6);
+
     // Constant parameters
     T tol = 1e-6;
     int max_iter = 3000;
@@ -244,34 +250,17 @@ public:
     static inline T inf_norm(const Vec& v) {
         return v.cwiseAbs().maxCoeff();
     }
+    static T mat_inf_norm(const SpMat& M); // matrix infinity-norm (max abs row sum)
     ResVec compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx);
     T objective_value(const Vec& x_orig);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
     void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, typename SSN<T>::TerminationStatus ssn_opt, T ssn_res, int ssn_inner_iters);
     bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
     bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
-    Solution<T> solve();
-
-    // Accepts the SSN inner solve's iterate (x, y2) and refreshes the Ax/Bx/Qx/Adx/Bdx scratch
-    // vectors used by the infeasibility checks and residual computation that follow it in solve().
-    // Directly unit-tested (see tests/test_ksp_qp.cpp) in addition to being exercised via solve().
     void accept_ssn_iterate(const SSN<T>& NS);
-    // Updates y1/z (and their PMM-level deltas, delta_y1/delta_z -- owned by solve(), since they
-    // must persist as the primal/dual infeasibility certificate across PMM iterations even when
-    // this update is skipped) from the newly-accepted x, y2 -- but only when the SSN solve was
-    // accurate enough (NS.opt == SSN<T>::TerminationStatus::Optimal, or ssn_tol_achieved within
-    // 100x pmm_tol_achieved); otherwise y1/z/delta_y1/delta_z are all carried forward unchanged
-    // from the previous PMM iteration.
     void update_multipliers_if_accurate(typename SSN<T>::TerminationStatus ssn_opt, Vec& delta_y1, Vec& delta_z);
-
-    // Releases scratch/derived buffers not referenced by the still-alive SSN<T> NS instance in
-    // solve() (NS holds references into Q_diag/L/A/B/A_tr/B_tr/c/b/D2_ext_inv/D1B_diag_inv/
-    // lx/ux/lw/uw -- those must never be freed here). Only called on early-exit statuses where the
-    // caller gave up rather than converging (TerminationStatus::Interrupted, TimeLimit) -- other
-    // exit paths leave the object to be destroyed normally within the same call chain, so there's
-    // no meaningful gap for this to close. Called right where the main loop breaks, so this
-    // iteration's helper calls have already completed and won't run again.
     void free_scratch_memory();
+    Solution<T> solve();
 };
 
 #include "ksp_qp.tpp"

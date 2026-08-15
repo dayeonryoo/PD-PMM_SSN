@@ -275,41 +275,105 @@ void KSP_QP<T>::ruiz_scaling(const Problem<T>& problem, const Vec& problem_Q_dia
 }
 
 template <typename T>
+T KSP_QP<T>::mat_inf_norm(const SpMat& M) {
+    using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    if (M.rows() == 0) return T(0);
+    Vec row_abs_sum = Vec::Zero(M.rows());
+    for (int k = 0; k < M.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(M, k); it; ++it) {
+            row_abs_sum(it.row()) += std::abs(it.value());
+        }
+    }
+    return row_abs_sum.maxCoeff();
+}
+
+template <typename T>
 void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using SpMat = Eigen::SparseMatrix<T>;
     using Triplet = Eigen::Triplet<T>;
 
     const int n = Q.rows();
-    const T delta = std::sqrt(std::numeric_limits<T>::epsilon());
+    const T eps = std::numeric_limits<T>::epsilon();
 
-    // Regularization for numerical stability.
+    // Q may arrive lower-triangular-only or full symmetric (both conventions occur -- set_default
+    // passes the lower-triangular-only Q_ruiz, but this method is also unit-tested directly with
+    // full matrices). Only the lower triangle is meaningful (SimplicialLDLT itself only reads it),
+    // so materialize the full symmetric matrix from it once, for correct norm/residual comparisons.
+    std::vector<Triplet> sym_trip;
+    sym_trip.reserve(2 * Q.nonZeros());
+    for (int k = 0; k < Q.outerSize(); ++k) {
+        for (typename SpMat::InnerIterator it(Q, k); it; ++it) {
+            if (it.row() < it.col()) continue;
+            sym_trip.emplace_back(it.row(), it.col(), it.value());
+            if (it.row() != it.col()) sym_trip.emplace_back(it.col(), it.row(), it.value());
+        }
+    }
+    SpMat Q_sym(n, n);
+    Q_sym.setFromTriplets(sym_trip.begin(), sym_trip.end());
+    Q_sym.makeCompressed();
+
+    T Q_scale = mat_inf_norm(Q_sym);
+    if (Q_scale == T(0)) Q_scale = T(1);
+    const T delta_noise = eps_zero * Q_scale; // noise floor: ordinary LDLT rounding, not genuine indefiniteness
+    T delta = std::sqrt(eps) * Q_scale;       // relative regularization seed
+    Vec Q_diag = Q_sym.diagonal();
+
     SpMat I(n, n);
     I.setIdentity();
-    SpMat Q_reg = Q + delta * I;
+    SpMat Q_reg = Q_sym + delta * I;
     Q_reg.makeCompressed();
 
     Eigen::SimplicialLDLT<SpMat> ldlt;
-    ldlt.compute(Q_reg);
+    ldlt.analyzePattern(Q_reg); // sparsity pattern is fixed across retries below; analyze once
 
-    if (ldlt.info() != Eigen::Success) {
-        throw std::runtime_error("LDLT factorization on Q failed. Q is possibly singular.");
+    Vec D;
+    bool accepted = false;
+    for (int attempt = 0; attempt < kLdltMaxAttempts; ++attempt) {
+        ldlt.factorize(Q_reg); // reuses the analyzePattern above -- no repeated ordering cost
+        if (ldlt.info() != Eigen::Success) {
+            throw std::runtime_error("LDLT factorization on Q failed. Q is possibly singular.");
+        }
+        D = ldlt.vectorD();
+        if (D.minCoeff() >= -delta_noise) {
+            accepted = true;
+            break;
+        }
+        // Meaningfully negative pivot: escalate regularization and retry rather than clamping.
+        delta *= T(10);
+        for (int k = 0; k < n; ++k) Q_reg.coeffRef(k, k) = Q_diag(k) + delta;
     }
 
-    // Clamp negative D values to 0.
-    Vec D = ldlt.vectorD();
-    T min_D = D.minCoeff();
-    if (min_D < -delta) {
-        std::cerr << "[warn] Q has negative LDLT diagonal entry " << min_D
-                  << "; treating as PSD (clamping to 0).\n";
+    if (!accepted) {
+        throw std::runtime_error(
+            "set_L_from_LLT: Q remains indefinite after regularization retries; refusing to "
+            "silently replace it with a clamped PSD approximation.");
     }
+
+    const bool clamped = (D.minCoeff() < T(0));
     Vec D_sqrt = D.cwiseMax(T(0)).cwiseSqrt();
 
     auto P = ldlt.permutationP();
     SpMat L_D = ldlt.matrixL(); // lower triangular from LDL^T
-
-    // Diagonal scaling.
     L = (P.transpose() * L_D) * D_sqrt.asDiagonal();
+
+    // Verify L*L^T actually approximates Q before accepting it. When no pivot was clamped, the
+    // LDLT reconstruction of Q_reg is exact up to floating-point rounding, so analytically
+    // L*L^T - Q == Q_reg - Q == delta*I (inf-norm == delta) -- no need to form the product.
+    if (!clamped) {
+        if (delta > kLdltVerifyTol * Q_scale) {
+            throw std::runtime_error(
+                "set_L_from_LLT: regularization required to factorize Q exceeds verification "
+                "tolerance; refusing to accept the result.");
+        }
+    } else {
+        SpMat residual = L * SpMat(L.transpose()) - Q_sym;
+        if (mat_inf_norm(residual) > kLdltVerifyTol * Q_scale) {
+            throw std::runtime_error(
+                "set_L_from_LLT: L*L^T deviates from Q beyond tolerance after clamping a "
+                "negative pivot; refusing to silently replace Q.");
+        }
+    }
 }
 
 template <typename T>
@@ -856,7 +920,9 @@ Solution<T> KSP_QP<T>::solve() {
             break;
         }
 
+        // Update (x, y1, y2, z).
         accept_ssn_iterate(NS);
+        update_multipliers_if_accurate(NS.opt, delta_y1, delta_z);
 
         // Infeasibility checks
         if (primal_infeas(delta_y1, y2 - y2_old_scratch_, delta_z)) {
@@ -867,8 +933,6 @@ Solution<T> KSP_QP<T>::solve() {
             result = TerminationStatus::DualInfeasible; std::cout << "[Infeasibility] Dual infeasible.\n";
             break;
         }
-
-        update_multipliers_if_accurate(NS.opt, delta_y1, delta_z);
 
         // Compute new residual norms.
         ResVec new_res_norms = compute_residual_unscaled_inf_norms(Ax_scratch_, Bx_scratch_, Qx_scratch_);
