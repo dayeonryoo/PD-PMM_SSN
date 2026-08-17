@@ -681,15 +681,15 @@ TEST(UpdatePmmParameters, OptimalScalesMuRhoUpAndShrinksSsnTolByTenPercent) {
   ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::Optimal,
                             /*ssn_res=*/0.0, /*ssn_inner_iters=*/0);
 
-  EXPECT_DOUBLE_EQ(ns.mu, 13.0);
-  EXPECT_DOUBLE_EQ(ns.rho, 26.0);
+  EXPECT_DOUBLE_EQ(ns.mu, 20.0);
+  EXPECT_DOUBLE_EQ(ns.rho, 40.0);
   EXPECT_DOUBLE_EQ(ns.ssn_tol, 0.001);
 }
 
 TEST(UpdatePmmParameters, MuAndRhoStayClampedAtTheirLimitsOnOptimal) {
   KSP_QP<double> ns = MakeValidInstance();
   ns.mu = ns.mu_limit;  // 1e9
-  ns.rho = 1.0;
+  ns.rho = ns.rho_limit; // 1e7
   ns.ssn_tol = 0.01;
   KSP_QP<double>::ResVec res_norms, new_res_norms;
   res_norms << 1.0, 1.0, 1.0, 1.0;
@@ -697,8 +697,8 @@ TEST(UpdatePmmParameters, MuAndRhoStayClampedAtTheirLimitsOnOptimal) {
 
   ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::Optimal, 0.0, 0);
 
-  EXPECT_DOUBLE_EQ(ns.mu, ns.mu_limit);  // 1.3x would exceed the limit, so it's clamped
-  EXPECT_DOUBLE_EQ(ns.rho, 1.3);
+  EXPECT_DOUBLE_EQ(ns.mu, ns.mu_limit);
+  EXPECT_DOUBLE_EQ(ns.rho, ns.rho_limit);
 }
 
 TEST(UpdatePmmParameters, SsnTolFloorsAtEpsLimitOnOptimal) {
@@ -724,8 +724,8 @@ TEST(UpdatePmmParameters, LineSearchFailedLoosensMuRhoAndGrowsSsnTol) {
   ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::LineSearchFailed,
                             /*ssn_res=*/0.0, 0);
 
-  EXPECT_DOUBLE_EQ(ns.mu, 8.0);          // max(mu0=1, 0.8*10)
-  EXPECT_DOUBLE_EQ(ns.rho, 16.0);        // max(rho0=1, 0.8*20)
+  EXPECT_DOUBLE_EQ(ns.mu, 5.0);          // max(mu0=1, 0.5*10)
+  EXPECT_DOUBLE_EQ(ns.rho, 10.0);        // max(rho0=1, 0.5*20)
   EXPECT_DOUBLE_EQ(ns.ssn_tol, 0.0011);  // min(worst_res=5.0, 1.1*0.001=0.0011, 1e-2)
 }
 
@@ -740,8 +740,8 @@ TEST(UpdatePmmParameters, MaxInnerIterationsWithLargeSsnResRelativeToWorstResLoo
                             SSN<double>::TerminationStatus::MaxInnerIterations,
                             /*ssn_res=*/2.0, 0);  // 2.0 > 100*0.01=1.0 -> loosen
 
-  EXPECT_DOUBLE_EQ(ns.mu, 8.0);
-  EXPECT_DOUBLE_EQ(ns.rho, 16.0);
+  EXPECT_DOUBLE_EQ(ns.mu, 5.0);
+  EXPECT_DOUBLE_EQ(ns.rho, 10.0);
   EXPECT_DOUBLE_EQ(ns.ssn_tol, 0.0011);
 }
 

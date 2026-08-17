@@ -1328,6 +1328,151 @@ TEST(SolveUsingCg, LdltLatchPermanentlyBypassesPcgAfterAGenuinePreconditionerFai
   EXPECT_LT(res2_2.cwiseAbs().maxCoeff(), 1e-8);
 }
 
+// ===================== cross-path agreement =====================
+// For a fixed (G, H_diag, active_K, r1, r2, mu, rho), PCG+Cholesky, PCG+LDLT, PCG+SMW (updated from
+// either a Cholesky or an LDLT snapshot), and solve_using_ldlt() all solve the same augmented KKT
+// system K[dx;dy]=[r1;r2] -- the preconditioner only affects PCG's convergence path, and SMW is
+// just a cheaper way to reach the same preconditioning matrix as a fresh factorization. This checks
+// all five routes agree with each other and each independently satisfies the KKT residual.
+
+namespace {
+
+void ExpectAllSolvePathsAgree(const SpMat& A, const SpMat& B, const BoolArr& active_W,
+                               const BoolArr& active_K, const BoolArr& active_K_snapshot,
+                               const Vec& H_diag, double mu, double rho, const SpMat& G,
+                               const SpMat& G_tr, const Vec& r1, const Vec& r2,
+                               double tol = 1e-8) {
+  SsnFixture f(A, B);
+  const Vec H_diag_inv = H_diag.cwiseInverse();
+
+  // SSN<double> is neither copyable (cg's ConjugateGradient member isn't) nor safely returnable
+  // by value from a named local (no viable move ctor either), so set up each instance in place via
+  // a by-reference helper rather than a factory function that returns SSN<double>.
+  auto setup_ns = [&](SSN<double>& ns) {
+    ns.mu = mu;
+    ns.rho = rho;
+    ns.active_W = active_W;
+  };
+
+  SSN<double> ns_chol = f.Make();
+  setup_ns(ns_chol);
+  const Vec sol_chol = ns_chol.solve_using_cg(
+      G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, ns_chol.krylov_tol,
+      ns_chol.krylov_max_in_iter, /*update_prec=*/true, /*prec_pattern_changed=*/true,
+      /*schur_use_ldlt=*/false);
+
+  SSN<double> ns_ldlt = f.Make();
+  setup_ns(ns_ldlt);
+  const Vec sol_ldlt = ns_ldlt.solve_using_cg(
+      G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, ns_ldlt.krylov_tol,
+      ns_ldlt.krylov_max_in_iter, /*update_prec=*/true, /*prec_pattern_changed=*/true,
+      /*schur_use_ldlt=*/true);
+
+  // SMW-from-Cholesky: first solve builds a full-Cholesky snapshot at a neighboring active_K
+  // (one entry flipped); second solve, same G/active_W/mu/rho, should reuse that snapshot via a
+  // rank-1 SMW update instead of refactorizing.
+  SSN<double> ns_smw_from_chol = f.Make();
+  setup_ns(ns_smw_from_chol);
+  ns_smw_from_chol.solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K_snapshot, r1, r2, mu,
+                                   ns_smw_from_chol.krylov_tol,
+                                   ns_smw_from_chol.krylov_max_in_iter, /*update_prec=*/true,
+                                   /*prec_pattern_changed=*/true, /*schur_use_ldlt=*/false);
+  const Vec sol_smw_chol = ns_smw_from_chol.solve_using_cg(
+      G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, ns_smw_from_chol.krylov_tol,
+      ns_smw_from_chol.krylov_max_in_iter, /*update_prec=*/true, /*prec_pattern_changed=*/false,
+      /*schur_use_ldlt=*/false);
+  ASSERT_TRUE(ns_smw_from_chol.cg.preconditioner().used_smw())
+      << "SMW-from-Cholesky path did not actually engage SMW; the agreement check below would be "
+         "vacuous.";
+
+  // Same, updating from an LDLT snapshot instead.
+  SSN<double> ns_smw_from_ldlt = f.Make();
+  setup_ns(ns_smw_from_ldlt);
+  ns_smw_from_ldlt.solve_using_cg(G, G_tr, H_diag, H_diag_inv, active_K_snapshot, r1, r2, mu,
+                                   ns_smw_from_ldlt.krylov_tol,
+                                   ns_smw_from_ldlt.krylov_max_in_iter, /*update_prec=*/true,
+                                   /*prec_pattern_changed=*/true, /*schur_use_ldlt=*/true);
+  const Vec sol_smw_ldlt = ns_smw_from_ldlt.solve_using_cg(
+      G, G_tr, H_diag, H_diag_inv, active_K, r1, r2, mu, ns_smw_from_ldlt.krylov_tol,
+      ns_smw_from_ldlt.krylov_max_in_iter, /*update_prec=*/true, /*prec_pattern_changed=*/false,
+      /*schur_use_ldlt=*/true);
+  ASSERT_TRUE(ns_smw_from_ldlt.cg.preconditioner().used_smw())
+      << "SMW-from-LDLT path did not actually engage SMW; the agreement check below would be "
+         "vacuous.";
+
+  // Direct factorization of the full augmented KKT system -- no PCG/preconditioner at all.
+  const Vec sol_direct = ns_chol.solve_using_ldlt(G, H_diag, r1, r2);
+
+  EXPECT_TRUE(sol_chol.isApprox(sol_direct, tol))
+      << "PCG+Cholesky diverged from solve_using_ldlt";
+  EXPECT_TRUE(sol_ldlt.isApprox(sol_direct, tol))
+      << "PCG+LDLT diverged from solve_using_ldlt";
+  EXPECT_TRUE(sol_smw_chol.isApprox(sol_direct, tol))
+      << "PCG+SMW(from Cholesky) diverged from solve_using_ldlt";
+  EXPECT_TRUE(sol_smw_ldlt.isApprox(sol_direct, tol))
+      << "PCG+SMW(from LDLT) diverged from solve_using_ldlt";
+
+  // Ground-truth each result independently too, so a bug shared by all paths (which would still
+  // leave them agreeing with each other) doesn't slip through.
+  ExpectKktResidualSmall(sol_chol, G, H_diag, r1, r2, mu);
+  ExpectKktResidualSmall(sol_ldlt, G, H_diag, r1, r2, mu);
+  ExpectKktResidualSmall(sol_smw_chol, G, H_diag, r1, r2, mu);
+  ExpectKktResidualSmall(sol_smw_ldlt, G, H_diag, r1, r2, mu);
+  ExpectKktResidualSmall(sol_direct, G, H_diag, r1, r2, mu);
+}
+
+}  // namespace
+
+TEST(AllSolvePathsAgree, AllWRowsActiveSingleKFlip) {
+  const SpMat A = DefaultA();
+  const SpMat B = DefaultB();
+  const BoolArr active_W = ToBoolArr({true, true});
+  const BoolArr active_K = ToBoolArr({true, false, true});           // index 1 inactive
+  const BoolArr active_K_snapshot = ToBoolArr({true, true, true});  // single flip vs. active_K
+
+  Vec H_diag(3);
+  H_diag << 2.0, 3.0, 4.0;
+  const double mu = 5.0, rho = 3.0;  // mu != rho catches an argument-order swap bug
+
+  // G = [A_row; B_row0; B_row1] (both W rows active) -> s=3.
+  const Eigen::MatrixXd G_dense =
+      (Eigen::MatrixXd(3, 3) << 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0).finished();
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+
+  Vec r1(3), r2(3);
+  r1 << 1.0, -2.0, 0.5;
+  r2 << 0.5, -1.0, 2.0;
+
+  ExpectAllSolvePathsAgree(A, B, active_W, active_K, active_K_snapshot, H_diag, mu, rho, G, G_tr,
+                            r1, r2);
+}
+
+TEST(AllSolvePathsAgree, PartialWRowsActiveSingleKFlip) {
+  const SpMat A = DefaultA();
+  const SpMat B = DefaultB();
+  const BoolArr active_W = ToBoolArr({true, false});
+  const BoolArr active_K = ToBoolArr({false, true, true});           // index 0 inactive
+  const BoolArr active_K_snapshot = ToBoolArr({true, true, true});  // single flip vs. active_K
+
+  Vec H_diag(3);
+  H_diag << 3.0, 1.0, 2.0;
+  const double mu = 2.0, rho = 4.0;
+
+  // G = [A_row; B_row0] (only the first W row active) -> s=2.
+  const Eigen::MatrixXd G_dense =
+      (Eigen::MatrixXd(2, 3) << 1.0, 1.0, 1.0, 1.0, 0.0, 0.0).finished();
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+
+  Vec r1(3), r2(2);
+  r1 << -1.0, 2.0, 0.5;
+  r2 << 1.5, -0.5;
+
+  ExpectAllSolvePathsAgree(A, B, active_W, active_K, active_K_snapshot, H_diag, mu, rho, G, G_tr,
+                            r1, r2);
+}
+
 // ===================== make_line_search_params =====================
 
 TEST(MakeLineSearchParams, CachesATrTimesAxMinusBMatchingIndependentRecomputation) {
