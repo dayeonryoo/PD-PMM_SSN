@@ -758,6 +758,63 @@ TEST(PrepareNewtonSystem, ActiveWChangeAloneRebuildsGWithoutChangingActiveK) {
   EXPECT_TRUE((ns.active_K.array() == true).all());  // K untouched
 }
 
+TEST(PrepareNewtonSystem, HDiagRebuildsOnMuOnlyChangeWithoutActiveSetChange) {
+  // Regression test: H_diag = Q + mu*(1-diag_P_K) + I/rho depends on mu, but was previously only
+  // rebuilt on delta.k_changed -- a mu-only drift (which happens every PMM outer iteration) left
+  // it stale. z=y2=0 in this fixture, so u_/v_ (hence the active set) are unaffected by mu,
+  // isolating a pure mu-only change with k_changed/w_changed both false.
+  SsnFixture f(DefaultA(), DefaultB());
+  SSN<double> ns = f.Make();
+  Vec x0 = Vec::Zero(3), y10 = Vec::Zero(1), y20 = Vec::Zero(2), z0 = Vec::Zero(3);
+  Vec dy10 = Vec::Zero(1), dz0 = Vec::Zero(3);
+  ns.update_ssn_system(x0, y10, y20, z0, dy10, dz0, /*mu=*/1.0, /*rho=*/1.0, 0.95, 0);
+  ns.x_cur_ = Vec::Zero(3);
+  ns.x_cur_(0) = 5.0;  // pushes u_(0) outside ux(0)=1: active_K = [false, true, true]
+  ns.y2_cur_ = Vec::Zero(2);
+  ns.Ax_ssn_ = Vec::Constant(1, 5.0);
+  ns.Bx_ssn_ = Vec::Zero(2);
+  ns.prepare_newton_system();
+  ASSERT_TRUE(ns.H_diag.isApprox((Vec(3) << 2.0, 1.0, 1.0).finished()));
+  ASSERT_DOUBLE_EQ(ns.H_diag_mu_, 1.0);
+
+  ns.mu = 4.0;  // no active-set-affecting change accompanies this
+  auto result = ns.prepare_newton_system();
+
+  EXPECT_FALSE(result.update_prec);          // active set genuinely unchanged
+  EXPECT_FALSE(result.prec_pattern_changed);
+  Vec expected_H_diag(3);
+  expected_H_diag << 5.0, 1.0, 1.0;  // dim 0 (inactive_K): mu*(1-0)+1/rho=4+1=5; dims 1,2: 0+1=1
+  EXPECT_TRUE(ns.H_diag.isApprox(expected_H_diag));
+  EXPECT_DOUBLE_EQ(ns.H_diag_mu_, 4.0);  // bookkeeping updated so the cache stays consistent
+}
+
+TEST(PrepareNewtonSystem, HDiagRebuildsOnRhoOnlyChangeWithoutActiveSetChange) {
+  // Companion to the mu-only test above.
+  SsnFixture f(DefaultA(), DefaultB());
+  SSN<double> ns = f.Make();
+  Vec x0 = Vec::Zero(3), y10 = Vec::Zero(1), y20 = Vec::Zero(2), z0 = Vec::Zero(3);
+  Vec dy10 = Vec::Zero(1), dz0 = Vec::Zero(3);
+  ns.update_ssn_system(x0, y10, y20, z0, dy10, dz0, /*mu=*/1.0, /*rho=*/1.0, 0.95, 0);
+  ns.x_cur_ = Vec::Zero(3);
+  ns.x_cur_(0) = 5.0;  // pushes u_(0) outside ux(0)=1: active_K = [false, true, true]
+  ns.y2_cur_ = Vec::Zero(2);
+  ns.Ax_ssn_ = Vec::Constant(1, 5.0);
+  ns.Bx_ssn_ = Vec::Zero(2);
+  ns.prepare_newton_system();
+  ASSERT_TRUE(ns.H_diag.isApprox((Vec(3) << 2.0, 1.0, 1.0).finished()));
+  ASSERT_DOUBLE_EQ(ns.H_diag_rho_, 1.0);
+
+  ns.rho = 0.5;  // no active-set-affecting change accompanies this
+  auto result = ns.prepare_newton_system();
+
+  EXPECT_FALSE(result.update_prec);
+  EXPECT_FALSE(result.prec_pattern_changed);
+  Vec expected_H_diag(3);
+  expected_H_diag << 3.0, 2.0, 2.0;  // dim 0: mu*1+1/rho=1+2=3; dims 1,2: mu*0+1/rho=0+2=2
+  EXPECT_TRUE(ns.H_diag.isApprox(expected_H_diag));
+  EXPECT_DOUBLE_EQ(ns.H_diag_rho_, 0.5);
+}
+
 TEST(PrepareNewtonSystem, AllKInactiveWhenFarOutsideBoundsHandlesZeroActiveColumnsInChooseSchurLdlt) {
   SsnFixture f(DefaultA(), DefaultB());
   SSN<double> ns = f.Make();
@@ -1034,6 +1091,40 @@ TEST(SolveUsingLdlt, ForcedReanalyzeWhenSystemSizeChangesButPatternFlagWasNotMar
   r2_2 << 0.0, 1.0;
   Vec sol2 = ns.solve_using_ldlt(G2, H2, Vec::Zero(3), r2_2);
   ExpectKktResidualSmall(sol2, G2, H2, Vec::Zero(3), r2_2, ns.mu);
+}
+
+TEST(SolveUsingLdlt, ConsumesFreshHDiagAfterMuRhoOnlyChangeBetweenPrepareCalls) {
+  // End-to-end regression test: ldlt_numeric_dirty_ has always fired unconditionally on every
+  // update_ssn_system() call ("mu, rho may have changed"), but before the H_diag fix,
+  // prepare_newton_system() only rebuilt the H_diag member on k_changed -- so a fresh
+  // refactorization could still bake in a stale H_diag (fresh mu in the (1/mu)I block, stale
+  // mu/rho in the -H block). This exercises the real call sequence (update_ssn_system ->
+  // prepare_newton_system -> solve_using_ldlt(ns.G, ns.H_diag, ...)) to prove H_diag is fresh by
+  // the time solve_using_ldlt() consumes it.
+  SsnFixture f(DefaultA(), DefaultB());  // N=3, M=1, l=2
+  SSN<double> ns = f.Make();
+
+  Vec x0 = Vec::Zero(3), y10 = Vec::Zero(1), y20 = Vec::Zero(2), z0 = Vec::Zero(3);
+  Vec dy10 = Vec::Zero(1), dz0 = Vec::Zero(3);
+  ns.update_ssn_system(x0, y10, y20, z0, dy10, dz0, /*mu=*/1.0, /*rho=*/1.0, 0.95, 0);
+  ns.x_cur_ = Vec::Zero(3);
+  ns.x_cur_(0) = 5.0;  // pushes u_(0) outside ux(0)=1: active_K = [false, true, true]
+  ns.y2_cur_ = Vec::Zero(2);
+  ns.Ax_ssn_ = Vec::Constant(1, 5.0);
+  ns.Bx_ssn_ = Vec::Zero(2);
+  ns.prepare_newton_system();
+  ASSERT_TRUE(ns.H_diag.isApprox((Vec(3) << 2.0, 1.0, 1.0).finished()));
+
+  // New PMM outer iteration: mu/rho change; x_cur_/Ax_ssn_/Bx_ssn_/z/y2 (hence the active set)
+  // deliberately left untouched.
+  ns.update_ssn_system(x0, y10, y20, z0, dy10, dz0, /*mu=*/4.0, /*rho=*/0.5, 0.95, 1);
+  auto result = ns.prepare_newton_system();
+  EXPECT_FALSE(result.update_prec);
+  EXPECT_FALSE(result.prec_pattern_changed);
+  ASSERT_TRUE(ns.H_diag.isApprox((Vec(3) << 6.0, 2.0, 2.0).finished()));
+
+  Vec sol = ns.solve_using_ldlt(ns.G, ns.H_diag, ns.r1_, ns.r2_);
+  ExpectKktResidualSmall(sol, ns.G, ns.H_diag, ns.r1_, ns.r2_, ns.mu);
 }
 
 // ===================== solve_using_cg =====================

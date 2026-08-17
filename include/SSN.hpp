@@ -116,6 +116,7 @@ public:
 
     const SpMat& A_tr, B_tr;
     Vec H_diag, H_diag_inv;
+    T H_diag_mu_ = T(0), H_diag_rho_ = T(0); // (mu, rho) H_diag was last built with; see prepare_newton_system().
     Vec diag_P_K, diag_P_W;
     BoolArr active_W, inactive_W, active_K;
     int n_active_W, n_inactive_W;

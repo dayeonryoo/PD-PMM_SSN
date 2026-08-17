@@ -45,7 +45,11 @@ struct SchurPrecScopedTimer {
 // Layer 2 -- SSN's own full-KKT LDLT fallback (K_ldlt_; see ssn.hpp/.tpp):
 //   ldlt_pattern_dirty_ : set on w_changed only -- active_W changes G's/K_ldlt_'s sparsity.
 //   ldlt_numeric_dirty_ : set on k_changed, w_changed, or every update_ssn_system() call (mu/rho
-//                         may have changed). Guards K_ldlt_'s factorize().
+//                         may have changed). Guards K_ldlt_'s factorize(). This flag's freshness
+//                         depends on H_diag itself being fresh -- see SSN::H_diag_mu_/H_diag_rho_
+//                         in ssn.hpp, which independently guard H_diag's own recompute against a
+//                         mu/rho-only drift (prepare_newton_system() rebuilds H whenever it
+//                         differs from H_diag_mu_/H_diag_rho_, not just on k_changed).
 //   K_ldlt_built_       : whether the triplet-assembled K_ldlt_ exists yet, so a numeric-only
 //                         update can skip full triplet reassembly.
 //
@@ -56,12 +60,38 @@ struct SchurPrecScopedTimer {
 //   pattern_dirty_  : needs analyzePattern() -- caller's `prec_pattern_changed` (== Layer 1's
 //                     prec_pattern_changed) OR a size change OR the first-ever call.
 //   numeric_dirty_  : needs G E G^T (or the LDLT structural blocks) fully recomputed rather than
-//                     just mu-diagonal-shifted -- same trigger as pattern_dirty_.
+//                     just diagonal-shifted -- same trigger as pattern_dirty_. This is a
+//                     *pattern-only* signal; it is deliberately NOT set on a mu/rho-only change.
+//   mu_/rho_, mu_at_last_fact_/rho_at_last_fact_ : on active_K entries H_diag(i) = Q_diag(i) +
+//                     1/rho -- mu's contribution vanishes there exactly, so mu and rho affect
+//                     disjoint parts of P/P_hat and get independent, asymmetric numeric-only
+//                     paths, both bypassing pattern_dirty_/numeric_dirty_ entirely:
+//                       mu-only change  : both chol and ldlt shift/overwrite the (1/mu) I block
+//                                         in place (compute()'s mu_changed forces build() even
+//                                         when rebuild_ is false; factorize_by_chol/ldlt's `else`
+//                                         branch does the O(s) patch).
+//                       rho-only change : chol has no cheap path (E = 1/H_diag is a nonlinear
+//                                         function of rho baked into the G*E*G^T product) and
+//                                         must fully rebuild G E G^T -- factorize_by_chol() ORs
+//                                         numeric_dirty_ with a local rho_changed check. ldlt's
+//                                         -H_act sits directly on P_hat's diagonal (no product),
+//                                         so factorize_by_ldlt()'s `else` branch instead patches
+//                                         it in place (O(n_act), using the cached ldlt_act_idx_
+//                                         from the last full rebuild) -- cheaper than chol despite
+//                                         solving a structurally equivalent problem.
 //   use_ldlt_ / use_ldlt_at_last_fact_ : Cholesky-vs-LDLT variant for the Schur matrix, set from
 //                     SSN::schur_use_ldlt via arm(); a mismatch between the two also forces
 //                     prec_pattern_changed=true (factorizing a structurally different matrix).
 //   skip_smw_ / use_smw_ / has_snapshot_ / smw_fail_streak_ : SMW low-rank-update control, mostly
-//                     orthogonal to the pattern/numeric split above -- see try_build_smw().
+//                     orthogonal to the pattern/numeric split above -- see try_build_smw(). Its
+//                     capacitance-update math only recomputes H_diag-derived values for the
+//                     classified delta (flipped active_K indices); everywhere else it implicitly
+//                     reuses P_old, snapshotted at the last full rebuild. Since active_K entries'
+//                     H_diag(i) = Q_diag(i) + 1/rho, a rho drift since that snapshot would silently
+//                     invalidate P_old even for a delta that never touches active_K (e.g. a pure
+//                     W-row add/delete) -- so smw_gate_open() rejects unconditionally on
+//                     rho_ != rho_old_ (SmwRejectReason::RhoChangedSinceSnapshot), independent of
+//                     the delta being classified, before any capacitance math runs.
 // =================================================================================================
 
 template <typename T>
@@ -87,7 +117,7 @@ public:
     void set_data(const SpMat& G, const SpMat& G_tr, const Vec& H_diag,
                  const BoolArr& active_K, const BoolArr& active_W,
                  const RowMajorSpMat& B_rm,
-                 T mu, bool rebuild, bool prec_pattern_changed) {
+                 T mu, T rho, bool rebuild, bool prec_pattern_changed) {
         // Store data pointers and set flags for refactorization.
         G_        = &G;
         G_tr_     = &G_tr;
@@ -96,6 +126,7 @@ public:
         active_W_ = &active_W;
         B_rm_     = &B_rm; // row-major B matrix
         mu_       = mu;
+        rho_      = rho;
 
         // Detect if refactorization is needed.
         bool size_changed = (s_current_ != static_cast<int>(G.rows()));
@@ -117,10 +148,10 @@ public:
     // Per-solve-attempt setup protocol. Pair with consume_fact_count_delta() after cg.compute(S).
     void arm(const SpMat& G, const SpMat& G_tr, const Vec& H_diag,
              const BoolArr& active_K, const BoolArr& active_W, const RowMajorSpMat& B_rm,
-             T mu, bool rebuild, bool prec_pattern_changed, bool use_ldlt, bool force_rebuild = false) {
+             T mu, T rho, bool rebuild, bool prec_pattern_changed, bool use_ldlt, bool force_rebuild = false) {
         if (use_ldlt != use_ldlt_)       // Cholesky and LDLT factorize structurally different matrices (P vs P_hat),
             prec_pattern_changed = true; // so a cached analyzePattern() from one is invalid for the other.
-        set_data(G, G_tr, H_diag, active_K, active_W, B_rm, mu, rebuild || force_rebuild, prec_pattern_changed);
+        set_data(G, G_tr, H_diag, active_K, active_W, B_rm, mu, rho, rebuild || force_rebuild, prec_pattern_changed);
         set_use_ldlt(use_ldlt);
         if (force_rebuild || smw_suppressed())
             force_full_rebuild();
@@ -146,8 +177,9 @@ public:
 
     template <typename MatrixType>
     SchurPreconditioner& compute(const MatrixType&) {
-        bool mu_changed = initialized_ && (mu_ != mu_at_last_fact_);
-        if (!initialized_ || rebuild_ || mu_changed) {
+        bool mu_changed  = initialized_ && (mu_  != mu_at_last_fact_);
+        bool rho_changed = initialized_ && (rho_ != rho_at_last_fact_);
+        if (!initialized_ || rebuild_ || mu_changed || rho_changed) {
             build();
             initialized_ = true;
         }
@@ -173,6 +205,10 @@ public:
         MissingData,                  // active_W/B_rm not supplied, or no equality rows tracked yet.
         FactorizationMethodChanged,   // use_ldlt_ differs from the method used at the last full factorization.
         NoSnapshot,                   // No prior full-rebuild snapshot to update from.
+        RhoChangedSinceSnapshot,      // rho drifted since the snapshot; the low-rank update's implicit
+                                       // "H_diag unchanged outside the classified delta" assumption would
+                                       // be violated (H_diag's active_K entries depend on rho), so the
+                                       // capacitance math can't be trusted even for a nonzero-rank delta.
         RankZeroOrExceedsThreshold,   // Active-set delta rank is 0 or exceeds the SMW update-size threshold.
         SingularCapacitance,          // Capacitance matrix was (near-)singular; fell back to full rebuild.
     };
@@ -377,6 +413,7 @@ private:
         info_ = solver.info();
         fact_count_++;
         mu_at_last_fact_       = mu_;
+        rho_at_last_fact_      = rho_;
         use_ldlt_at_last_fact_ = is_ldlt;
         if (n_act >= 0) n_act_ = n_act;
         s_current_ = static_cast<int>(s);
@@ -433,10 +470,18 @@ private:
                 sol.P_hat.makeCompressed();
             } else {
                 // Same active set as last full build (numeric_dirty_ tracks pattern staleness
-                // identically to pattern_dirty_); only mu changed -- overwrite the bottom-right
-                // (1/mu) I block in place instead of reassembling every triplet.
+                // identically to pattern_dirty_). Unlike chol's G*E*G^T (an actual matrix
+                // product), P_hat's blocks sit directly on the diagonal, so both a mu-only and
+                // a rho-only change can be patched in place without reassembling any triplet:
+                //  - mu only affects the bottom-right (1/mu) I block (H_diag's mu term vanishes
+                //    exactly on active_K entries, so mu never touches -H_act).
+                //  - rho only affects the top-left -H_act block (H_diag(i) = Q_diag(i) + 1/rho
+                //    on active_K entries).
                 n_act = n_act_;
                 assert(sol.P_hat.rows() == n_act + s && sol.P_hat.cols() == n_act + s);
+                if (rho_ != rho_at_last_fact_)
+                    for (int k = 0; k < n_act; ++k)
+                        sol.P_hat.coeffRef(k, k) = -H_diag(ldlt_act_idx_[k]);
                 for (Eigen::Index i = 0; i < s; ++i)
                     sol.P_hat.coeffRef(n_act + i, n_act + i) = T(1) / mu_;
             }
@@ -462,10 +507,13 @@ private:
 
         auto& sol = std::get<CholSolver>(active_solver_);
 
+        const bool rho_changed = (rho_ != rho_at_last_fact_);
         {
             SCHUR_PREC_TIMER_BLOCK(assembly_time_);
-            if (numeric_dirty_) {
-                // Rebuild G E G^T.
+            if (numeric_dirty_ || rho_changed) {
+                // Rebuild G E G^T. Needed on a pattern change (numeric_dirty_) or a rho-only
+                // change: E = 1/H_diag is nonlinear in rho on active_K entries, so unlike mu's
+                // separate additive (1/mu) I term below, it can't be diagonal-shifted.
                 assert(H_diag.minCoeff() > T(0));
                 chol_build_trips_.clear();
                 chol_build_trips_.reserve(n);
@@ -541,6 +589,17 @@ private:
         // an actual wipe, not merely because rows()==0.
         if (!has_snapshot_ || (G_old_.rows() == 0 && snapshot_wiped_by_fail_streak_)) {
             smw_last_reject_reason_ = SmwRejectReason::NoSnapshot;
+            return false;
+        }
+        // The low-rank update only ever recomputes H_diag-derived values for the classified delta
+        // (flipped active_K indices); everywhere else it implicitly reuses P_old, which was
+        // factorized against the snapshot's rho. On active_K entries H_diag(i) = Q_diag(i) + 1/rho,
+        // so a rho drift since the snapshot silently invalidates that reuse -- even for a delta
+        // that doesn't touch active_K at all (e.g. a pure W-row add/delete). Reject unconditionally
+        // rather than trying to patch it in: unlike mu (which affects only the (1/mu)I block that
+        // stays outside the capacitance math entirely), rho's effect is baked into P_old itself.
+        if (rho_ != rho_old_) {
+            smw_last_reject_reason_ = SmwRejectReason::RhoChangedSinceSnapshot;
             return false;
         }
         return true;
@@ -743,6 +802,7 @@ private:
         H_diag_old_   = *H_diag_;
         active_K_old_ = *active_K_;
         if (active_W_) active_W_old_ = *active_W_;
+        rho_old_      = rho_;
         has_snapshot_ = true;
         snapshot_wiped_by_fail_streak_ = false;
     }
@@ -754,7 +814,8 @@ private:
     const BoolArr*       active_K_ = nullptr;
     const BoolArr*       active_W_ = nullptr;
     const RowMajorSpMat* B_rm_     = nullptr;
-    T mu_ = T(1);
+    T mu_  = T(1);
+    T rho_ = T(1);
     int M_rows_    = -1;  // number of equality-constraint rows
     int s_current_ = -1;  // current row count of G
 
@@ -765,6 +826,7 @@ private:
     bool pattern_dirty_    = true;
     bool numeric_dirty_       = true;
     T    mu_at_last_fact_  = T(-1);
+    T    rho_at_last_fact_ = T(-1);
 
 #if SSN_ENABLE_TIMERS
     // TIMER: cumulative wall-clock seconds spent in build().
@@ -816,6 +878,7 @@ private:
     Vec     H_diag_old_;
     BoolArr active_K_old_;
     BoolArr active_W_old_;
+    T       rho_old_ = T(1); // rho at the time of the snapshot; see smw_gate_open()'s rho_ != rho_old_ check.
 
     // Setup results (output of try_build_smw, consumed by solve)
     int s_old_ = 0, h_ = 0, p_ = 0, q_ = 0;

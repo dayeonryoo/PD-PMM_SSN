@@ -64,6 +64,7 @@ struct Fixture {
   Eigen::MatrixXd B_rows = (Eigen::MatrixXd(2, 3) << 1.0, 0.0, 0.0, 0.0, 1.0, 0.0).finished();
   Eigen::VectorXd H_diag = (Eigen::VectorXd(3) << 2.0, 3.0, 4.0).finished();
   double mu = 5.0;
+  double rho = 3.0;  // distinct from mu so a mu/rho argument swap would be caught by assertions
 
   RowMajorSpMat B_rm() const { return DenseToSparseRowMajor(B_rows); }
 
@@ -103,7 +104,7 @@ TEST(DirectFactorization, SolveMatchesDenseCholeskyWhenAllKActive) {
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
   prec.compute(0);
 
   ASSERT_EQ(prec.info(), Eigen::Success);
@@ -127,7 +128,7 @@ TEST(DirectFactorization, SolveMatchesDenseWhenSomeKInactive) {
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
   prec.compute(0);
 
   Eigen::VectorXd b(2);
@@ -150,11 +151,11 @@ TEST(DirectFactorization, LdltAndCholeskyPathsAgreeOnIdenticalData) {
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec_chol;
-  prec_chol.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/false);
+  prec_chol.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
   prec_chol.compute(0);
 
   Prec prec_ldlt;
-  prec_ldlt.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/true);
+  prec_ldlt.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
   prec_ldlt.compute(0);
 
   Eigen::VectorXd b(3);
@@ -176,14 +177,14 @@ TEST(DirectFactorization, MuOnlyChangeMatchesFreshDenseRecomputationAtNewMu) {
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, /*mu=*/5.0, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, /*mu=*/5.0, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
-  // Same G/H_diag/active_K, only mu changes, and neither size nor pattern changed:
+  // Same G/H_diag/active_K/rho, only mu changes, and neither size nor pattern changed:
   // this should take factorize_by_chol's diagonal-shift-only fast path (numeric_dirty_ stays false).
   const double mu2 = 8.0;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, mu2, /*rebuild=*/false, /*prec_pattern_changed=*/false, false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, mu2, f.rho, /*rebuild=*/false, /*prec_pattern_changed=*/false, false);
   prec.compute(0);
   EXPECT_EQ(prec.fact_count(), 2);  // mu change alone still triggers a (cheap) refactorization
   EXPECT_FALSE(prec.used_smw());    // rank==0 (no active-set delta) correctly rejects SMW
@@ -208,14 +209,14 @@ TEST(DirectFactorization, MuOnlyChangeMatchesFreshDenseRecomputationAtNewMuLdlt)
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, /*mu=*/5.0, true, true, /*use_ldlt=*/true);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, /*mu=*/5.0, f.rho, true, true, /*use_ldlt=*/true);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
-  // Same G/H_diag/active_K, only mu changes, and neither size nor pattern changed:
+  // Same G/H_diag/active_K/rho, only mu changes, and neither size nor pattern changed:
   // this should take factorize_by_ldlt's in-place-block-overwrite fast path (numeric_dirty_ stays false).
   const double mu2 = 8.0;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, mu2, /*rebuild=*/false, /*prec_pattern_changed=*/false,
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, mu2, f.rho, /*rebuild=*/false, /*prec_pattern_changed=*/false,
            /*use_ldlt=*/true);
   prec.compute(0);
   EXPECT_EQ(prec.fact_count(), 2);  // mu change alone still triggers a (cheap) refactorization
@@ -230,6 +231,77 @@ TEST(DirectFactorization, MuOnlyChangeMatchesFreshDenseRecomputationAtNewMuLdlt)
   EXPECT_TRUE(got.isApprox(expected, kTol));
 }
 
+TEST(DirectFactorization, CholRebuildsOnRhoOnlyChangeWithoutPatternChange) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, true, true};
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+  ASSERT_EQ(prec.fact_count(), 1);
+
+  // Same G/active_K/active_W/mu as the last build -- only rho changed, standing in for H_diag's
+  // active-K entries drifting (H_diag(i) = Q_diag(i) + 1/rho there). Unlike a mu-only change,
+  // E = 1/H_diag is nonlinear in rho, so this must fully rebuild G E G^T rather than diagonal-shift.
+  const Eigen::VectorXd H_diag2 = (Eigen::VectorXd(3) << 6.0, 7.0, 9.0).finished();
+  const double rho2 = 7.0;
+  prec.arm(G, G_tr, H_diag2, active_K, active_W, B_rm, f.mu, rho2, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
+  prec.compute(0);
+  EXPECT_EQ(prec.fact_count(), 2);  // rho change alone still triggers a refactorization
+  EXPECT_FALSE(prec.used_smw());    // rank==0 (no active-set delta) correctly rejects SMW
+
+  Eigen::VectorXd b(1);
+  b << 4.0;
+  const Eigen::VectorXd got = prec.solve(b);
+
+  const Eigen::MatrixXd P2 = DenseSchurComplement(G_dense, H_diag2, active_k, f.mu);
+  const Eigen::VectorXd expected = P2.colPivHouseholderQr().solve(b);
+  EXPECT_TRUE(got.isApprox(expected, kTol));
+}
+
+TEST(DirectFactorization, LdltPatchesTopLeftBlockOnRhoOnlyChangeWithoutPatternChange) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, true, true};
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+  ASSERT_EQ(prec.fact_count(), 1);
+
+  // Same shape as the chol test above, but LDLT's -H_act sits directly on P_hat's diagonal (no
+  // matrix product), so a rho-only change should be a cheap in-place patch, not a full triplet
+  // rebuild -- verified indirectly here via correctness; the patch-vs-rebuild code path itself is
+  // exercised by construction (numeric_dirty_ is false: prec_pattern_changed/size are unchanged).
+  const Eigen::VectorXd H_diag2 = (Eigen::VectorXd(3) << 6.0, 7.0, 9.0).finished();
+  const double rho2 = 7.0;
+  prec.arm(G, G_tr, H_diag2, active_K, active_W, B_rm, f.mu, rho2, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
+  prec.compute(0);
+  EXPECT_EQ(prec.fact_count(), 2);
+  EXPECT_FALSE(prec.used_smw());
+
+  Eigen::VectorXd b(1);
+  b << 4.0;
+  const Eigen::VectorXd got = prec.solve(b);
+
+  const Eigen::MatrixXd P2 = DenseSchurComplement(G_dense, H_diag2, active_k, f.mu);
+  const Eigen::VectorXd expected = P2.colPivHouseholderQr().solve(b);
+  EXPECT_TRUE(got.isApprox(expected, kTol));
+}
+
 TEST(DirectFactorization, FirstBuildNeverUsesSmwAndIncrementsFactCount) {
   Fixture f;
   const Eigen::MatrixXd G_dense = f.StackG({false, false});
@@ -240,7 +312,7 @@ TEST(DirectFactorization, FirstBuildNeverUsesSmwAndIncrementsFactCount) {
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
 
   EXPECT_FALSE(prec.used_smw());
@@ -259,14 +331,14 @@ TEST(SmwBranch, SmwActivatesOnSingleKFlipWithEverythingElseRetained) {
   const BoolArr active_k1 = ToBoolArr({true, true, true});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
   // Flip column 2 from active to inactive; everything else (G, active_W) retained.
   const std::vector<bool> active_k2 = {true, true, false};
   const BoolArr active_K2 = ToBoolArr(active_k2);
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -279,6 +351,48 @@ TEST(SmwBranch, SmwActivatesOnSingleKFlipWithEverythingElseRetained) {
   b << 2.5;
   const Eigen::VectorXd got = prec.solve(b);
   const Eigen::MatrixXd P2 = DenseSchurComplement(G_dense, f.H_diag, active_k2, f.mu);
+  const Eigen::VectorXd expected = P2.colPivHouseholderQr().solve(b);
+  EXPECT_TRUE(got.isApprox(expected, kTol));
+}
+
+TEST(SmwBranch, RejectsSmwWhenRhoChangedSinceSnapshotEvenWithNonzeroRankDelta) {
+  // Companion to SmwActivatesOnSingleKFlipWithEverythingElseRetained: same single-K-flip delta
+  // (which alone would be SMW-eligible, rank=1), but rho also changed since the snapshot. The
+  // low-rank update only recomputes H_diag-derived values for the flipped index (column 2); it
+  // implicitly reuses P_old (factorized against the snapshot's rho) for everything else -- e.g.
+  // column 0/1's contribution to the capacitance math. A rho drift silently invalidates that
+  // reuse, so this must be rejected at the gate and fall back to a full, correct rebuild.
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});  // s stays 1 throughout
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+  const BoolArr active_k1 = ToBoolArr({true, true, true});
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, f.rho, true, true, false);
+  prec.compute(0);
+  ASSERT_EQ(prec.fact_count(), 1);
+
+  // Same single-K-flip delta as the companion test, but rho also changed (standing in for
+  // H_diag's active-K entries drifting on top of the flip).
+  const std::vector<bool> active_k2 = {true, true, false};
+  const BoolArr active_K2 = ToBoolArr(active_k2);
+  const Eigen::VectorXd H_diag2 = (Eigen::VectorXd(3) << 6.0, 7.0, 9.0).finished();
+  const double rho2 = 7.0;
+  prec.arm(G, G_tr, H_diag2, active_K2, active_W, B_rm, f.mu, rho2, /*rebuild=*/true,
+           /*prec_pattern_changed=*/false, false);
+  prec.compute(0);
+
+  EXPECT_FALSE(prec.used_smw());
+  EXPECT_EQ(prec.fact_count(), 2);  // full rebuild, not a low-rank patch
+  EXPECT_EQ(prec.smw_last_reject_reason(), Prec::SmwRejectReason::RhoChangedSinceSnapshot);
+
+  Eigen::VectorXd b(1);
+  b << 2.5;
+  const Eigen::VectorXd got = prec.solve(b);
+  const Eigen::MatrixXd P2 = DenseSchurComplement(G_dense, H_diag2, active_k2, f.mu);
   const Eigen::VectorXd expected = P2.colPivHouseholderQr().solve(b);
   EXPECT_TRUE(got.isApprox(expected, kTol));
 }
@@ -296,7 +410,7 @@ TEST(SmwBranch, SmwHandlesSingleWRowAddition) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, true, true, false);
+  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -305,7 +419,7 @@ TEST(SmwBranch, SmwHandlesSingleWRowAddition) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -334,7 +448,7 @@ TEST(SmwBranch, SmwHandlesSingleWRowDeletion) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, true, true, false);
+  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -343,7 +457,7 @@ TEST(SmwBranch, SmwHandlesSingleWRowDeletion) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -368,6 +482,7 @@ TEST(SmwBranch, FallsBackToFullRebuildWhenDeltaRankExceedsThreshold) {
   const RowMajorSpMat B_rm = DenseToSparseRowMajor(B_rows);
   Eigen::VectorXd H_diag = Eigen::VectorXd::LinSpaced(N, 2.0, 2.0 + N - 1);
   const double mu = 5.0;
+  const double rho = 3.0;
   const BoolArr active_K = ToBoolArr(std::vector<bool>(N, true));
   const BoolArr active_W1 = ToBoolArr(std::vector<bool>(N, false));
   const BoolArr active_W2 = ToBoolArr(std::vector<bool>(N, true));
@@ -376,7 +491,7 @@ TEST(SmwBranch, FallsBackToFullRebuildWhenDeltaRankExceedsThreshold) {
   const SpMat G1_tr = DenseToSparse(A_row.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, true, true, false);
+  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -386,7 +501,7 @@ TEST(SmwBranch, FallsBackToFullRebuildWhenDeltaRankExceedsThreshold) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu,
+  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, rho,
            /*rebuild=*/true, /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -407,12 +522,12 @@ TEST(SmwBranch, ForceFullRebuildBypassesEligibleSmw) {
   const BoolArr active_K2 = ToBoolArr({true, true, false});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
   // A single K flip would normally be SMW-eligible but force_rebuild=true should bypass it entirely.
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false, /*force_rebuild=*/true);
   prec.compute(0);
 
@@ -432,7 +547,7 @@ TEST(SmwBranch, RecordSmwRebuildSuppressesSmwAfterFailStreak) {
   const BoolArr active_K2 = ToBoolArr({true, true, false});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -440,7 +555,7 @@ TEST(SmwBranch, RecordSmwRebuildSuppressesSmwAfterFailStreak) {
   EXPECT_TRUE(prec.smw_suppressed());
 
   // Otherwise-eligible single K flip should now be rejected as Suppressed.
-  prec.set_data(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.set_data(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
                /*prec_pattern_changed=*/false);
   prec.set_use_ldlt(false);
   prec.compute(0);
@@ -461,7 +576,7 @@ TEST(SmwBranch, ResetSmwFailStreakReenablesSmw) {
   const BoolArr active_K2 = ToBoolArr({true, true, false});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -470,7 +585,7 @@ TEST(SmwBranch, ResetSmwFailStreakReenablesSmw) {
   ASSERT_FALSE(prec.smw_suppressed());
   prec.reset_smw_fail_streak();
 
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -489,7 +604,7 @@ TEST(SmwBranch, ReleaseClearsStateAndForcesFullRebuildNext) {
   const BoolArr active_K2 = ToBoolArr({true, true, false});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -497,7 +612,7 @@ TEST(SmwBranch, ReleaseClearsStateAndForcesFullRebuildNext) {
 
   // Even an otherwise-SMW-eligible delta can't use SMW: release() cleared the snapshot and
   // initialized_, so build() skips try_build_smw() entirely and does a full factorization.
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/true, false);
   prec.compute(0);
 
@@ -516,14 +631,14 @@ TEST(SmwBranch, FactorizationMethodSwitchForcesFullRebuildInsteadOfSmw) {
   const BoolArr active_K2 = ToBoolArr({true, true, false});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/false);
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
   ASSERT_FALSE(prec.used_ldlt_at_last_fact());
 
   // Same otherwise-SMW-eligible K flip, but switching factorization methods should force 
   // a full (LDLT) rebuild instead.
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
   prec.compute(0);
 
@@ -546,7 +661,7 @@ TEST(SmwBranch, SetDataForcesRebuildOnSizeChange) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, true, true, false);
+  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -556,7 +671,7 @@ TEST(SmwBranch, SetDataForcesRebuildOnSizeChange) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, /*rebuild=*/false,
+  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/false,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -578,13 +693,13 @@ TEST(FinishFactorization, ComputeSkipsRefactorizationWhenNothingChangesCholesky)
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
   // Re-arm with identical data and rebuild=false: finish_factorization must have left
   // mu_at_last_fact_ == mu, so compute() sees mu_changed == false and skips build() entirely.
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, /*rebuild=*/false,
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, /*rebuild=*/false,
            /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
   prec.compute(0);
   EXPECT_EQ(prec.fact_count(), 1);
@@ -600,11 +715,11 @@ TEST(FinishFactorization, ComputeSkipsRefactorizationWhenNothingChangesLdlt) {
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/true);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, /*rebuild=*/false,
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, /*rebuild=*/false,
            /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
   prec.compute(0);
   EXPECT_EQ(prec.fact_count(), 1);
@@ -621,7 +736,7 @@ TEST(FinishFactorization, LdltFullRebuildAcrossSizeChangeMatchesDenseOnBothFacto
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G1, G1_tr, f.H_diag, active_K1, active_W1, B_rm, f.mu, true, true, /*use_ldlt=*/true);
+  prec.arm(G1, G1_tr, f.H_diag, active_K1, active_W1, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -638,7 +753,7 @@ TEST(FinishFactorization, LdltFullRebuildAcrossSizeChangeMatchesDenseOnBothFacto
   const BoolArr active_K2 = ToBoolArr(active_k2);
   const BoolArr active_W2 = ToBoolArr({true, false});
 
-  prec.arm(G2, G2_tr, f.H_diag, active_K2, active_W2, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, f.H_diag, active_K2, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
   prec.compute(0);
   EXPECT_FALSE(prec.used_smw());
@@ -664,13 +779,13 @@ TEST(FinishFactorization, SmwAfterLdltFullRebuildMatchesDense) {
   const BoolArr active_k1 = ToBoolArr({true, true, true});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/true);
+  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
   const std::vector<bool> active_k2 = {true, true, false};
   const BoolArr active_K2 = ToBoolArr(active_k2);
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
   prec.compute(0);
 
@@ -692,6 +807,7 @@ TEST(FinishFactorization, ScratchBuffersResetCorrectlyAcrossProblemSizeChange) {
       (Eigen::MatrixXd(2, 3) << 1.0, 0.0, 0.0, 0.0, 1.0, 0.0).finished());
   const Eigen::VectorXd H_diag = (Eigen::VectorXd(3) << 2.0, 3.0, 4.0).finished();
   const double mu = 5.0;
+  const double rho = 3.0;
   const Eigen::MatrixXd A_row = (Eigen::MatrixXd(1, 3) << 1.0, 1.0, 1.0).finished();
   const Eigen::MatrixXd B_rows = (Eigen::MatrixXd(2, 3) << 1.0, 0.0, 0.0, 0.0, 1.0, 0.0).finished();
 
@@ -705,7 +821,7 @@ TEST(FinishFactorization, ScratchBuffersResetCorrectlyAcrossProblemSizeChange) {
   const BoolArr active_K1 = ToBoolArr(active_k1);
   const BoolArr active_W1a = ToBoolArr({false, false});
 
-  prec.arm(G1a, G1a_tr, H_diag, active_K1, active_W1a, B_rm, mu, true, true, /*use_ldlt=*/true);
+  prec.arm(G1a, G1a_tr, H_diag, active_K1, active_W1a, B_rm, mu, rho, true, true, /*use_ldlt=*/true);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -716,7 +832,7 @@ TEST(FinishFactorization, ScratchBuffersResetCorrectlyAcrossProblemSizeChange) {
   const SpMat G1b_tr = DenseToSparse(G1b_dense.transpose());
   const BoolArr active_W1b = ToBoolArr({true, true});
 
-  prec.arm(G1b, G1b_tr, H_diag, active_K1, active_W1b, B_rm, mu, /*rebuild=*/true,
+  prec.arm(G1b, G1b_tr, H_diag, active_K1, active_W1b, B_rm, mu, rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
   prec.compute(0);
   EXPECT_TRUE(prec.used_smw());
@@ -736,6 +852,7 @@ TEST(FinishFactorization, ScratchBuffersResetCorrectlyAcrossProblemSizeChange) {
   const RowMajorSpMat B_rm2 = DenseToSparseRowMajor(B_rows2);
   const Eigen::VectorXd H_diag2 = (Eigen::VectorXd(5) << 1.0, 2.0, 3.0, 4.0, 5.0).finished();
   const double mu2 = 4.0;
+  const double rho2 = 6.0;
   const std::vector<bool> active_k2 = {true, true, true, true, true};
   const BoolArr active_K2 = ToBoolArr(active_k2);
   const BoolArr active_W2a = ToBoolArr({false, false});
@@ -744,7 +861,7 @@ TEST(FinishFactorization, ScratchBuffersResetCorrectlyAcrossProblemSizeChange) {
   const SpMat G2a = DenseToSparse(G2a_dense);
   const SpMat G2a_tr = DenseToSparse(G2a_dense.transpose());
 
-  prec.arm(G2a, G2a_tr, H_diag2, active_K2, active_W2a, B_rm2, mu2, /*rebuild=*/true,
+  prec.arm(G2a, G2a_tr, H_diag2, active_K2, active_W2a, B_rm2, mu2, rho2, /*rebuild=*/true,
            /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
   prec.compute(0);
   EXPECT_FALSE(prec.used_smw());
@@ -757,7 +874,7 @@ TEST(FinishFactorization, ScratchBuffersResetCorrectlyAcrossProblemSizeChange) {
   const SpMat G2b_tr = DenseToSparse(G2b_dense.transpose());
   const BoolArr active_W2b = ToBoolArr({true, true});
 
-  prec.arm(G2b, G2b_tr, H_diag2, active_K2, active_W2b, B_rm2, mu2, /*rebuild=*/true,
+  prec.arm(G2b, G2b_tr, H_diag2, active_K2, active_W2b, B_rm2, mu2, rho2, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
   prec.compute(0);
   EXPECT_TRUE(prec.used_smw());
@@ -783,14 +900,14 @@ TEST(ConsumeFactCountDelta, ConsumeFactCountDeltaReturnsBuildsSinceLastArmAndRes
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   EXPECT_EQ(prec.consume_fact_count_delta(), 1);
   // No new arm()/build() since the last sample: delta is 0, and it stays 0 on repeated calls.
   EXPECT_EQ(prec.consume_fact_count_delta(), 0);
   EXPECT_EQ(prec.consume_fact_count_delta(), 0);
 
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/true, false, /*force_rebuild=*/true);
   prec.compute(0);
   EXPECT_EQ(prec.consume_fact_count_delta(), 1);
@@ -806,7 +923,7 @@ TEST(ShouldRetryAfterFailure, ShouldRetryAfterFailureReturnsFalseWhenLastBuildWa
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_FALSE(prec.used_smw());
 
@@ -825,9 +942,9 @@ TEST(ShouldRetryAfterFailure, ShouldRetryAfterFailureReturnsTrueAndRecordsFailur
   const BoolArr active_K2 = ToBoolArr({true, true, false});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
   ASSERT_TRUE(prec.used_smw());
@@ -854,7 +971,7 @@ TEST(SmwCumulativeUpdates, ConsecutiveSmwUpdatesAccumulateRankAgainstOriginalSna
 
   Prec prec;
   const BoolArr active_K0 = ToBoolArr({true, true, true});
-  prec.arm(G, G_tr, f.H_diag, active_K0, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K0, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -864,7 +981,7 @@ TEST(SmwCumulativeUpdates, ConsecutiveSmwUpdatesAccumulateRankAgainstOriginalSna
   // Step 1: flip column 2 off. Cumulative rank vs. the original (all-active) snapshot = 1.
   const std::vector<bool> k1 = {true, true, false};
   const BoolArr active_K1 = ToBoolArr(k1);
-  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, true, false, false);
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, false, false);
   prec.compute(0);
   EXPECT_TRUE(prec.used_smw());
   EXPECT_EQ(prec.fact_count(), 1);
@@ -875,7 +992,7 @@ TEST(SmwCumulativeUpdates, ConsecutiveSmwUpdatesAccumulateRankAgainstOriginalSna
   // Step 2: also flip column 1 off. Cumulative rank vs. the original snapshot = 2 (not 1 again).
   const std::vector<bool> k2 = {true, false, false};
   const BoolArr active_K2 = ToBoolArr(k2);
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, true, false, false);
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, true, false, false);
   prec.compute(0);
   EXPECT_TRUE(prec.used_smw());
   EXPECT_EQ(prec.fact_count(), 1);
@@ -886,7 +1003,7 @@ TEST(SmwCumulativeUpdates, ConsecutiveSmwUpdatesAccumulateRankAgainstOriginalSna
   // Step 3: also flip column 0 off (every column now inactive). Cumulative rank = 3.
   const std::vector<bool> k3 = {false, false, false};
   const BoolArr active_K3 = ToBoolArr(k3);
-  prec.arm(G, G_tr, f.H_diag, active_K3, active_W, B_rm, f.mu, true, false, false);
+  prec.arm(G, G_tr, f.H_diag, active_K3, active_W, B_rm, f.mu, f.rho, true, false, false);
   prec.compute(0);
   EXPECT_TRUE(prec.used_smw());
   EXPECT_EQ(prec.fact_count(), 1);
@@ -904,6 +1021,7 @@ TEST(SmwCumulativeUpdates, SmwSucceedsWhenDeltaRankExactlyEqualsThreshold) {
   const RowMajorSpMat B_rm = DenseToSparseRowMajor(B_rows);
   Eigen::VectorXd H_diag = Eigen::VectorXd::LinSpaced(N, 2.0, 2.0 + N - 1);
   const double mu = 5.0;
+  const double rho = 3.0;
   const BoolArr active_K = ToBoolArr(std::vector<bool>(N, true));
   const BoolArr active_W1 = ToBoolArr(std::vector<bool>(N, false));
   const BoolArr active_W2 = ToBoolArr(std::vector<bool>(N, true));
@@ -912,7 +1030,7 @@ TEST(SmwCumulativeUpdates, SmwSucceedsWhenDeltaRankExactlyEqualsThreshold) {
   const SpMat G1_tr = DenseToSparse(A_row.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, true, true, false);
+  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -922,7 +1040,7 @@ TEST(SmwCumulativeUpdates, SmwSucceedsWhenDeltaRankExactlyEqualsThreshold) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu,
+  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, rho,
            /*rebuild=*/true, /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -948,13 +1066,13 @@ TEST(SmwCumulativeUpdates, SmwRejectsZeroRankDeltaWithExplicitReason) {
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
   // Identical active_K/active_W/G, but rebuild=true forces build() to run try_build_smw() anyway:
   // h=p=q=0 so the rank==0 sub-case of RankZeroOrExceedsThreshold fires specifically.
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -975,7 +1093,7 @@ TEST(SmwCumulativeUpdates, SmwRejectsWithNoSnapshotAfterFailStreakClearsSnapshot
   const BoolArr active_K2 = ToBoolArr({true, true, false});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -987,7 +1105,7 @@ TEST(SmwCumulativeUpdates, SmwRejectsWithNoSnapshotAfterFailStreakClearsSnapshot
   // When the fail-streak hit its threshold, record_smw_rebuild() cleared G_old_.
   // So although has_snapshot_ is still true even with the streak reset (only release() clears that),
   // (!has_snapshot_ || G_old_.rows() == 0) hits its second half and rejects the SMW update.
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -1019,7 +1137,7 @@ TEST(DegenerateActiveSet, SolveMatchesDenseWhenAllKInactiveCholesky) {
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
   prec.compute(0);
   ASSERT_EQ(prec.info(), Eigen::Success);
 
@@ -1042,7 +1160,7 @@ TEST(DegenerateActiveSet, SolveMatchesDenseWhenAllKInactiveLdlt) {
   const RowMajorSpMat B_rm = f.B_rm();
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, /*use_ldlt=*/true);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
   prec.compute(0);
   ASSERT_EQ(prec.info(), Eigen::Success);
 
@@ -1063,7 +1181,7 @@ TEST(DegenerateActiveSet, SmwHandlesMultipleSimultaneousKFlipsInOneDelta) {
   const BoolArr active_k1 = ToBoolArr({true, true, true});
 
   Prec prec;
-  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -1071,7 +1189,7 @@ TEST(DegenerateActiveSet, SmwHandlesMultipleSimultaneousKFlipsInOneDelta) {
   // as opposed to two separate single-flip SMW calls.
   const std::vector<bool> active_k2 = {true, false, false};
   const BoolArr active_K2 = ToBoolArr(active_k2);
-  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -1099,7 +1217,7 @@ TEST(DegenerateActiveSet, SmwHandlesDeletingAllActiveWRowsAtOnce) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, true, true, false);
+  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -1109,7 +1227,7 @@ TEST(DegenerateActiveSet, SmwHandlesDeletingAllActiveWRowsAtOnce) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -1137,7 +1255,7 @@ TEST(DegenerateActiveSet, SmwHandlesSimultaneousKFlipAndWRowAddAndDelete) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, f.H_diag, active_K1, active_W1, B_rm, f.mu, true, true, false);
+  prec.arm(G1, G1_tr, f.H_diag, active_K1, active_W1, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -1148,7 +1266,7 @@ TEST(DegenerateActiveSet, SmwHandlesSimultaneousKFlipAndWRowAddAndDelete) {
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
   const BoolArr active_K2 = ToBoolArr(active_k2);
-  prec.arm(G2, G2_tr, f.H_diag, active_K2, active_W2, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, f.H_diag, active_K2, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -1178,6 +1296,7 @@ TEST(DegenerateActiveSet, SmwFallsBackWhenCapacitanceMatrixIsSingular) {
   Eigen::VectorXd H_diag(3);
   H_diag << 2.0, 3.0, 4.0;
   const double mu = 1e10;  // 1/mu negligible relative to the sqrt(eps) rank-detection threshold
+  const double rho = 3.0;
   const BoolArr active_K = ToBoolArr({true, true, true});
   const BoolArr active_W1 = ToBoolArr({false, false});
   const BoolArr active_W2 = ToBoolArr({true, true});
@@ -1187,7 +1306,7 @@ TEST(DegenerateActiveSet, SmwFallsBackWhenCapacitanceMatrixIsSingular) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, true, true, false);
+  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -1197,7 +1316,7 @@ TEST(DegenerateActiveSet, SmwFallsBackWhenCapacitanceMatrixIsSingular) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -1218,6 +1337,7 @@ TEST(DegenerateActiveSet, SmwSucceedsFromLegitimatelyEmptyZeroByZeroSnapshot) {
   Eigen::VectorXd H_diag(3);
   H_diag << 2.0, 3.0, 4.0;
   const double mu = 5.0;
+  const double rho = 3.0;
   const std::vector<bool> active_k = {true, true, true};
   const BoolArr active_K = ToBoolArr(active_k);
   const BoolArr active_W1 = ToBoolArr({false, false});
@@ -1227,7 +1347,7 @@ TEST(DegenerateActiveSet, SmwSucceedsFromLegitimatelyEmptyZeroByZeroSnapshot) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, /*rebuild=*/true, /*prec_pattern_changed=*/true,
+  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, rho, /*rebuild=*/true, /*prec_pattern_changed=*/true,
            /*use_ldlt=*/false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
@@ -1240,7 +1360,7 @@ TEST(DegenerateActiveSet, SmwSucceedsFromLegitimatelyEmptyZeroByZeroSnapshot) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, /*rebuild=*/true, /*prec_pattern_changed=*/false,
+  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, rho, /*rebuild=*/true, /*prec_pattern_changed=*/false,
            /*use_ldlt=*/false);
   prec.compute(0);
 
@@ -1302,7 +1422,7 @@ TEST(PublicApiEdgeCases, ReleaseIsSafeOnFreshObjectAndIdempotent) {
   const BoolArr active_W = ToBoolArr({false, false});
   const RowMajorSpMat B_rm = f.B_rm();
 
-  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true, false);
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, false);
   prec.compute(0);
   EXPECT_EQ(prec.fact_count(), 1);
 
@@ -1335,6 +1455,7 @@ struct LeakageFixture {
           .finished();
   Eigen::VectorXd H_diag = (Eigen::VectorXd(4) << 2.0, 3.0, 4.0, 5.0).finished();
   double mu = 5.0;
+  double rho = 3.0;  // distinct from mu so a mu/rho argument swap would be caught by assertions
 
   RowMajorSpMat B_rm() const { return DenseToSparseRowMajor(B_rows); }
 
@@ -1412,7 +1533,7 @@ void ArmThroughEpochAAndDelta1(Prec& prec, const LeakageFixture& f, const RowMaj
   const SpMat G_A = DenseToSparse(G_A_dense);
   const SpMat G_A_tr = DenseToSparse(G_A_dense.transpose());
 
-  prec.arm(G_A, G_A_tr, f.H_diag, active_K_A, active_W_A, B_rm, f.mu, true, true, use_ldlt);
+  prec.arm(G_A, G_A_tr, f.H_diag, active_K_A, active_W_A, B_rm, f.mu, f.rho, true, true, use_ldlt);
   prec.compute(0);
   EXPECT_EQ(prec.fact_count(), 1);
 
@@ -1424,7 +1545,7 @@ void ArmThroughEpochAAndDelta1(Prec& prec, const LeakageFixture& f, const RowMaj
   const SpMat G_D1 = DenseToSparse(G_D1_dense);
   const SpMat G_D1_tr = DenseToSparse(G_D1_dense.transpose());
 
-  prec.arm(G_D1, G_D1_tr, f.H_diag, active_K_D1, active_W_D1, B_rm, f.mu, /*rebuild=*/true,
+  prec.arm(G_D1, G_D1_tr, f.H_diag, active_K_D1, active_W_D1, B_rm, f.mu, f.rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, use_ldlt);
   prec.compute(0);
   EXPECT_TRUE(prec.used_smw());
@@ -1451,7 +1572,7 @@ static void RunFullyOverwrittenBufferScenario(bool use_ldlt) {
   PoisonFullyOverwrittenBuffers(prec, use_ldlt);
 
   const LeakageDelta2 d2(f);
-  prec.arm(d2.G_D2, d2.G_D2_tr, f.H_diag, d2.active_K_D2, d2.active_W_D2, B_rm, f.mu,
+  prec.arm(d2.G_D2, d2.G_D2_tr, f.H_diag, d2.active_K_D2, d2.active_W_D2, B_rm, f.mu, f.rho,
            /*rebuild=*/true, /*prec_pattern_changed=*/false, use_ldlt);
   prec.compute(0);
 
@@ -1498,7 +1619,7 @@ static void RunSmwTmpPoisoningScenario(bool use_ldlt) {
 
   const LeakageDelta2 d2(f);
   auto trigger_delta2 = [&] {
-    prec.arm(d2.G_D2, d2.G_D2_tr, f.H_diag, d2.active_K_D2, d2.active_W_D2, B_rm, f.mu,
+    prec.arm(d2.G_D2, d2.G_D2_tr, f.H_diag, d2.active_K_D2, d2.active_W_D2, B_rm, f.mu, f.rho,
              /*rebuild=*/true, /*prec_pattern_changed=*/false, use_ldlt);
     prec.compute(0);
   };
@@ -1548,7 +1669,7 @@ TEST(SnapshotDesync, RapidActiveSetOscillationNeverDriftsFromSnapshotClassificat
   const SpMat G_base_tr = DenseToSparse(G_base_dense.transpose());
 
   Prec prec;
-  prec.arm(G_base, G_base_tr, f.H_diag, active_K_base, active_W_base, B_rm, f.mu, true, true,
+  prec.arm(G_base, G_base_tr, f.H_diag, active_K_base, active_W_base, B_rm, f.mu, f.rho, true, true,
            /*use_ldlt=*/false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
@@ -1559,7 +1680,7 @@ TEST(SnapshotDesync, RapidActiveSetOscillationNeverDriftsFromSnapshotClassificat
     const Eigen::MatrixXd G_dense = f.StackG(w);
     const SpMat G = DenseToSparse(G_dense);
     const SpMat G_tr = DenseToSparse(G_dense.transpose());
-    prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, /*rebuild=*/true,
+    prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
              /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
     prec.compute(0);
     const Eigen::VectorXd b =
@@ -1663,10 +1784,10 @@ TEST(SnapshotDesync, LongDeterministicOscillationMatchesIndependentlyComputedRan
                                (s.w1 != snapshot.w1);
 
     if (i == 0) {
-      prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, true, true,
+      prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true,
                /*use_ldlt=*/false);
     } else {
-      prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, /*rebuild=*/true,
+      prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
                /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
     }
     prec.compute(0);
@@ -1713,6 +1834,7 @@ TEST(ZeroRowSchurComplement, DirectSolveOnZeroRowGCholesky) {
   Eigen::VectorXd H_diag(3);
   H_diag << 2.0, 3.0, 4.0;
   const double mu = 5.0;
+  const double rho = 3.0;
   const BoolArr active_K = ToBoolArr({true, true, true});
   const BoolArr active_W = ToBoolArr({false, false});
 
@@ -1721,7 +1843,7 @@ TEST(ZeroRowSchurComplement, DirectSolveOnZeroRowGCholesky) {
   const SpMat G_tr = DenseToSparse(G_dense.transpose());
 
   Prec prec;
-  prec.arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu, rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/true, /*use_ldlt=*/false);
   prec.compute(0);
 
@@ -1744,6 +1866,7 @@ TEST(ZeroRowSchurComplement, DirectSolveOnZeroRowGLdlt) {
   Eigen::VectorXd H_diag(3);
   H_diag << 2.0, 3.0, 4.0;
   const double mu = 5.0;
+  const double rho = 3.0;
   const BoolArr active_K = ToBoolArr({true, true, true});
   const BoolArr active_W = ToBoolArr({false, false});
 
@@ -1752,7 +1875,7 @@ TEST(ZeroRowSchurComplement, DirectSolveOnZeroRowGLdlt) {
   const SpMat G_tr = DenseToSparse(G_dense.transpose());
 
   Prec prec;
-  prec.arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu, /*rebuild=*/true,
+  prec.arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu, rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/true, /*use_ldlt=*/true);
   prec.compute(0);
 
@@ -1773,6 +1896,7 @@ TEST(ZeroRowSchurComplement, SmwDeletionLandsExactlyOnZeroRows) {
   Eigen::VectorXd H_diag(3);
   H_diag << 2.0, 3.0, 4.0;
   const double mu = 5.0;
+  const double rho = 3.0;
   const BoolArr active_K = ToBoolArr({true, true, true});
   const BoolArr active_W1 = ToBoolArr({true, false});
 
@@ -1781,7 +1905,7 @@ TEST(ZeroRowSchurComplement, SmwDeletionLandsExactlyOnZeroRows) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, true, true, /*use_ldlt=*/false);
+  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, rho, true, true, /*use_ldlt=*/false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -1792,7 +1916,7 @@ TEST(ZeroRowSchurComplement, SmwDeletionLandsExactlyOnZeroRows) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -1817,6 +1941,7 @@ TEST(ZeroRowSchurComplement, SmwCumulativeAdditionsFromZeroRowSnapshot) {
   Eigen::VectorXd H_diag(3);
   H_diag << 2.0, 3.0, 4.0;
   const double mu = 5.0;
+  const double rho = 3.0;
   const std::vector<bool> active_k = {true, true, true};
   const BoolArr active_K = ToBoolArr(active_k);
   const BoolArr active_W0 = ToBoolArr({false, false});
@@ -1826,7 +1951,7 @@ TEST(ZeroRowSchurComplement, SmwCumulativeAdditionsFromZeroRowSnapshot) {
   const SpMat G0_tr = DenseToSparse(G0_dense.transpose());
 
   Prec prec;
-  prec.arm(G0, G0_tr, H_diag, active_K, active_W0, B_rm, mu, true, true, /*use_ldlt=*/false);
+  prec.arm(G0, G0_tr, H_diag, active_K, active_W0, B_rm, mu, rho, true, true, /*use_ldlt=*/false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
   ASSERT_EQ(prec.info(), Eigen::Success);
@@ -1837,7 +1962,7 @@ TEST(ZeroRowSchurComplement, SmwCumulativeAdditionsFromZeroRowSnapshot) {
   const SpMat G1 = DenseToSparse(G1_dense);
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
-  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, /*rebuild=*/true,
+  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
   EXPECT_TRUE(prec.used_smw());
@@ -1851,7 +1976,7 @@ TEST(ZeroRowSchurComplement, SmwCumulativeAdditionsFromZeroRowSnapshot) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -1887,6 +2012,7 @@ TEST(NearSingularCapacitance, SubEpsilonRowPerturbationStillReadsAsSingular) {
   Eigen::VectorXd H_diag(3);
   H_diag << 2.0, 3.0, 4.0;
   const double mu = 1e10;  // 1/mu negligible relative to the sqrt(eps) rank-detection threshold
+  const double rho = 3.0;
   const std::vector<bool> active_k = {true, true, true};
   const BoolArr active_K = ToBoolArr(active_k);
   const BoolArr active_W1 = ToBoolArr({false, false});
@@ -1897,7 +2023,7 @@ TEST(NearSingularCapacitance, SubEpsilonRowPerturbationStillReadsAsSingular) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, true, true, false);
+  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -1907,7 +2033,7 @@ TEST(NearSingularCapacitance, SubEpsilonRowPerturbationStillReadsAsSingular) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -1946,6 +2072,7 @@ TEST(NearSingularCapacitance, AboveThresholdRowPerturbationSucceedsViaSmw) {
   Eigen::VectorXd H_diag(3);
   H_diag << 2.0, 3.0, 4.0;
   const double mu = 1e10;
+  const double rho = 3.0;
   const std::vector<bool> active_k = {true, true, true};
   const BoolArr active_K = ToBoolArr(active_k);
   const BoolArr active_W1 = ToBoolArr({false, false});
@@ -1956,7 +2083,7 @@ TEST(NearSingularCapacitance, AboveThresholdRowPerturbationSucceedsViaSmw) {
   const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
 
   Prec prec;
-  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, true, true, false);
+  prec.arm(G1, G1_tr, H_diag, active_K, active_W1, B_rm, mu, rho, true, true, false);
   prec.compute(0);
   ASSERT_EQ(prec.fact_count(), 1);
 
@@ -1966,7 +2093,7 @@ TEST(NearSingularCapacitance, AboveThresholdRowPerturbationSucceedsViaSmw) {
   const SpMat G2 = DenseToSparse(G2_dense);
   const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
 
-  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, /*rebuild=*/true,
+  prec.arm(G2, G2_tr, H_diag, active_K, active_W2, B_rm, mu, rho, /*rebuild=*/true,
            /*prec_pattern_changed=*/false, false);
   prec.compute(0);
 
@@ -2029,14 +2156,15 @@ TEST(RandomizedCholLdltConsistency, FiftyColumnRandomSystemCholeskyAndLdltAgree)
   const SpMat G_tr = DenseToSparse(G_dense.transpose());
 
   const double mu = 2.0;
+  const double rho = 3.0;
 
   Prec prec_chol;
-  prec_chol.arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu, true, true, /*use_ldlt=*/false);
+  prec_chol.arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu, rho, true, true, /*use_ldlt=*/false);
   prec_chol.compute(0);
   ASSERT_EQ(prec_chol.info(), Eigen::Success);
 
   Prec prec_ldlt;
-  prec_ldlt.arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu, true, true, /*use_ldlt=*/true);
+  prec_ldlt.arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu, rho, true, true, /*use_ldlt=*/true);
   prec_ldlt.compute(0);
   ASSERT_EQ(prec_ldlt.info(), Eigen::Success);
 

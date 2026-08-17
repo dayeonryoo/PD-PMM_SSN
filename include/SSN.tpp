@@ -185,7 +185,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
     // force_rebuild=true skips SMW and recomputes G E G^T from scratch.
     auto setup_prec = [&](bool force_rebuild) {
         SSN_TIMER_BLOCK(timer_prec_setup);
-        cg.preconditioner().arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu,
+        cg.preconditioner().arm(G, G_tr, H_diag, active_K, active_W, B_rm, mu, rho,
                                 update_prec, prec_pattern_changed, schur_use_ldlt, force_rebuild);
 #if SSN_ENABLE_TIMERS
         // TIMER: snapshot SchurPreconditioner's cumulative phase timers so we can diff after compute().
@@ -576,11 +576,16 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
     if (delta.w_changed) ldlt_pattern_dirty_ = true;
     if (delta.k_changed || delta.w_changed) ldlt_numeric_dirty_ = true; 
 
-    // If active_K changed, recompute H.
-    if (delta.k_changed) {
+    // Recompute H if active_K changed, or mu/rho drifted since H_diag was last built
+    // (H_diag = Q + mu(I_N - P_K) + I_N / rho depends on both, and mu/rho move every PMM
+    // iteration independently of the active set).
+    bool recompute_H = delta.k_changed || (mu != H_diag_mu_) || (rho != H_diag_rho_);
+    if (recompute_H) {
         SSN_TIMER_BLOCK(timer_prep);
-        diag_P_K = new_diag_P_K_;
-        active_K = (diag_P_K.array() == 1);
+        if (delta.k_changed) {
+            diag_P_K = new_diag_P_K_;
+            active_K = (diag_P_K.array() == 1);
+        }
 
         // H = Q + mu(I_N - P_K) + I_N / rho
         if (Q_info == 0) {
@@ -590,6 +595,8 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
         }
         H_diag = H_diag.cwiseMax(eps_zero); // safeguard for non-positive diagonal entries
         H_diag_inv = H_diag.cwiseInverse();
+        H_diag_mu_  = mu;
+        H_diag_rho_ = rho;
     }
 
     // If active_W changed, recompute G.
