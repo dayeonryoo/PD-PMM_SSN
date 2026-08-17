@@ -28,9 +28,10 @@ using Triplet = Eigen::Triplet<T>;
 int main(int argc, char** argv) {
     if (cli::has_flag(argc, argv, "--help") || cli::has_flag(argc, argv, "-h")) {
         std::cout <<
-            "Usage: ksp_qp_maros_meszaros [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE] [--cooldown S]\n"
-            "  Solves one Maros-Meszaros QP from DIR/PROBLEM.SIF, or sweeps the whole set with --name all.\n"
-            "  --root DIR       directory containing the .SIF files (default: data/maros_meszaros/)\n"
+            "Usage: ksp_qp_maros_meszaros [--root DIR] [--in DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE] [--cooldown S]\n"
+            "  Solves one Maros-Meszaros QP from ROOT/IN/PROBLEM.SIF, or sweeps the whole set with --name all.\n"
+            "  --root DIR       working directory; --in and --out are resolved relative to this (default: ./)\n"
+            "  --in DIR         directory containing the .SIF files, relative to --root (default: data/maros_meszaros/)\n"
             "  --name PROBLEM   problem name, without extension, or \"all\" to sweep every QP with a\n"
             "                   known reference objective (default: AUG2DCQP)\n"
             "  --tol T          primal-dual tolerance (default: 1e-6)\n"
@@ -41,12 +42,16 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::string root = cli::get_str(argc, argv, "--root", "data/maros_meszaros/");
+    std::string root = cli::get_str(argc, argv, "--root", "./");
     if (!root.empty() && root.back() != '/') root += '/';
+    std::string in_dir = cli::get_str(argc, argv, "--in", "data/maros_meszaros/");
+    if (!in_dir.empty() && in_dir.back() != '/') in_dir += '/';
+    std::string data_dir = root + in_dir;
     std::string name = cli::get_str(argc, argv, "--name", "AUG2DCQP");
 
     T tol = cli::get_double(argc, argv, "--tol", 1e-6);
     double time_limit = cli::get_double(argc, argv, "--time-limit", 60.0); // in seconds
+    int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
 
     if (name == "all") {
         // Filenames and objective values of Maros/Meszaros QPs
@@ -191,7 +196,6 @@ int main(int argc, char** argv) {
             {"ZECEVIC2",  -4.1250000e+00}
         };
 
-        int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
         PrintWhen when = PrintWhen::NEVER;
         PrintWhat what = PrintWhat::TUNING;
         int cooldown_sec = cli::get_int(argc, argv, "--cooldown", 3);
@@ -202,7 +206,7 @@ int main(int argc, char** argv) {
         for (const auto& [qp_name, ref_obj_val] : QPs) {
 
             // Build full path and check if file exists
-            std::string filename = root + qp_name + ".SIF";
+            std::string filename = data_dir + qp_name + ".SIF";
             if (!std::filesystem::exists(filename)) {
                 std::cerr << "SKIP: File not found: " << qp_name << "\n";
                 continue;
@@ -265,11 +269,10 @@ int main(int argc, char** argv) {
     }
 
     // ---- Single-problem solve ----
-    int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
-    std::string filename = root + name + ".SIF";
+    std::string filename = data_dir + name + ".SIF";
 
     std::cout << "==================== Solving " + name << " ====================\n";
 

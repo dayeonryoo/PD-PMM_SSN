@@ -115,7 +115,7 @@ public:
     // noise level, the diagonal regularization is escalated by 10x, up to this many attempts,
     // before giving up rather than silently clamping.
     static constexpr int kLdltMaxAttempts = 6;
-    static constexpr T   kLdltVerifyTol   = T(1e-6);
+    static constexpr T   kLdltVerifyTol   = T(1e-5);
 
     // Constant parameters
     T tol = 1e-6;
@@ -124,20 +124,20 @@ public:
     int ssn_max_in_iter = 50;
     T eps_limit = 1e-3 * tol;
     T mu_limit = 1e9;
-    T rho_limit = 1e9;
+    T rho_limit = 1e7;
     T alpha = 0.95;
     double time_limit = 60.0; // in seconds
     int linesearch_fail = 0;
 
     // Primal/dual infeasibility certificate tolerances.
-    T eps_pinf = 1e-1 * tol;
-    T eps_dinf = 1e-1 * tol;
+    T eps_pinf = 1e-3 * tol;
+    T eps_dinf = 1e-3 * tol;
 
     // Updated parameters
     T mu0 = 1e0;
     T rho0 = 1e0;
-    T mu = 1e1;
-    T rho = 1e9;
+    T mu = 1e2;
+    T rho = 1e7;
     T ssn_tol = 1e-2;
      
     // Outputs:

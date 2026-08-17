@@ -23,13 +23,14 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 // ==================== Solving Netlib LPs ====================
-
+/*
 int main(int argc, char** argv) {
     if (cli::has_flag(argc, argv, "--help") || cli::has_flag(argc, argv, "-h")) {
         std::cout <<
-            "Usage: ksp_qp_netlib [--root DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE]\n"
-            "  Solves one Netlib LP from DIR/PROBLEM.mps, or sweeps the whole feasible set with --name all.\n"
-            "  --root DIR       directory containing the .mps files (default: data/netlib/)\n"
+            "Usage: ksp_qp_netlib [--root DIR] [--in DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE]\n"
+            "  Solves one Netlib LP from ROOT/IN/PROBLEM.mps, or sweeps the whole feasible set with --name all.\n"
+            "  --root DIR       working directory; --in and --out are resolved relative to this (default: ./)\n"
+            "  --in DIR         directory containing the .mps files, relative to --root (default: data/netlib/)\n"
             "  --name PROBLEM   problem name, without extension, or \"all\" to sweep every LP with a\n"
             "                   known reference objective (default: AFIRO)\n"
             "  --tol T          primal-dual tolerance (default: 1e-6)\n"
@@ -39,11 +40,15 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::string root = cli::get_str(argc, argv, "--root", "data/netlib/");
+    std::string root = cli::get_str(argc, argv, "--root", "./");
     if (!root.empty() && root.back() != '/') root += '/';
+    std::string in_dir = cli::get_str(argc, argv, "--in", "data/netlib/");
+    if (!in_dir.empty() && in_dir.back() != '/') in_dir += '/';
+    std::string data_dir = root + in_dir;
     std::string name = cli::get_str(argc, argv, "--name", "AFIRO");
 
     T tol = cli::get_double(argc, argv, "--tol", 1e-6);
+    int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
     double time_limit = cli::get_double(argc, argv, "--time-limit", 60.0); // in seconds
 
     if (name == "all") {
@@ -148,7 +153,6 @@ int main(int argc, char** argv) {
             {"WOODW", 1.3044763331E+00}
         };
 
-        int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
         PrintWhen when = PrintWhen::NEVER;
         PrintWhat what = PrintWhat::TUNING;
 
@@ -158,7 +162,7 @@ int main(int argc, char** argv) {
         for (const auto& [lp_name, ref_obj_val] : LPs) {
 
             // Build full path and check if file exists
-            std::string filename = root + lp_name + ".mps";
+            std::string filename = data_dir + lp_name + ".mps";
             if (!std::filesystem::exists(filename)) {
                 std::cerr << "SKIP: File not found: " << lp_name << "\n";
                 continue;
@@ -174,9 +178,6 @@ int main(int argc, char** argv) {
 
                 Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
                 KSP_QP<T> solver(prob);
-
-                std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-                std::cout << "Compuation started at " << std::ctime(&curr_time);
 
                 // Solve the LP
                 Solution<T> sol = solver.solve();
@@ -223,7 +224,7 @@ int main(int argc, char** argv) {
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
-    std::string filename = root + name + ".mps";
+    std::string filename = data_dir + name + ".mps";
     std::cout << "==================== Solving " + name << " ====================\n";
 
     MpsFormatParser<T> parser;
@@ -239,12 +240,31 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-
+*/
 // ==================== Netlib infeasible problems ====================
-/*
+
 int main(int argc, char** argv) {
+    if (cli::has_flag(argc, argv, "--help") || cli::has_flag(argc, argv, "-h")) {
+        std::cout <<
+            "Usage: ksp_qp_netlib [--root DIR] [--in DIR] [--name PROBLEM|all] [--tol T] [--max-iter N] [--time-limit S] [--out FILE]\n"
+            "  Solves one Netlib LP from ROOT/IN/PROBLEM.mps, or sweeps the whole feasible set with --name all.\n"
+            "  --root DIR       working directory; --in and --out are resolved relative to this (default: ./)\n"
+            "  --in DIR         directory containing the .mps files, relative to --root (default: data/netlib/)\n"
+            "  --name PROBLEM   problem name, without extension, or \"all\" to sweep every LP with a\n"
+            "                   known reference objective (default: AFIRO)\n"
+            "  --tol T          primal-dual tolerance (default: 1e-6)\n"
+            "  --max-iter N     max PMM iterations (default: 3000)\n"
+            "  --time-limit S   time limit in seconds (default: 60)\n"
+            "  --out FILE       (--name all only) output CSV path, relative to --root (default: results/netlib_all.csv)\n";
+        return 0;
+    }
+
     std::string root = cli::get_str(argc, argv, "--root", "./");
     if (!root.empty() && root.back() != '/') root += '/';
+    std::string in_dir = cli::get_str(argc, argv, "--in", "data/netlib_infeas/");
+    if (!in_dir.empty() && in_dir.back() != '/') in_dir += '/';
+    std::string data_dir = root + in_dir;
+    std::string name = cli::get_str(argc, argv, "--name", "BGDBG1");
 
     std::vector<std::string> LPs = {
         "BGDBG1",
@@ -281,13 +301,13 @@ int main(int argc, char** argv) {
     // Parameters in common
     T tol = cli::get_double(argc, argv, "--tol", 1e-6);
     int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
-    double time_limit = cli::get_double(argc, argv, "--time-limit", 600.0); // in seconds
+    double time_limit = cli::get_double(argc, argv, "--time-limit", 60.0); // in seconds
 
-    PrintWhen when = PrintWhen::EVERY10;
+    PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
-    std::string csv_path = root + cli::get_str(argc, argv, "--out", "results/0504netlib_infeas.csv");
+    std::string csv_path = root + cli::get_str(argc, argv, "--out", "results/netlib_infeas_all.csv");
 
     // Write header
     if (!std::filesystem::exists(std::filesystem::path(csv_path))
@@ -299,7 +319,7 @@ int main(int argc, char** argv) {
     // Loop over all LPs
     for (const std::string name : LPs) {
         // Build full path and check if file exists
-        std::string filename = root + "data/netlib_infeas/" + name + ".mps";
+        std::string filename = data_dir + name + ".mps";
         if (!std::filesystem::exists(filename)) {
             std::cerr << "SKIP: File not found: " << name << "\n";
             continue;
@@ -316,23 +336,21 @@ int main(int argc, char** argv) {
             Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
             KSP_QP<T> solver(prob);
 
-            std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-            std::cout << "Compuation started at " << std::ctime(&curr_time);
-
-            // Chosen system:
-            std::string system = "S";
-
             // Solve the LP
             Solution<T> sol = solver.solve();
-            
+
+            // Chosen system:
+            std::string system = solver.kkt_ldlt_used ? "L" : "S";
+
             // Store the result
-            bool infeas_detected = (sol.opt == -2 || sol.opt == -3);
+            int opt = static_cast<int>(sol.opt);
+            bool infeas_detected = (opt == -2 || opt == -3);
             std::ofstream csv(csv_path, std::ios::out | std::ios::app);
-            csv << system << "," << infeas_detected << "," << sol.opt << ","
+            csv << system << "," << infeas_detected << "," << opt << ","
                 << name << "," << sol.pmm_iter << "," << sol.ssn_iter << ","
                 << sol.krylov_iter << "," << sol.fact << ","
                 << sol.pmm_tol_achieved << "," << sol.ssn_tol_achieved << ","
-                << solving_time_sec << "," << sol.linesearch_fail << ","
+                << sol.run_time << "," << sol.linesearch_fail << ","
                 <<  sol.krylov_fail << "\n";
             csv.close();
 
@@ -349,7 +367,7 @@ int main(int argc, char** argv) {
         }
     }
 }
-*/
+
 
 // ==================== A single Netlib infeasible problem ====================
 /*

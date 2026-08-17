@@ -4,6 +4,7 @@
 #include <fstream>
 #include <string>
 #include <filesystem>
+#include <stdexcept>
 
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
@@ -81,13 +82,24 @@ void print_feasibility(const KSPQPdata<T>& pd,
 inline void write_csv_header(const std::string& path) {
     namespace fs = std::filesystem;
 
-    if (!fs::exists(fs::path(path)) || fs::is_empty(fs::path(path))) {
+    fs::path p(path);
+    if (p.has_parent_path()) {
+        fs::create_directories(p.parent_path());
+    }
+
+    if (!fs::exists(p) || fs::is_empty(p)) {
         std::ofstream csv(path);
+        if (!csv.is_open()) {
+            throw std::runtime_error("write_csv_header: failed to open " + path + " for writing");
+        }
         csv << "System,agree,opt_status,diverged,name,abs_err,rel_err,obj_val,"
             << "pmm_iter,ssn_iter,krylov_iter,fact,smw_count,pmm_tol_achieved,ssn_tol_achieved,"
             << "run_time,linesearch_fail,krylov_fail\n";
-    } else if (!fs::is_empty(fs::path(path))) {
+    } else {
         std::ofstream csv(path, std::ios::out | std::ios::app);
+        if (!csv.is_open()) {
+            throw std::runtime_error("write_csv_header: failed to open " + path + " for appending");
+        }
         csv << "\n";
     }
 }
@@ -95,6 +107,9 @@ inline void write_csv_header(const std::string& path) {
 template <typename T>
 void append_csv_result(const std::string& path, const TestResult<T>& r) {
     std::ofstream csv(path, std::ios::out | std::ios::app);
+    if (!csv.is_open()) {
+        throw std::runtime_error("append_csv_result: failed to open " + path + " for appending");
+    }
     csv << r.system << "," << r.agree << "," << r.opt_status << "," << r.diverged << ","
         << r.name << "," << r.abs_err << "," << r.rel_err << ","
         << r.obj_val << "," << r.pmm_iter << "," << r.ssn_iter << ","
