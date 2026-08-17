@@ -644,6 +644,73 @@ void ExpectNewtonSystemSolved(const SSN<double>& ns, double tol = 1e-8) {
 
 }  // namespace
 
+// ===================== update_ssn_system =====================
+
+TEST(UpdateSsnSystem, CachesATrY1ExactlyOnceMatchingIndependentMatVec) {
+  SsnFixture f(DefaultA(), DefaultB());  // N=3, M=1, l=2
+  SSN<double> ns = f.Make();
+  Vec x0 = Vec::Zero(3);
+  Vec y10(1);
+  y10 << 2.5;
+  Vec y20 = Vec::Zero(2), z0 = Vec::Zero(3);
+  Vec dy10 = Vec::Zero(1), dz0 = Vec::Zero(3);
+  ns.update_ssn_system(x0, y10, y20, z0, dy10, dz0, /*mu=*/1.0, /*rho=*/1.0, 0.95, 0);
+
+  EXPECT_TRUE(ns.A_tr_y1_.isApprox(Dense(ns.A_tr) * y10));
+}
+
+TEST(UpdateSsnSystem, ATrY1StaysBitIdenticalAcrossRepeatedPrepareAndSolveCallsWithoutReUpdate) {
+  // A_tr_y1_ is recomputed unconditionally on every update_ssn_system() call, so the "cache"
+  // property under test is that it survives repeated calls to the rest of the per-SSN-iteration
+  // pipeline (prepare_newton_system -> solve_newton_direction -> line_search... -> update_iterate,
+  // mirroring solve_ssn()'s own loop) without that pipeline ever calling update_ssn_system() again
+  // -- exactly how the real outer PMM loop uses it (called once per PMM iteration, read many times
+  // across the SSN iterations within it).
+  SsnFixture f(DefaultA(), DefaultB());
+  SSN<double> ns = f.Make();
+  Vec x_pmm(3);
+  x_pmm << 1.0, 1.0, 1.0;
+  Vec y10(1);
+  y10 << 2.5;
+  Vec y20 = Vec::Zero(2), z0 = Vec::Zero(3);
+  Vec dy10 = Vec::Zero(1), dz0 = Vec::Zero(3);
+  ns.update_ssn_system(x_pmm, y10, y20, z0, dy10, dz0, /*mu=*/1.0, /*rho=*/1.0, /*alpha=*/0.95, 0);
+  const Vec cached = ns.A_tr_y1_;
+
+  ns.x_cur_ = ns.x;
+  ns.y2_cur_ = ns.y2;
+  ns.Ax_ssn_.noalias() = ns.A * ns.x_cur_;
+  ns.Bx_ssn_.noalias() = ns.B * ns.x_cur_;
+
+  for (int i = 0; i < 3; ++i) {
+    auto [update_prec, prec_pattern_changed] = ns.prepare_newton_system();
+    ns.solve_newton_direction(update_prec, prec_pattern_changed);
+    auto ls = ns.line_search_with_steepest_descent_fallback(/*ssn_tol=*/1e-6);
+    ASSERT_NE(ls.outcome, SSN<double>::LineSearchOutcome::Fail);
+    EXPECT_TRUE(ns.A_tr_y1_ == cached);  // never touched by anything in this loop
+    if (ls.outcome == SSN<double>::LineSearchOutcome::AcceptOptimal) break;
+    ns.update_iterate(ls.tau, i);
+  }
+}
+
+TEST(UpdateSsnSystem, ATrY1RecomputesOnNextUpdateSsnSystemCallWithNewY1) {
+  SsnFixture f(DefaultA(), DefaultB());
+  SSN<double> ns = f.Make();
+  Vec x0 = Vec::Zero(3);
+  Vec y10(1);
+  y10 << 2.5;
+  Vec y20 = Vec::Zero(2), z0 = Vec::Zero(3);
+  Vec dy10 = Vec::Zero(1), dz0 = Vec::Zero(3);
+  ns.update_ssn_system(x0, y10, y20, z0, dy10, dz0, 1.0, 1.0, 0.95, 0);
+  ASSERT_TRUE(ns.A_tr_y1_.isApprox(Dense(ns.A_tr) * y10));
+
+  Vec y1_new(1);
+  y1_new << -4.0;
+  ns.update_ssn_system(x0, y1_new, y20, z0, dy10, dz0, 1.0, 1.0, 0.95, 1);
+
+  EXPECT_TRUE(ns.A_tr_y1_.isApprox(Dense(ns.A_tr) * y1_new));
+}
+
 // ===================== prepare_newton_system =====================
 
 TEST(PrepareNewtonSystem, FirstCallAtInteriorPointReturnsFullUpdateWithZeroRhs) {
@@ -744,6 +811,7 @@ TEST(PrepareNewtonSystem, ActiveWChangeAloneRebuildsGWithoutChangingActiveK) {
   ns.prepare_newton_system();
 
   ns.Bx_ssn_(0) = 5.0;  // pushes v_(0) outside uw(0)=1 for W row 0 (B row0 = [1,0,0])
+  ns.prev_dy_ = Vec::Ones(1);  // poison: a w_changed call must clear this CG warm-start cache
 
   auto result = ns.prepare_newton_system();
 
@@ -755,6 +823,7 @@ TEST(PrepareNewtonSystem, ActiveWChangeAloneRebuildsGWithoutChangingActiveK) {
   ASSERT_EQ(ns.G.rows(), 2);  // M=1 + n_active_W=1
   EXPECT_TRUE(Dense(ns.G).row(1).isApprox(DenseB2x3().row(0)));
   EXPECT_TRUE((ns.active_K.array() == true).all());  // K untouched
+  EXPECT_EQ(ns.prev_dy_.size(), 0);  // w_changed invalidates the CG warm-start cache
 }
 
 TEST(PrepareNewtonSystem, HDiagRebuildsOnMuOnlyChangeWithoutActiveSetChange) {
@@ -899,6 +968,10 @@ TEST(SolveNewtonDirection, SatisfiesKktResidualWithPcgPath) {
   ExpectNewtonSystemSolved(ns);
   EXPECT_EQ(ns.dx_.size(), 3);
   EXPECT_EQ(ns.dy2_.size(), 2);
+  // prev_dy_ (CG warm-start cache) must be populated with the converged direction, ground-truthed
+  // against the final dxdy_ rather than only inferred from downstream KKT-residual correctness.
+  const int s = static_cast<int>(ns.r2_.size());
+  EXPECT_TRUE(ns.prev_dy_.isApprox(ns.dxdy_.tail(s)));
 }
 
 TEST(SolveNewtonDirection, SatisfiesKktResidualWithLdltFallbackPath) {
@@ -1010,12 +1083,20 @@ TEST(SolveNewtonDirection, IterativeRefinementCorrectsArtificiallyInjectedError)
   const double res_before = kkt_residual(ns.dxdy_);
   ASSERT_GT(res_before, ns.refine_abs_tol);  // corruption is large enough to actually need refining
 
+  // Poison prev_dy_ with a correctly-sized (so the size-only warm_start gate in solve_using_cg()
+  // wouldn't reject it) but wrong vector -- a size check alone couldn't catch stale-but-right-size
+  // content surviving refinement.
+  ns.prev_dy_ = Vec::Constant(s, 999.0);
+
   ns.iterative_refine_dxdy();
 
   const double res_after = kkt_residual(ns.dxdy_);
   const double ref_norm = std::max(ns.r1_.cwiseAbs().maxCoeff(), ns.r2_.cwiseAbs().maxCoeff());
   EXPECT_LE(res_after, std::max(ns.refine_rel_tol * ref_norm, ns.refine_abs_tol));
   EXPECT_LT(res_after, res_before);
+  // iterative_refine_dxdy() ends by setting prev_dy_ = dxdy_.tail(s) (the corrected, final
+  // direction) -- not the poisoned value, and not just the last correction delta.
+  EXPECT_TRUE(ns.prev_dy_.isApprox(ns.dxdy_.tail(s)));
 }
 
 // ===================== solve_using_ldlt =====================
@@ -1078,6 +1159,7 @@ TEST(SolveUsingLdlt, ForcedReanalyzeWhenSystemSizeChangesButPatternFlagWasNotMar
   Vec sol1 = ns.solve_using_ldlt(G1, H1, Vec::Zero(3), Vec::Zero(1));
   ExpectKktResidualSmall(sol1, G1, H1, Vec::Zero(3), Vec::Zero(1), ns.mu);
   ASSERT_FALSE(ns.ldlt_pattern_dirty_);  // cleared by the first call
+  ASSERT_TRUE(ns.K_ldlt_built_);
 
   SpMat G2(2, 3);  // s=2, N_tot=5
   {
@@ -1090,6 +1172,54 @@ TEST(SolveUsingLdlt, ForcedReanalyzeWhenSystemSizeChangesButPatternFlagWasNotMar
   r2_2 << 0.0, 1.0;
   Vec sol2 = ns.solve_using_ldlt(G2, H2, Vec::Zero(3), r2_2);
   ExpectKktResidualSmall(sol2, G2, H2, Vec::Zero(3), r2_2, ns.mu);
+
+  // K_ldlt_built_ ends up true again either way (the forced-reanalyze branch resets it to false,
+  // then the full-rebuild branch it triggers sets it back to true within the same call), so the
+  // flag alone can't distinguish "really reassembled" from "coincidentally unchanged" -- ground-
+  // truth the reassembly itself against an independently-assembled K = [-H2, G2^T; G2, (1/mu)I].
+  EXPECT_TRUE(ns.K_ldlt_built_);
+  Eigen::MatrixXd expected_K2 = Eigen::MatrixXd::Zero(5, 5);
+  for (int i = 0; i < 3; ++i) expected_K2(i, i) = -H2(i);
+  for (int i = 0; i < 2; ++i) expected_K2(3 + i, 3 + i) = 1.0 / ns.mu;
+  Eigen::MatrixXd G2_dense = Dense(G2);
+  expected_K2.block(3, 0, 2, 3) = G2_dense;
+  expected_K2.block(0, 3, 3, 2) = G2_dense.transpose();
+  EXPECT_TRUE(Dense(ns.K_ldlt_).isApprox(expected_K2));
+}
+
+TEST(SolveUsingLdlt, KLdltBuiltFalseInitiallyThenTrueAfterFirstSolve) {
+  SsnFixture f(DefaultA(), DefaultB());
+  SSN<double> ns = f.Make();
+  ns.mu = 1.0;
+  EXPECT_FALSE(ns.K_ldlt_built_);
+
+  SpMat G1 = DefaultA();
+  Vec H1 = Vec::Constant(3, 2.0);
+  ns.solve_using_ldlt(G1, H1, Vec::Zero(3), Vec::Zero(1));
+
+  EXPECT_TRUE(ns.K_ldlt_built_);
+}
+
+TEST(SolveUsingLdlt, KLdltBuiltStaysTrueAcrossDiagonalOnlyPatch) {
+  SsnFixture f(DefaultA(), DefaultB());
+  SSN<double> ns = f.Make();
+  ns.mu = 1.0;
+
+  SpMat G1 = DefaultA();  // s=1
+  Vec H1 = Vec::Constant(3, 2.0);
+  ns.solve_using_ldlt(G1, H1, Vec::Zero(3), Vec::Zero(1));
+  ASSERT_TRUE(ns.K_ldlt_built_);
+  ASSERT_FALSE(ns.ldlt_pattern_dirty_);
+
+  // Same G (same pattern): only H_diag values change, as prepare_newton_system() would signal via
+  // ldlt_numeric_dirty_ on a mu/rho-only drift -- this must take the diagonal-patch branch, which
+  // never touches K_ldlt_built_.
+  ns.ldlt_numeric_dirty_ = true;
+  Vec H2 = Vec::Constant(3, 5.0);
+  Vec sol2 = ns.solve_using_ldlt(G1, H2, Vec::Zero(3), Vec::Zero(1));
+  ExpectKktResidualSmall(sol2, G1, H2, Vec::Zero(3), Vec::Zero(1), ns.mu);
+
+  EXPECT_TRUE(ns.K_ldlt_built_);
 }
 
 TEST(SolveUsingLdlt, ConsumesFreshHDiagAfterMuRhoOnlyChangeBetweenPrepareCalls) {
@@ -1156,6 +1286,7 @@ TEST(SolveUsingCg, LdltLatchPermanentlyBypassesPcgAfterAGenuinePreconditionerFai
   // and this first call's own result must have gone through solve_using_ldlt().
   EXPECT_TRUE(ns.kkt_ldlt_used);
   EXPECT_GT(ns.krylov_fail, 0);
+  EXPECT_EQ(ns.prev_dy_.size(), 0);  // switch_to_ldlt() releases the now-unused CG warm-start cache
   ASSERT_EQ(sol1.size(), 2);
   {
     Vec dx = sol1.head(1), dy = sol1.tail(1);
@@ -1195,6 +1326,24 @@ TEST(SolveUsingCg, LdltLatchPermanentlyBypassesPcgAfterAGenuinePreconditionerFai
   Vec res2_2 = r2_2 - G2 * dx2 - dy2 / ns.mu;
   EXPECT_LT(res1_2.cwiseAbs().maxCoeff(), 1e-8);
   EXPECT_LT(res2_2.cwiseAbs().maxCoeff(), 1e-8);
+}
+
+// ===================== make_line_search_params =====================
+
+TEST(MakeLineSearchParams, CachesATrTimesAxMinusBMatchingIndependentRecomputation) {
+  SsnFixture f(DefaultA(), DefaultB());
+  SSN<double> ns = f.Make();
+  Vec x0 = Vec::Zero(3), y10 = Vec::Zero(1), y20 = Vec::Zero(2), z0 = Vec::Zero(3);
+  Vec dy10 = Vec::Zero(1), dz0 = Vec::Zero(3);
+  ns.update_ssn_system(x0, y10, y20, z0, dy10, dz0, 1.0, 1.0, 0.95, 0);
+  ns.x_cur_ = Vec::Zero(3);
+  ns.y2_cur_ = Vec::Zero(2);
+  ns.Ax_ssn_ = Vec::Constant(1, 2.0);  // != b (b=0), makes grad_res_p_ nonzero
+  ns.Bx_ssn_ = Vec::Zero(2);
+
+  ns.make_line_search_params();
+
+  EXPECT_TRUE(ns.grad_Atr_resp_.isApprox(Dense(ns.A_tr) * (ns.Ax_ssn_ - ns.b)));
 }
 
 // ===================== line_search_with_steepest_descent_fallback =====================
@@ -1278,6 +1427,13 @@ TEST(LineSearchWithSteepestDescentFallback, RetryWithSteepestDescentSucceedsAfte
   ns.dx_ << -0.5, -0.5, -0.5;  // ascent direction: zeta1 = dx.dot([-1,-1,-1]) = 1.5 >= 0 -> tau=0
   ns.dy2_ = Vec::Zero(2);
 
+  // grad_Atr_resp_ is cached once per SSN iteration and read again during the retry's
+  // compute_grad_Lagrangian() call inside line_search_with_steepest_descent_fallback() below --
+  // capture it up front the same way that internal call does, to check it stays bit-identical
+  // across the retry (true because Ax_ssn_ provably doesn't move between them).
+  ns.make_line_search_params();
+  const Vec grad_Atr_resp_before = ns.grad_Atr_resp_;
+
   auto ls = ns.line_search_with_steepest_descent_fallback(/*ssn_tol=*/1e-6);
 
   // grad_L at x_cur_=[0,0,0] (with x=[1,1,1], c=0, y1=0, rho=1) is [-1,-1,-1,0,0], so
@@ -1290,6 +1446,7 @@ TEST(LineSearchWithSteepestDescentFallback, RetryWithSteepestDescentSucceedsAfte
   EXPECT_TRUE(ns.dx_.isApprox(expected_dx));
   EXPECT_TRUE(ns.dy2_.isApprox(Vec::Zero(2)));
   EXPECT_EQ(ns.linesearch_fail, 0);  // retry succeeded, so no failure recorded
+  EXPECT_TRUE(ns.grad_Atr_resp_ == grad_Atr_resp_before);
 }
 
 TEST(LineSearchWithSteepestDescentFallback, AcceptsOptimalWhenFirstAttemptFailsButGradientIsSmall) {

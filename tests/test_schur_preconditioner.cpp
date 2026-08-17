@@ -87,6 +87,31 @@ struct SchurPreconditionerTestPeer {
   static Prec::Vec& smw_ldlt_padded(Prec& p) { return p.smw_ldlt_padded_; }
   static Prec::Mat& Y_all(Prec& p) { return p.Y_all_; }
   static Prec::Vec& r_pad(Prec& p) { return p.r_pad_; }
+
+  // Diagonal/active-index caches (schur_preconditioner.hpp:915,922-924).
+  static std::vector<int>& diag_idx_chol(Prec& p)     { return p.diag_idx_chol_; }
+  static std::vector<int>& ldlt_diag_top_idx(Prec& p) { return p.ldlt_diag_top_idx_; }
+  static std::vector<int>& ldlt_diag_bot_idx(Prec& p) { return p.ldlt_diag_bot_idx_; }
+  static std::vector<int>& ldlt_act_idx(Prec& p)      { return p.ldlt_act_idx_; }
+  static int& n_act(Prec& p)                          { return p.n_act_; }
+
+  // Cached row counts (schur_preconditioner.hpp:877-878).
+  static int& M_rows(Prec& p)    { return p.M_rows_; }
+  static int& s_current(Prec& p) { return p.s_current_; }
+
+  // SMW snapshot from the last full rebuild (schur_preconditioner.hpp:942-947).
+  static Prec::SpMat&   G_old(Prec& p)        { return p.G_old_; }
+  static Prec::Vec&     H_diag_old(Prec& p)   { return p.H_diag_old_; }
+  static Prec::BoolArr& active_K_old(Prec& p) { return p.active_K_old_; }
+  static Prec::BoolArr& active_W_old(Prec& p) { return p.active_W_old_; }
+  static Prec::Scalar&  mu_old(Prec& p)       { return p.mu_old_; }
+  static Prec::Scalar&  rho_old(Prec& p)      { return p.rho_old_; }
+
+  // Live sparse storage the diagonal index caches above point into -- needed to ground-truth them
+  // against an independent address-offset computation rather than only inferring correctness from
+  // solve() results.
+  static Prec::SpMat& chol_P(Prec& p)     { return std::get<typename Prec::CholSolver>(p.active_solver_).P; }
+  static Prec::SpMat& ldlt_P_hat(Prec& p) { return std::get<typename Prec::LdltSolver>(p.active_solver_).P_hat; }
 };
 
 // NOTE: SchurPreconditioner::arm()/setData() store pointers to their arguments.
@@ -936,6 +961,676 @@ TEST(FinishFactorization, ScratchBuffersResetCorrectlyAcrossProblemSizeChange) {
   const Eigen::VectorXd got2 = prec.solve(b2);
   const Eigen::MatrixXd P2 = DenseSchurComplement(G2b_dense, H_diag2, active_k2, mu2);
   EXPECT_TRUE(got2.isApprox(P2.colPivHouseholderQr().solve(b2), kTol));
+}
+
+// ===================== diagonal-patch index cache (diag_idx_chol_ / ldlt_diag_*_idx_ / ldlt_act_idx_) =====================
+//
+// These caches store flat storage-index offsets into sol.P/sol.P_hat's valuePtr() array (see
+// schur_preconditioner.hpp:919-924), used by the mu/rho-only patch paths to write via
+// valuePtr()[idx] (O(1)) instead of coeffRef(i,i) (O(log nnz)). A wrong index writes into the
+// WRONG matrix entry silently -- no crash, and a corrupted small entry can slip past solve()'s
+// tolerance check by luck -- so these are tested by comparing the cached offset directly against
+// an independently-computed &P.coeffRef(i,i) - P.valuePtr() ground truth, not just via solve().
+//
+// Fixture shape used throughout: active_K = {true, false, true} (n_act=2), active_W = {true, true}
+// (s=3), so n_act != s and a top/bottom-block or index mix-up is actually detectable.
+
+TEST(DiagonalPatchIndexCache, CholDiagIdxPointsAtTrueDiagonalEntriesAfterFullRebuild) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+
+  auto& diag_idx = SchurPreconditionerTestPeer::diag_idx_chol(prec);
+  auto& P = SchurPreconditionerTestPeer::chol_P(prec);
+  ASSERT_EQ(static_cast<int>(diag_idx.size()), 3);
+  for (int i = 0; i < 3; ++i)
+    EXPECT_EQ(diag_idx[i], static_cast<int>(&P.coeffRef(i, i) - P.valuePtr()));
+}
+
+TEST(DiagonalPatchIndexCache, CholDiagIdxSurvivesUnchangedAcrossConsecutiveMuOnlyPatches) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+  const std::vector<int> diag_idx_before = SchurPreconditionerTestPeer::diag_idx_chol(prec);
+
+  // Same G/H_diag/active_K/rho, only mu changes: factorize_by_chol()'s cheap diagonal-shift path
+  // (numeric_dirty_ stays false), so diag_idx_chol_ must not be touched at all.
+  const double mu2 = 8.0;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, mu2, f.rho, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
+  prec.compute(0);
+
+  EXPECT_EQ(SchurPreconditionerTestPeer::diag_idx_chol(prec), diag_idx_before);
+
+  // If the cache pointed at the wrong entry, the patch would silently write to entry j instead of
+  // i, and this independent coeffRef(i,i) O(log nnz) lookup into the TRUE (i,i) slot would still
+  // read the stale, un-patched value here.
+  auto& P = SchurPreconditionerTestPeer::chol_P(prec);
+  const Eigen::MatrixXd P2 = DenseSchurComplement(G_dense, f.H_diag, active_k, mu2);
+  for (int i = 0; i < 3; ++i)
+    EXPECT_NEAR(P.coeffRef(i, i), P2(i, i), kTol);
+}
+
+TEST(DiagonalPatchIndexCache, CholDiagIdxRebuildsWithNewSizeAndAddressesAcrossPatternChange) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const BoolArr active_K = ToBoolArr(active_k);
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  const Eigen::MatrixXd G1_dense = f.StackG({false, false});  // s=1
+  const SpMat G1 = DenseToSparse(G1_dense);
+  const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
+  const BoolArr active_W1 = ToBoolArr({false, false});
+
+  Prec prec;
+  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+  ASSERT_EQ(static_cast<int>(SchurPreconditionerTestPeer::diag_idx_chol(prec).size()), 1);
+
+  const Eigen::MatrixXd G2_dense = f.StackG({true, false});  // s=2, pattern change
+  const SpMat G2 = DenseToSparse(G2_dense);
+  const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
+  const BoolArr active_W2 = ToBoolArr({true, false});
+
+  // force_rebuild=true: this single-row addition would otherwise be SMW-eligible (like
+  // SmwBranch::SmwHandlesSingleWRowAddition) and bypass factorize_by_chol() entirely; force a
+  // genuine full rebuild to test diag_idx_chol_'s from-scratch reconstruction specifically.
+  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, /*use_ldlt=*/false, /*force_rebuild=*/true);
+  prec.compute(0);
+
+  auto& diag_idx = SchurPreconditionerTestPeer::diag_idx_chol(prec);
+  auto& P = SchurPreconditionerTestPeer::chol_P(prec);
+  ASSERT_EQ(static_cast<int>(diag_idx.size()), 2);
+  for (int i = 0; i < 2; ++i)
+    EXPECT_EQ(diag_idx[i], static_cast<int>(&P.coeffRef(i, i) - P.valuePtr()));
+}
+
+TEST(DiagonalPatchIndexCache, CholDiagIdxRebuildsOnRhoOnlyChangeDespiteLookingLikeAPatch) {
+  // Regression test for the chol/ldlt asymmetry documented at schur_preconditioner.hpp:73-81:
+  // unlike LDLT, a rho-only change on the Cholesky path is NOT a cheap patch -- E = 1/H_diag is
+  // nonlinear in rho, so factorize_by_chol()'s guard is "numeric_dirty_ || rho_changed", fully
+  // reassigning sol.P (a fresh object) and rebuilding diag_idx_chol_ from scratch. A test that
+  // assumed rho-only behaves like mu-only here would silently be exercising the rebuild path.
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+
+  const Eigen::VectorXd H_diag2 = (Eigen::VectorXd(3) << 6.0, 7.0, 9.0).finished();
+  const double rho2 = 7.0;
+  prec.arm(G, G_tr, H_diag2, active_K, active_W, B_rm, f.mu, rho2, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
+  prec.compute(0);
+
+  auto& diag_idx = SchurPreconditionerTestPeer::diag_idx_chol(prec);
+  auto& P = SchurPreconditionerTestPeer::chol_P(prec);
+  ASSERT_EQ(static_cast<int>(diag_idx.size()), 3);
+  for (int i = 0; i < 3; ++i)
+    EXPECT_EQ(diag_idx[i], static_cast<int>(&P.coeffRef(i, i) - P.valuePtr()));
+  const Eigen::MatrixXd P2 = DenseSchurComplement(G_dense, H_diag2, active_k, f.mu);
+  for (int i = 0; i < 3; ++i)
+    EXPECT_NEAR(P.coeffRef(i, i), P2(i, i), kTol);
+}
+
+TEST(DiagonalPatchIndexCache, LdltDiagIdxPointsAtTrueTopAndBottomBlockEntriesAfterFullRebuild) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};  // n_act = 2
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});  // s = 3
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  auto& top_idx = SchurPreconditionerTestPeer::ldlt_diag_top_idx(prec);
+  auto& bot_idx = SchurPreconditionerTestPeer::ldlt_diag_bot_idx(prec);
+  auto& P_hat = SchurPreconditionerTestPeer::ldlt_P_hat(prec);
+  ASSERT_EQ(static_cast<int>(top_idx.size()), 2);
+  ASSERT_EQ(static_cast<int>(bot_idx.size()), 3);
+  for (int k = 0; k < 2; ++k)
+    EXPECT_EQ(top_idx[k], static_cast<int>(&P_hat.coeffRef(k, k) - P_hat.valuePtr()));
+  for (int i = 0; i < 3; ++i)
+    EXPECT_EQ(bot_idx[i], static_cast<int>(&P_hat.coeffRef(2 + i, 2 + i) - P_hat.valuePtr()));
+}
+
+TEST(DiagonalPatchIndexCache, LdltTopBlockUntouchedByMuOnlyChangeBottomBlockUpdatesToNewMu) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+  auto& top_idx = SchurPreconditionerTestPeer::ldlt_diag_top_idx(prec);
+  auto& bot_idx = SchurPreconditionerTestPeer::ldlt_diag_bot_idx(prec);
+  auto& P_hat = SchurPreconditionerTestPeer::ldlt_P_hat(prec);
+  const double top0_before = P_hat.valuePtr()[top_idx[0]];
+  const double top1_before = P_hat.valuePtr()[top_idx[1]];
+
+  const double mu2 = 8.0;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, mu2, f.rho, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  EXPECT_EQ(P_hat.valuePtr()[top_idx[0]], top0_before);  // mu never touches -H_act
+  EXPECT_EQ(P_hat.valuePtr()[top_idx[1]], top1_before);
+  for (int i = 0; i < 3; ++i)
+    EXPECT_NEAR(P_hat.valuePtr()[bot_idx[i]], 1.0 / mu2, kTol);
+}
+
+TEST(DiagonalPatchIndexCache, LdltTopBlockUpdatesToNegatedFreshHDiagOnRhoOnlyChangeUsingLdltActIdx) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  const Eigen::VectorXd H_diag2 = (Eigen::VectorXd(3) << 6.0, 7.0, 9.0).finished();
+  const double rho2 = 7.0;
+  prec.arm(G, G_tr, H_diag2, active_K, active_W, B_rm, f.mu, rho2, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  auto& top_idx = SchurPreconditionerTestPeer::ldlt_diag_top_idx(prec);
+  auto& act_idx = SchurPreconditionerTestPeer::ldlt_act_idx(prec);
+  auto& P_hat = SchurPreconditionerTestPeer::ldlt_P_hat(prec);
+  ASSERT_EQ(act_idx, (std::vector<int>{0, 2}));
+  for (int k = 0; k < 2; ++k)
+    EXPECT_NEAR(P_hat.valuePtr()[top_idx[k]], -H_diag2(act_idx[k]), kTol);
+}
+
+TEST(DiagonalPatchIndexCache, LdltDiagIdxRebuildsWithNewSizesAcrossActiveSetPatternChange) {
+  Fixture f;
+  const RowMajorSpMat B_rm = f.B_rm();
+  const std::vector<bool> active_k1 = {true, false, true};  // n_act=2
+  const Eigen::MatrixXd G1_dense = f.StackG({true, true});  // s=3
+  const SpMat G1 = DenseToSparse(G1_dense);
+  const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
+  const BoolArr active_K1 = ToBoolArr(active_k1);
+  const BoolArr active_W1 = ToBoolArr({true, true});
+
+  Prec prec;
+  prec.arm(G1, G1_tr, f.H_diag, active_K1, active_W1, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  const std::vector<bool> active_k2 = {true, false, false};  // n_act=1
+  const Eigen::MatrixXd G2_dense = f.StackG({true, false});  // s=2
+  const SpMat G2 = DenseToSparse(G2_dense);
+  const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
+  const BoolArr active_K2 = ToBoolArr(active_k2);
+  const BoolArr active_W2 = ToBoolArr({true, false});
+
+  // force_rebuild=true: the combined K-flip + W-row-deletion delta here is otherwise SMW-eligible
+  // (see SmwBranch::SmwHandlesSimultaneousKFlipAndWRowAddAndDelete); force a genuine full rebuild
+  // to test the index caches' from-scratch reconstruction specifically.
+  prec.arm(G2, G2_tr, f.H_diag, active_K2, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
+  prec.compute(0);
+
+  auto& top_idx = SchurPreconditionerTestPeer::ldlt_diag_top_idx(prec);
+  auto& bot_idx = SchurPreconditionerTestPeer::ldlt_diag_bot_idx(prec);
+  auto& P_hat = SchurPreconditionerTestPeer::ldlt_P_hat(prec);
+  ASSERT_EQ(static_cast<int>(top_idx.size()), 1);
+  ASSERT_EQ(static_cast<int>(bot_idx.size()), 2);
+  EXPECT_EQ(top_idx[0], static_cast<int>(&P_hat.coeffRef(0, 0) - P_hat.valuePtr()));
+  for (int i = 0; i < 2; ++i)
+    EXPECT_EQ(bot_idx[i], static_cast<int>(&P_hat.coeffRef(1 + i, 1 + i) - P_hat.valuePtr()));
+}
+
+TEST(DiagonalPatchIndexCache, LdltActIdxListsActiveKColumnsInAscendingOrderAfterFullRebuild) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_act_idx(prec), (std::vector<int>{0, 2}));
+}
+
+TEST(DiagonalPatchIndexCache, LdltActIdxUnchangedAcrossMuAndRhoOnlyPatches) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+  const std::vector<int> act_idx_before = SchurPreconditionerTestPeer::ldlt_act_idx(prec);
+
+  const double mu2 = 8.0;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, mu2, f.rho, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
+  prec.compute(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_act_idx(prec), act_idx_before);
+
+  const Eigen::VectorXd H_diag2 = (Eigen::VectorXd(3) << 6.0, 7.0, 9.0).finished();
+  const double rho2 = 7.0;
+  prec.arm(G, G_tr, H_diag2, active_K, active_W, B_rm, mu2, rho2, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
+  prec.compute(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_act_idx(prec), act_idx_before);
+}
+
+TEST(DiagonalPatchIndexCache, LdltActIdxReflectsNewActiveKAfterPatternChange) {
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  const BoolArr active_K1 = ToBoolArr({true, false, true});
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  // force_rebuild=true: a 2-column K flip is otherwise SMW-eligible (rank 2, within threshold);
+  // force a genuine full rebuild to test ldlt_act_idx_'s from-scratch reconstruction specifically.
+  const BoolArr active_K2 = ToBoolArr({true, true, false});
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
+  prec.compute(0);
+
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_act_idx(prec), (std::vector<int>{0, 1}));
+}
+
+// ===================== cached row counts (n_act_ / M_rows_ / s_current_) =====================
+
+TEST(CachedRowCounts, NActMatchesActiveKCountAfterLdltFullRebuild) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  EXPECT_EQ(SchurPreconditionerTestPeer::n_act(prec), 2);
+}
+
+TEST(CachedRowCounts, NActUnchangedAcrossMuAndRhoOnlyLdltPatches) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+  ASSERT_EQ(SchurPreconditionerTestPeer::n_act(prec), 2);
+
+  const double mu2 = 8.0;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, mu2, f.rho, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
+  prec.compute(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::n_act(prec), 2);
+
+  const Eigen::VectorXd H_diag2 = (Eigen::VectorXd(3) << 6.0, 7.0, 9.0).finished();
+  const double rho2 = 7.0;
+  prec.arm(G, G_tr, H_diag2, active_K, active_W, B_rm, mu2, rho2, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
+  prec.compute(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::n_act(prec), 2);
+}
+
+TEST(CachedRowCounts, NActUpdatesOnLdltFullRebuildWithDifferentActiveKCount) {
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  const BoolArr active_K1 = ToBoolArr({true, false, true});
+  prec.arm(G, G_tr, f.H_diag, active_K1, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+  ASSERT_EQ(SchurPreconditionerTestPeer::n_act(prec), 2);
+
+  // force_rebuild=true: a single K flip is otherwise SMW-eligible and would leave n_act_ pinned
+  // (see NActStaysPinnedToLastFullRebuildAcrossAnSmwActiveKFlip below); force a genuine full
+  // rebuild here to test that n_act_ DOES update when one actually happens.
+  const BoolArr active_K2 = ToBoolArr({true, true, true});
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
+  prec.compute(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::n_act(prec), 3);
+}
+
+TEST(CachedRowCounts, NActStaysPinnedToLastFullRebuildAcrossAnSmwActiveKFlip) {
+  // n_act_ is only ever written by finish_factorization() on a full rebuild; a successful SMW
+  // update (finalize_smw_success()) never touches it, even though the true active-K count has
+  // changed. solve_smw() still reads the pinned value correctly (see the companion
+  // FinishFactorization::SmwAfterLdltFullRebuildMatchesDense test) -- this pins down the raw
+  // member value itself, not just the downstream solve() correctness.
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});  // s stays 1 throughout
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+  const BoolArr active_k1 = ToBoolArr({true, true, true});
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+  ASSERT_EQ(SchurPreconditionerTestPeer::n_act(prec), 3);
+
+  const BoolArr active_k2 = ToBoolArr({true, true, false});  // single K flip
+  prec.arm(G, G_tr, f.H_diag, active_k2, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  ASSERT_TRUE(prec.used_smw());
+  EXPECT_EQ(SchurPreconditionerTestPeer::n_act(prec), 3);  // still the last full rebuild's count
+}
+
+TEST(CachedRowCounts, MRowsComputedOnceFromFirstArmCallWithNonzeroRows) {
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr({true, true, true});
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.set_data(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true);
+
+  EXPECT_EQ(SchurPreconditionerTestPeer::M_rows(prec), 1);  // G.rows()=1, active_W.count()=0
+}
+
+TEST(CachedRowCounts, MRowsStaysConstantAcrossLaterCallsWithDifferentActiveWCounts) {
+  // Once set, M_rows_ is frozen: set_data()'s guard is `M_rows_ < 0 && G.rows() > 0`, so it is
+  // never recomputed on later calls even if a (synthetic, here) G/active_W combination would
+  // produce a different value if recomputed from scratch.
+  Fixture f;
+  const Eigen::MatrixXd G1_dense = f.StackG({false, false});
+  const SpMat G1 = DenseToSparse(G1_dense);
+  const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
+  const BoolArr active_K = ToBoolArr({true, true, true});
+  const BoolArr active_W1 = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.set_data(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, f.rho, true, true);
+  ASSERT_EQ(SchurPreconditionerTestPeer::M_rows(prec), 1);
+
+  // A synthetic 4-row G with only 1 active_W row would naively recompute to M_rows=3 if the guard
+  // didn't freeze it -- deliberately inconsistent with the fixture's real equality-row count.
+  const Eigen::MatrixXd G2_dense = Eigen::MatrixXd::Identity(4, 3);
+  const SpMat G2 = DenseToSparse(G2_dense);
+  const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
+  const BoolArr active_W2 = ToBoolArr({true, false});
+  prec.set_data(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, f.rho, true, true);
+
+  EXPECT_EQ(SchurPreconditionerTestPeer::M_rows(prec), 1);  // still frozen at the first-call value
+}
+
+TEST(CachedRowCounts, MRowsRemainsUnsetUntilFirstNonzeroRowGCallThenLatches) {
+  Fixture f;
+  const BoolArr active_K = ToBoolArr({true, true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  const Eigen::MatrixXd G0_dense(0, 3);
+  const SpMat G0 = DenseToSparse(G0_dense);
+  const SpMat G0_tr = DenseToSparse(G0_dense.transpose());
+  const BoolArr active_W0 = ToBoolArr({false, false});
+
+  Prec prec;
+  prec.set_data(G0, G0_tr, f.H_diag, active_K, active_W0, B_rm, f.mu, f.rho, true, true);
+  EXPECT_EQ(SchurPreconditionerTestPeer::M_rows(prec), -1);  // guard requires G.rows() > 0
+
+  const Eigen::MatrixXd G1_dense = f.StackG({false, false});  // 1 row
+  const SpMat G1 = DenseToSparse(G1_dense);
+  const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
+  const BoolArr active_W1 = ToBoolArr({false, false});
+  prec.set_data(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, f.rho, true, true);
+  EXPECT_EQ(SchurPreconditionerTestPeer::M_rows(prec), 1);
+}
+
+TEST(CachedRowCounts, SCurrentTracksRowCountAcrossFullRebuildAndSmwRowCountChange) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, true, true};
+  const BoolArr active_K = ToBoolArr(active_k);
+  const RowMajorSpMat B_rm = f.B_rm();
+  const BoolArr active_W1 = ToBoolArr({true, false});
+  const BoolArr active_W2 = ToBoolArr({true, true});
+
+  const Eigen::MatrixXd G1_dense = f.StackG({true, false});
+  const SpMat G1 = DenseToSparse(G1_dense);
+  const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
+
+  Prec prec;
+  prec.arm(G1, G1_tr, f.H_diag, active_K, active_W1, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+  ASSERT_EQ(SchurPreconditionerTestPeer::s_current(prec), 2);
+  ASSERT_EQ(prec.fact_count(), 1);
+
+  // Row 1 becomes newly active: q=1 SMW row addition, s goes 2 -> 3.
+  const Eigen::MatrixXd G2_dense = f.StackG({true, true});
+  const SpMat G2 = DenseToSparse(G2_dense);
+  const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
+  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
+  prec.compute(0);
+  ASSERT_TRUE(prec.used_smw());
+  EXPECT_EQ(SchurPreconditionerTestPeer::s_current(prec), 3);
+
+  // A genuine no-op re-arm of the same G2/active_W2/mu/rho must NOT see a spurious size_changed --
+  // direct evidence s_current_ was correctly refreshed by finalize_smw_success(), not left stale.
+  const int fact_count_before = prec.fact_count();
+  const int smw_count_before = prec.smw_count();
+  prec.arm(G2, G2_tr, f.H_diag, active_K, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
+  prec.compute(0);
+  EXPECT_EQ(prec.fact_count(), fact_count_before);
+  EXPECT_EQ(prec.smw_count(), smw_count_before);
+}
+
+// ===================== SMW snapshot state (G_old_ / H_diag_old_ / active_*_old_ / mu_old_ / rho_old_) =====================
+
+TEST(SmwSnapshotState, SnapshotMatchesInputsExactlyAfterFirstFullRebuild) {
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+
+  EXPECT_TRUE(Eigen::MatrixXd(SchurPreconditionerTestPeer::G_old(prec)).isApprox(G_dense));
+  EXPECT_TRUE((SchurPreconditionerTestPeer::active_K_old(prec) == active_K).all());
+  EXPECT_TRUE((SchurPreconditionerTestPeer::active_W_old(prec) == active_W).all());
+  EXPECT_TRUE(SchurPreconditionerTestPeer::H_diag_old(prec).isApprox(f.H_diag));
+  EXPECT_EQ(SchurPreconditionerTestPeer::mu_old(prec), f.mu);
+  EXPECT_EQ(SchurPreconditionerTestPeer::rho_old(prec), f.rho);
+}
+
+TEST(SmwSnapshotState, StructuralChangeRecopiesGAndActiveSetsOnPatternChangedFullRebuild) {
+  Fixture f;
+  const RowMajorSpMat B_rm = f.B_rm();
+  const BoolArr active_K1 = ToBoolArr({true, false, true});
+  const Eigen::MatrixXd G1_dense = f.StackG({true, true});
+  const SpMat G1 = DenseToSparse(G1_dense);
+  const SpMat G1_tr = DenseToSparse(G1_dense.transpose());
+  const BoolArr active_W1 = ToBoolArr({true, true});
+
+  Prec prec;
+  prec.arm(G1, G1_tr, f.H_diag, active_K1, active_W1, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+
+  const BoolArr active_K2 = ToBoolArr({true, true, false});
+  const Eigen::MatrixXd G2_dense = f.StackG({true, false});
+  const SpMat G2 = DenseToSparse(G2_dense);
+  const SpMat G2_tr = DenseToSparse(G2_dense.transpose());
+  const BoolArr active_W2 = ToBoolArr({true, false});
+  // force_rebuild=true: this combined K-flip + W-row-deletion delta is otherwise SMW-eligible;
+  // force a genuine full rebuild to test the structural-change re-snapshot specifically.
+  prec.arm(G2, G2_tr, f.H_diag, active_K2, active_W2, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, /*use_ldlt=*/false, /*force_rebuild=*/true);
+  prec.compute(0);
+
+  EXPECT_TRUE(Eigen::MatrixXd(SchurPreconditionerTestPeer::G_old(prec)).isApprox(G2_dense));
+  EXPECT_TRUE((SchurPreconditionerTestPeer::active_K_old(prec) == active_K2).all());
+  EXPECT_TRUE((SchurPreconditionerTestPeer::active_W_old(prec) == active_W2).all());
+}
+
+TEST(SmwSnapshotState, HDiagOldRefreshesOnLdltRhoOnlyPatchButActiveSetSnapshotDoesNot) {
+  // Load-bearing case documented at schur_preconditioner.hpp:848-854: snapshot_state()'s
+  // structural_change=false path skips re-copying G_old_/active_K_old_/active_W_old_ (provably
+  // unchanged on a mu/rho-only call) but always refreshes H_diag_old_/mu_old_/rho_old_, since the
+  // cheap diagonal-patch path also rewrites the live P_hat's (rho-dependent) diagonal without a
+  // full rebuild -- H_diag_old_ must track that or the next SMW capacitance solve would be wrong.
+  Fixture f;
+  const std::vector<bool> active_k = {true, false, true};
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr(active_k);
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+  const Eigen::MatrixXd G_old_before = Eigen::MatrixXd(SchurPreconditionerTestPeer::G_old(prec));
+  const BoolArr active_K_old_before = SchurPreconditionerTestPeer::active_K_old(prec);
+  const BoolArr active_W_old_before = SchurPreconditionerTestPeer::active_W_old(prec);
+
+  const Eigen::VectorXd H_diag2 = (Eigen::VectorXd(3) << 6.0, 7.0, 9.0).finished();
+  const double rho2 = 7.0;
+  prec.arm(G, G_tr, H_diag2, active_K, active_W, B_rm, f.mu, rho2, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/true);
+  prec.compute(0);
+
+  EXPECT_TRUE(SchurPreconditionerTestPeer::H_diag_old(prec).isApprox(H_diag2));
+  EXPECT_TRUE(Eigen::MatrixXd(SchurPreconditionerTestPeer::G_old(prec)).isApprox(G_old_before));
+  EXPECT_TRUE((SchurPreconditionerTestPeer::active_K_old(prec) == active_K_old_before).all());
+  EXPECT_TRUE((SchurPreconditionerTestPeer::active_W_old(prec) == active_W_old_before).all());
+}
+
+TEST(SmwSnapshotState, MuAndRhoOldRefreshImmediatelyReenablesSmwEligibilityOnNextActiveSetDelta) {
+  // Chains mu_old_/rho_old_'s refresh with real SMW eligibility: if mu_old_ were left stale at the
+  // pre-patch value, the third call's gate would incorrectly reject with MuChangedSinceSnapshot
+  // even though mu has been stable since the second call -- a two-step build-then-patch test
+  // cannot see this, only a three-step one can.
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});  // s stays 1 throughout
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+  const BoolArr active_k1 = ToBoolArr({true, true, true});
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+
+  const double mu2 = 8.0;
+  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, mu2, f.rho, /*rebuild=*/false,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
+  prec.compute(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::mu_old(prec), mu2);
+
+  const BoolArr active_k2 = ToBoolArr({true, true, false});  // single K flip, same mu2/rho
+  prec.arm(G, G_tr, f.H_diag, active_k2, active_W, B_rm, mu2, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/false, /*use_ldlt=*/false);
+  prec.compute(0);
+
+  EXPECT_TRUE(prec.used_smw());
+  EXPECT_EQ(prec.smw_last_reject_reason(), Prec::SmwRejectReason::None);
+}
+
+TEST(SmwSnapshotState, FailStreakWipeActuallyEmptiesSnapshotBuffers) {
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({true, true});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr({true, true, true});
+  const BoolArr active_W = ToBoolArr({true, true});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/false);
+  prec.compute(0);
+  ASSERT_GT(SchurPreconditionerTestPeer::G_old(prec).rows(), 0);
+
+  for (int i = 0; i < 5; ++i) prec.record_smw_rebuild();
+
+  EXPECT_EQ(SchurPreconditionerTestPeer::G_old(prec).rows(), 0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::H_diag_old(prec).size(), 0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::active_K_old(prec).size(), 0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::active_W_old(prec).size(), 0);
 }
 
 // ===================== consume_fact_count_delta() / should_retry_after_failure() =====================
