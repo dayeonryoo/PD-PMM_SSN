@@ -397,6 +397,56 @@ TEST(SmwBranch, RejectsSmwWhenRhoChangedSinceSnapshotEvenWithNonzeroRankDelta) {
   EXPECT_TRUE(got.isApprox(expected, kTol));
 }
 
+TEST(SmwBranch, RejectsSmwWhenMuChangedSinceSnapshotEvenWithNonzeroRankDelta) {
+  // Companion to the rho version above: same single-K-flip delta, but mu changes instead (rho
+  // fixed). Unlike rho, mu doesn't affect H_diag on active_K entries at all (H_diag's mu term
+  // is mu*(1-diag_P_K), which is exactly 0 there), so H_diag itself is unchanged here -- the bug
+  // is entirely in the (1/mu)I block's RETAINED-row entries. The sole row here (the equality
+  // row, index 0) is never deleted or added by this delta, so it's retained throughout, and the
+  // low-rank update never recomputes a retained row's (1/mu) entry (only added rows get that,
+  // in build_capacitance_setup()'s block 3) -- it would stay stuck at the snapshot's 1/mu if
+  // SMW were (incorrectly) allowed to proceed.
+  //
+  // prec_pattern_changed=true on the second arm() call (unlike the rho companion test, which
+  // sets it false): this test's point is that the mu_old_ gate must reject SMW at the *try_build_
+  // smw() attempt itself* -- build()'s Case 1 -- since a successful SMW there would return before
+  // ever reaching factorize_by_chol()'s numeric_dirty_/rho_changed-gated rebuild. Passing false
+  // here would only additionally exercise (and mask this test's point behind) the cheap mu-only
+  // diagonal-shift patch path, which is correct only when active_K genuinely didn't change --
+  // not representative of how a real K-flip is reported by the SSN caller.
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});  // s stays 1 throughout
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+  const BoolArr active_k1 = ToBoolArr({true, true, true});
+
+  Prec prec;
+  prec.arm(G, G_tr, f.H_diag, active_k1, active_W, B_rm, f.mu, f.rho, true, true, false);
+  prec.compute(0);
+  ASSERT_EQ(prec.fact_count(), 1);
+
+  // Same single-K-flip delta as the rho companion test, but mu changes instead (rho fixed).
+  const std::vector<bool> active_k2 = {true, true, false};
+  const BoolArr active_K2 = ToBoolArr(active_k2);
+  const double mu2 = 8.0;
+  prec.arm(G, G_tr, f.H_diag, active_K2, active_W, B_rm, mu2, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, false);
+  prec.compute(0);
+
+  EXPECT_FALSE(prec.used_smw());
+  EXPECT_EQ(prec.fact_count(), 2);  // full rebuild, not a low-rank patch
+  EXPECT_EQ(prec.smw_last_reject_reason(), Prec::SmwRejectReason::MuChangedSinceSnapshot);
+
+  Eigen::VectorXd b(1);
+  b << 2.5;
+  const Eigen::VectorXd got = prec.solve(b);
+  const Eigen::MatrixXd P2 = DenseSchurComplement(G_dense, f.H_diag, active_k2, mu2);
+  const Eigen::VectorXd expected = P2.colPivHouseholderQr().solve(b);
+  EXPECT_TRUE(got.isApprox(expected, kTol));
+}
+
 TEST(SmwBranch, SmwHandlesSingleWRowAddition) {
   Fixture f;
   const std::vector<bool> active_k = {true, true, true};

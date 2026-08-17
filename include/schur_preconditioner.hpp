@@ -84,14 +84,16 @@ struct SchurPrecScopedTimer {
 //                     prec_pattern_changed=true (factorizing a structurally different matrix).
 //   skip_smw_ / use_smw_ / has_snapshot_ / smw_fail_streak_ : SMW low-rank-update control, mostly
 //                     orthogonal to the pattern/numeric split above -- see try_build_smw(). Its
-//                     capacitance-update math only recomputes H_diag-derived values for the
-//                     classified delta (flipped active_K indices); everywhere else it implicitly
-//                     reuses P_old, snapshotted at the last full rebuild. Since active_K entries'
-//                     H_diag(i) = Q_diag(i) + 1/rho, a rho drift since that snapshot would silently
-//                     invalidate P_old even for a delta that never touches active_K (e.g. a pure
-//                     W-row add/delete) -- so smw_gate_open() rejects unconditionally on
-//                     rho_ != rho_old_ (SmwRejectReason::RhoChangedSinceSnapshot), independent of
-//                     the delta being classified, before any capacitance math runs.
+//                     capacitance-update math only recomputes H_diag-derived (rho-dependent) and
+//                     mu-dependent values for the classified delta (flipped active_K indices, or
+//                     added W rows); everywhere else -- every RETAINED row/column -- it implicitly
+//                     reuses P_old, snapshotted at the last full rebuild. A rho drift silently
+//                     invalidates P_old's retained active_K entries (H_diag(i) = Q_diag(i) + 1/rho);
+//                     a mu drift silently invalidates P_old's retained (1/mu)I diagonal (a uniform,
+//                     hence full-rank, shift the low-rank correction can't represent at all). So
+//                     smw_gate_open() rejects unconditionally on rho_ != rho_old_ or mu_ != mu_old_
+//                     (SmwRejectReason::RhoChangedSinceSnapshot / MuChangedSinceSnapshot),
+//                     independent of the delta being classified, before any capacitance math runs.
 // =================================================================================================
 
 template <typename T>
@@ -209,6 +211,11 @@ public:
                                        // "H_diag unchanged outside the classified delta" assumption would
                                        // be violated (H_diag's active_K entries depend on rho), so the
                                        // capacitance math can't be trusted even for a nonzero-rank delta.
+        MuChangedSinceSnapshot,       // mu drifted since the snapshot. The (1/mu)I block spans every
+                                       // row of P/P_hat, not just the classified delta's added rows (the
+                                       // only ones the capacitance math actually recomputes with fresh
+                                       // mu) -- so unlike rho, this affects every RETAINED row too, and
+                                       // is a uniform (hence full-rank, not low-rank-correctable) shift.
         RankZeroOrExceedsThreshold,   // Active-set delta rank is 0 or exceeds the SMW update-size threshold.
         SingularCapacitance,          // Capacitance matrix was (near-)singular; fell back to full rebuild.
     };
@@ -625,10 +632,20 @@ private:
         // factorized against the snapshot's rho. On active_K entries H_diag(i) = Q_diag(i) + 1/rho,
         // so a rho drift since the snapshot silently invalidates that reuse -- even for a delta
         // that doesn't touch active_K at all (e.g. a pure W-row add/delete). Reject unconditionally
-        // rather than trying to patch it in: unlike mu (which affects only the (1/mu)I block that
-        // stays outside the capacitance math entirely), rho's effect is baked into P_old itself.
+        // rather than trying to patch it in.
         if (rho_ != rho_old_) {
             smw_last_reject_reason_ = SmwRejectReason::RhoChangedSinceSnapshot;
+            return false;
+        }
+        // Same shape of problem for mu, but broader: the (1/mu)I block spans every row of
+        // P/P_hat, not just active_K entries. The capacitance math only recomputes it fresh for
+        // *added* W rows (block 3 in build_capacitance_setup()); every RETAINED row's (1/mu)
+        // entry is inherited unchanged from P_old via the Y_all_ = P_old^-1 [...] solves. A mu
+        // drift is therefore a uniform shift across all retained rows -- full-rank, not
+        // low-rank -- so the Woodbury correction cannot represent it at all, regardless of
+        // which (if any) indices the classified delta touches.
+        if (mu_ != mu_old_) {
+            smw_last_reject_reason_ = SmwRejectReason::MuChangedSinceSnapshot;
             return false;
         }
         return true;
@@ -830,8 +847,11 @@ private:
     // Helper: snapshot last full-rebuild state for next SMW attempt.
     // structural_change: true iff active_K/active_W/G changed (not just mu/rho values). If true,
     // G_old_/active_K_old_/active_W_old_ are re-copied (G_old_'s deep copy is O(nnz(G))); if
-    // false, only H_diag_old_/rho_old_ are refreshed, since a mu/rho-only call provably left
-    // G/active_K/active_W unchanged.
+    // false, only H_diag_old_/mu_old_/rho_old_ are refreshed, since a mu/rho-only call provably
+    // left G/active_K/active_W unchanged. mu_old_/rho_old_ must always refresh here (not just on
+    // structural_change): the cheap diagonal-patch path in factorize_by_chol()/factorize_by_ldlt()
+    // also rewrites P_old's stored (1/mu)/(rho-dependent) diagonal without going through a full
+    // rebuild, so this is the only point that stays in sync with what's actually baked into it.
     void snapshot_state(bool structural_change) {
         if (structural_change) {
             G_old_        = *G_;
@@ -839,6 +859,7 @@ private:
             if (active_W_) active_W_old_ = *active_W_;
         }
         H_diag_old_   = *H_diag_;
+        mu_old_       = mu_;
         rho_old_      = rho_;
         has_snapshot_ = true;
         snapshot_wiped_by_fail_streak_ = false;
@@ -922,6 +943,7 @@ private:
     Vec     H_diag_old_;
     BoolArr active_K_old_;
     BoolArr active_W_old_;
+    T       mu_old_  = T(1); // mu at the time of the snapshot; see smw_gate_open()'s mu_ != mu_old_ check.
     T       rho_old_ = T(1); // rho at the time of the snapshot; see smw_gate_open()'s rho_ != rho_old_ check.
 
     // Setup results (output of try_build_smw, consumed by solve)
