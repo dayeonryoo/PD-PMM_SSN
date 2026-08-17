@@ -318,12 +318,10 @@ TEST(SSN, ChooseSchurLdltHandlesZeroRowsAndZeroActiveColumnsWithoutNaN) {
 namespace {
 
 struct LineSearchCase {
-  SpMat A_tr;  // N x 0 (no equality constraints in any of these cases)
-  Vec lx, ux, lw, uw, z, y2, x, c, A_tr_y1, Q_diag, b;
+  Vec lx, ux, lw, uw, z, y2, x, c, A_tr_y1, Q_diag, grad_Atr_resp, b;
   int N, l;
 
   explicit LineSearchCase(int N_, int l_ = 0) : N(N_), l(l_) {
-    A_tr = SpMat(N, 0);
     lx = Vec::Constant(N, -1.0);
     ux = Vec::Constant(N, 1.0);
     lw = Vec::Constant(l, -1.0);
@@ -334,6 +332,7 @@ struct LineSearchCase {
     c = Vec::Zero(N);
     A_tr_y1 = Vec::Zero(N);
     Q_diag = Vec::Zero(N);
+    grad_Atr_resp = Vec::Zero(N);  // A_tr * (Ax - b): no equality constraints in any of these cases
     b = Vec::Zero(0);
   }
 
@@ -341,7 +340,7 @@ struct LineSearchCase {
     return SsnLineSearchParams<double>{
         mu, rho, alpha, /*eps_zero=*/1e-12, /*eps_direction=*/1e-8,
         std::numeric_limits<double>::infinity(),
-        /*Q_info=*/0, N, l, lx, ux, lw, uw, z, y2, x, c, A_tr_y1, Q_diag, A_tr, b};
+        /*Q_info=*/0, N, l, lx, ux, lw, uw, z, y2, x, c, A_tr_y1, Q_diag, grad_Atr_resp, b};
   }
 };
 

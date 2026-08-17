@@ -376,13 +376,19 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
 }
 
 template <typename T>
-SsnLineSearchParams<T> SSN<T>::make_line_search_params() const {
+SsnLineSearchParams<T> SSN<T>::make_line_search_params() {
+    // Cached once per SSN iteration (Ax_ssn_ doesn't move across a line-search attempt and its
+    // steepest-descent retry) so exact_line_search() doesn't recompute this sparse mat-vec on
+    // every call.
+    grad_res_p_.noalias()    = Ax_ssn_ - b;
+    grad_Atr_resp_.noalias() = A_tr * grad_res_p_;
+
     return SsnLineSearchParams<T>{
         mu, rho, alpha, eps_zero, eps_direction, inf,
         Q_info, N, l,
         lx, ux, lw, uw,
         z, y2, x,
-        c, A_tr_y1_, Q_diag, A_tr, b,
+        c, A_tr_y1_, Q_diag, grad_Atr_resp_, b,
     };
 }
 
@@ -418,14 +424,13 @@ T exact_line_search(const SsnLineSearchParams<T>& p,
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using Breakpoint = SsnBreakpoint<T>;
 
-    const Vec& Ax = Ax_curr;
     const Vec& Bx = Bx_curr;
     const T mu = p.mu, rho = p.rho, alpha = p.alpha, eps_zero = p.eps_zero,
             eps_direction = p.eps_direction, inf = p.inf;
     const int Q_info = p.Q_info, N = p.N, l = p.l;
     const Vec &lx = p.lx, &ux = p.ux, &lw = p.lw, &uw = p.uw;
     const Vec &z = p.z, &y2 = p.y2, &x = p.x, &c = p.c, &A_tr_y1_ = p.A_tr_y1, &Q_diag = p.Q_diag, &b = p.b;
-    const auto& A_tr = p.A_tr;
+    const Vec& grad_Atr_resp = p.grad_Atr_resp;
 
     ls_s_scratch.noalias()  = z / mu + x_curr;
     ls_v_scratch.noalias()  = Bx + ((1 - alpha) * y2_curr - y2) / mu;
@@ -445,7 +450,7 @@ T exact_line_search(const SsnLineSearchParams<T>& p,
     if (Q_info != 0) {
         zeta += dx.dot(Q_diag.cwiseProduct(x_curr));
     }
-    zeta += dx.dot(c - A_tr_y1_ + mu * A_tr * (Ax - b) + (x_curr - x) / rho);
+    zeta += dx.dot(c - A_tr_y1_ + mu * grad_Atr_resp + (x_curr - x) / rho);
     zeta += (1 - alpha) / mu * dy2.dot(y2_curr);
 
     // Reuse the breakpoints scratch buffer.

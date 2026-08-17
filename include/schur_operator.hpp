@@ -45,16 +45,22 @@ public:
     SchurOperator(const SpMat& G_, const SpMat& G_tr_, const Vec& H_diag_inv_, T mu)
         : G(G_), G_tr(G_tr_), H_diag_inv(H_diag_inv_), mu_inv(T(1) / mu) {
             m_ = G.rows(); // Schur operator is m x m
+            t_.resize(G.cols());
+            u_.resize(G.cols());
     }
 
     Eigen::Index rows() const { return m_; }
     Eigen::Index cols() const { return m_; }
 
+    // Called once per Krylov (CG) iteration. t_/u_ are persistent scratch buffers (sized once
+    // in the constructor), so only the returned result allocates -- not the two intermediates.
+    // Returned by value (not by reference into a shared buffer): a caller combining two calls
+    // on the same S in one expression (e.g. a*(S*v1) + b*(S*v2)) must see independent results.
     template <typename Rhs>
     Vec operator*(const Eigen::MatrixBase<Rhs>& v) const {
-        Vec t = G_tr * v;
-        Vec u = H_diag_inv.cwiseProduct(t);
-        Vec w = G * u;
+        t_.noalias() = G_tr * v;
+        u_.noalias() = H_diag_inv.cwiseProduct(t_);
+        Vec w = G * u_;
         w.noalias() += mu_inv * v;
         return w;
     }
@@ -65,4 +71,5 @@ private:
     const Vec& H_diag_inv;
     T mu_inv;
     Eigen::Index m_;
+    mutable Vec t_, u_;
 };

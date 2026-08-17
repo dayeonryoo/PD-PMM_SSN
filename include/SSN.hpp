@@ -41,7 +41,6 @@ struct SsnBreakpoint { T t; T slope_change; };
 template <typename T>
 struct SsnLineSearchParams {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
-    using SpMat = Eigen::SparseMatrix<T>;
 
     T mu, rho, alpha, eps_zero, eps_direction, inf;
     int Q_info, N, l;
@@ -52,7 +51,10 @@ struct SsnLineSearchParams {
     const Vec& c;
     const Vec& A_tr_y1;
     const Vec& Q_diag;
-    const SpMat& A_tr;
+    const Vec& grad_Atr_resp; // A_tr * (Ax_ssn_ - b), cached once per SSN iteration in
+                               // make_line_search_params() -- invariant across the initial
+                               // exact_line_search() call and its steepest-descent retry, both
+                               // of which run against the same (unmoved) Ax_ssn_.
     const Vec& b;
 };
 
@@ -324,7 +326,7 @@ public:
     Vec solve_using_cg(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const Vec& H_diag_inv, const BoolArr& active_K, const Vec& r1, const Vec& r2, T mu, T tol, int max_iter, bool update_prec, bool G_pattern_changed, bool schur_use_ldlt);
     Vec solve_using_ldlt(const SpMat& G, const Vec& H_diag, const Vec& r1, const Vec& r2);
     void iterative_refine_dxdy();
-    SsnLineSearchParams<T> make_line_search_params() const;
+    SsnLineSearchParams<T> make_line_search_params();
     void solve_ssn(const T ssn_tol);
 
     // Tracks active set change; computed once per SSN iteration in prepare_newton_system() call.

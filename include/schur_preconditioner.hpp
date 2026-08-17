@@ -267,6 +267,9 @@ public:
         std::vector<int>().swap(ldlt_act_idx_);
         std::vector<Triplet>().swap(ldlt_build_trips_);
         std::vector<Triplet>().swap(chol_build_trips_);
+        std::vector<int>().swap(ldlt_diag_top_idx_);
+        std::vector<int>().swap(ldlt_diag_bot_idx_);
+        std::vector<int>().swap(diag_idx_chol_);
         V_plus_.resize(0, 0);
         Y_all_.resize(0, 0);
         S_lambda_lu_ = Eigen::FullPivLU<Mat>();
@@ -397,9 +400,12 @@ private:
     }
 
     // Shared tail of factorize_by_ldlt/factorize_by_chol.
+    // structural_change: true iff active_K/active_W/G changed (not just mu/rho values) --
+    // must be captured by the caller before numeric_dirty_ is reset, since numeric_dirty_
+    // itself is what structural_change reports (chol resets it partway through its own body).
     template <typename FactorSolver>
     void finish_factorization(FactorSolver& solver, const SpMat& P, Eigen::Index s, bool is_ldlt,
-                               int n_act = -1) {
+                               bool structural_change, int n_act = -1) {
         if (pattern_dirty_) {
             SCHUR_PREC_TIMER_BLOCK(analyze_time_);
             solver.analyzePattern(P);
@@ -420,7 +426,7 @@ private:
         numeric_dirty_ = false;
         if (info_ == Eigen::Success) rebuild_ = false;
 
-        if (!smw_suppressed()) snapshot_state();
+        if (!smw_suppressed()) snapshot_state(structural_change);
     }
 
     // Build P_hat = [-H_act, G_act^T; G_act, (1/mu)I] and factorize with LDLT.
@@ -433,6 +439,7 @@ private:
         const Eigen::Index n = G.cols();
 
         auto& sol = std::get<LdltSolver>(active_solver_);
+        const bool structural_change = numeric_dirty_; // captured before finish_factorization() resets it.
         int n_act;
         {
             SCHUR_PREC_TIMER_BLOCK(assembly_time_);
@@ -468,6 +475,16 @@ private:
                 sol.P_hat.resize(n_act + s, n_act + s);
                 sol.P_hat.setFromTriplets(ldlt_build_trips_.begin(), ldlt_build_trips_.end());
                 sol.P_hat.makeCompressed();
+
+                // Cache each diagonal's flat storage index (coeffRef returns a reference
+                // straight into the value array) so the patch path below can write via
+                // valuePtr()[idx] (O(1)) instead of coeffRef(i,i) (O(log nnz), binary search).
+                ldlt_diag_top_idx_.resize(n_act);
+                for (int k = 0; k < n_act; ++k)
+                    ldlt_diag_top_idx_[k] = static_cast<int>(&sol.P_hat.coeffRef(k, k) - sol.P_hat.valuePtr());
+                ldlt_diag_bot_idx_.resize(s);
+                for (Eigen::Index i = 0; i < s; ++i)
+                    ldlt_diag_bot_idx_[i] = static_cast<int>(&sol.P_hat.coeffRef(n_act + i, n_act + i) - sol.P_hat.valuePtr());
             } else {
                 // Same active set as last full build (numeric_dirty_ tracks pattern staleness
                 // identically to pattern_dirty_). Unlike chol's G*E*G^T (an actual matrix
@@ -481,13 +498,13 @@ private:
                 assert(sol.P_hat.rows() == n_act + s && sol.P_hat.cols() == n_act + s);
                 if (rho_ != rho_at_last_fact_)
                     for (int k = 0; k < n_act; ++k)
-                        sol.P_hat.coeffRef(k, k) = -H_diag(ldlt_act_idx_[k]);
+                        sol.P_hat.valuePtr()[ldlt_diag_top_idx_[k]] = -H_diag(ldlt_act_idx_[k]);
                 for (Eigen::Index i = 0; i < s; ++i)
-                    sol.P_hat.coeffRef(n_act + i, n_act + i) = T(1) / mu_;
+                    sol.P_hat.valuePtr()[ldlt_diag_bot_idx_[i]] = T(1) / mu_;
             }
         }
 
-        finish_factorization(sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, n_act);
+        finish_factorization(sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, structural_change, n_act);
     }
 
     // Build P = G E G^T + (1/mu) I (or shift its mu diagonal), then factorize with Cholesky.
@@ -508,6 +525,11 @@ private:
         auto& sol = std::get<CholSolver>(active_solver_);
 
         const bool rho_changed = (rho_ != rho_at_last_fact_);
+        // Captured before the branch below runs: numeric_dirty_ is reset to false partway
+        // through it. Deliberately NOT "numeric_dirty_ || rho_changed" -- a rho-only change
+        // still fully rebuilds sol.P (see the branch condition), but active_K/active_W/G are
+        // provably unchanged, so snapshot_state() doesn't need to re-copy them for that case.
+        const bool structural_change = numeric_dirty_;
         {
             SCHUR_PREC_TIMER_BLOCK(assembly_time_);
             if (numeric_dirty_ || rho_changed) {
@@ -530,16 +552,23 @@ private:
                 for (Eigen::Index i = 0; i < s; ++i)
                     sol.P.coeffRef(i, i) += T(1) / mu_;
                 sol.P.makeCompressed();
+
+                // Cache each diagonal's flat storage index (valid since sol.P was just
+                // (re)assigned above) so the mu-only shift path below can write via
+                // valuePtr()[idx] (O(1)) instead of coeffRef(i,i) (O(log nnz), binary search).
+                diag_idx_chol_.resize(s);
+                for (Eigen::Index i = 0; i < s; ++i)
+                    diag_idx_chol_[i] = static_cast<int>(&sol.P.coeffRef(i, i) - sol.P.valuePtr());
             } else {
                 // G E G^T unchanged; only mu changed: shift the (1/mu) I diagonal by delta.
                 assert(sol.P.rows() == s && sol.P.cols() == s);
                 const T delta = (mu_at_last_fact_ - mu_) / (mu_ * mu_at_last_fact_);
                 for (Eigen::Index i = 0; i < s; ++i)
-                    sol.P.coeffRef(i, i) += delta;
+                    sol.P.valuePtr()[diag_idx_chol_[i]] += delta;
             }
         }
 
-        finish_factorization(sol.llt, sol.P, s, /*is_ldlt=*/false);
+        finish_factorization(sol.llt, sol.P, s, /*is_ldlt=*/false, structural_change);
     }
 
     // ------ SMW low-rank update ------
@@ -792,16 +821,24 @@ private:
         z_base_.resize(s_old_);
         z_new_.resize(s_new);
         s_current_ = s_new;
+        mu_at_last_fact_  = mu_;  // SMW's result reflects the current mu/rho, not the snapshot's;
+        rho_at_last_fact_ = rho_; // keep compute()'s mu_changed/rho_changed gate in sync with that.
         use_smw_   = true;
         smw_count_++;
     }
 
     // Helper: snapshot last full-rebuild state for next SMW attempt.
-    void snapshot_state() {
-        G_old_        = *G_;
+    // structural_change: true iff active_K/active_W/G changed (not just mu/rho values). If true,
+    // G_old_/active_K_old_/active_W_old_ are re-copied (G_old_'s deep copy is O(nnz(G))); if
+    // false, only H_diag_old_/rho_old_ are refreshed, since a mu/rho-only call provably left
+    // G/active_K/active_W unchanged.
+    void snapshot_state(bool structural_change) {
+        if (structural_change) {
+            G_old_        = *G_;
+            active_K_old_ = *active_K_;
+            if (active_W_) active_W_old_ = *active_W_;
+        }
         H_diag_old_   = *H_diag_;
-        active_K_old_ = *active_K_;
-        if (active_W_) active_W_old_ = *active_W_;
         rho_old_      = rho_;
         has_snapshot_ = true;
         snapshot_wiped_by_fail_streak_ = false;
@@ -857,6 +894,13 @@ private:
     std::vector<int> ldlt_act_idx_;
     std::vector<Triplet> ldlt_build_trips_;
     std::vector<Triplet> chol_build_trips_;
+
+    // Cached flat storage indices (into sol.P/sol.P_hat's valuePtr()) for the diagonal entries
+    // touched by the mu/rho-only patch paths in factorize_by_chol()/factorize_by_ldlt(); avoids
+    // an O(log nnz) coeffRef() binary search on every mu/rho-only iteration.
+    std::vector<int> diag_idx_chol_;
+    std::vector<int> ldlt_diag_top_idx_;
+    std::vector<int> ldlt_diag_bot_idx_;
 
     // ------ SMW low-rank update ------
     // Control & failure tracking
