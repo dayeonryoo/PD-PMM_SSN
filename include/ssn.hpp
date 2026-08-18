@@ -119,8 +119,7 @@ public:
     const SpMat& A_tr, B_tr;
     Vec H_diag, H_diag_inv;
     T H_diag_mu_ = T(0), H_diag_rho_ = T(0); // (mu, rho) H_diag was last built with; see prepare_newton_system().
-    Vec diag_P_K, diag_P_W;
-    BoolArr active_W, inactive_W, active_K;
+    BoolArr active_W, active_K;
     int n_active_W, n_inactive_W;
     SpMat B_inactive_W, G, G_tr;
 
@@ -199,8 +198,10 @@ public:
     Vec Ax_ssn_, Bx_ssn_;                     // size M, l (running SpMV products in SSN)
     Vec x_cur_, y2_cur_;                      // size N, l (SSN working iterates)
     Vec u_, v_;                               // size N, l
-    Vec new_diag_P_K_, dist_K_u_;             // size N
-    Vec new_diag_P_W_, dist_W_v_;             // size l
+    BoolArr new_active_K_;                    // size N
+    Vec dist_K_u_;                            // size N
+    BoolArr new_active_W_;                    // size l
+    Vec dist_W_v_;                            // size l
     Vec y2_active_W_, y2_inactive_W_;         // size l (set to max size)
     Vec dist_W_v_active_, dist_W_v_inactive_; // size l (set to max size)
     Vec dy2_inactive_W_;                      // size l (set to max size)
@@ -219,6 +220,8 @@ public:
     Vec cg_Hinv_r1_, cg_rhs_;                 // size s = G.rows() (M+n_active_W)
     Vec cg_dx_;                               // size n = N
     Vec ldlt_solve_rhs_;                      // size n+s
+    Vec Gtr_dy_;                              // size n = N (iterative_refine_dxdy scratch)
+    Vec G_dx_;                                // size s = G.rows() (iterative_refine_dxdy scratch)
 
     // Fallback of PCG: LDLT on KKT system [-H, G^T; G, (1/mu)I].
     bool kkt_ldlt_used = false; // True means LDLT on KKT system was used at least once.
@@ -228,6 +231,12 @@ public:
     // When only H_diag or mu changes (diagonal-only update): set diagonal entries in-place.
     SpMat K_ldlt_;
     bool K_ldlt_built_ = false;
+
+    // Cached flat storage indices (into K_ldlt_.valuePtr()) for the diagonal entries, populated
+    // during the triplet rebuild above. Lets the diagonal-only patch path in solve_using_ldlt()
+    // write via valuePtr()[idx] (O(1)) instead of coeffRef(i,i) (O(log nnz), binary search).
+    std::vector<int> ldlt_diag_top_idx_; // size n, top-left -H block
+    std::vector<int> ldlt_diag_bot_idx_; // size s, bottom-right (1/mu)I block
 
     // Stored LDLT factorization of K.
     Eigen::SimplicialLDLT<SpMat> ldlt_;
@@ -251,12 +260,14 @@ public:
       eps_pinf(eps_pinf), eps_dinf(eps_dinf),
       when(when), what(what)
     {
-        ones_N = Vec::Ones(N);
-        ones_M = Vec::Ones(M);
-        ones_l = Vec::Ones(l);
         ssn_iter = 0;
         delta_x = Vec::Zero(N);
         delta_y2 = Vec::Zero(l);
+
+        // M is fixed for this SSN's lifetime; pass it now rather than letting SchurPreconditioner
+        // infer it lazily from G.rows() - n_active_W, which stays unset until some call sees
+        // G.rows() > 0 (see SchurPreconditioner::set_num_equality_rows()).
+        cg.preconditioner().set_num_equality_rows(M);
 
         y2_active_W_.resize(l);
         y2_inactive_W_.resize(l);
@@ -295,18 +306,28 @@ public:
         linesearch_fail = 0;         // Reset line search failure count for this SSN iteration.
         cg.preconditioner().reset_smw_fail_streak(); // Reset SMW suppression
     }
-    static inline T inf_norm(const Vec& v) {
+    // Templated on the argument's Eigen expression type (rather than taking a concrete Vec) so
+    // callers can pass an unevaluated expression (e.g. a.cwiseProduct(b)) directly -- binding it
+    // to a concrete Vec& parameter would force it to materialize into a temporary first.
+    template <typename Derived>
+    static inline T inf_norm(const Eigen::MatrixBase<Derived>& v) {
         if (v.size() == 0) return T(0);
         return v.cwiseAbs().maxCoeff();
     }
-    static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
-        return u.cwiseMax(lower).cwiseMin(upper);
-    }
-    static inline Vec compute_dist_box(const Vec& v, const Vec& lower, const Vec& upper) {
-        return (v - proj(v, lower, upper));
+    // Out-parameter form, mirroring compute_subgrad_and_dist(): writes into a pre-sized `dist`
+    // instead of returning by value, and takes `v` as an expression (see inf_norm above) so
+    // e.g. compute_dist_box(z / mu + x_new, lx, ux, grad_dist_K_) does zero heap allocations.
+    template <typename Derived>
+    static void compute_dist_box(const Eigen::MatrixBase<Derived>& v, const Vec& lower, const Vec& upper, Vec& dist) {
+        const int sz = static_cast<int>(v.size());
+        dist.resize(sz);
+        for (int i = 0; i < sz; ++i) {
+            const T vi = v[i];
+            dist[i] = vi - std::max(lower[i], std::min(upper[i], vi));
+        }
     }
     static void compute_subgrad_and_dist(const Vec& u, const Vec& lower, const Vec& upper,
-                                         bool include_bd, Vec& subgrad, Vec& dist) {
+                                         bool include_bd, BoolArr& subgrad, Vec& dist) {
         const int sz = static_cast<int>(u.size());
         subgrad.resize(sz);
         dist.resize(sz);
@@ -314,12 +335,12 @@ public:
             const T ui = u[i], li = lower[i], hi = upper[i];
             const T pi = std::max(li, std::min(hi, ui));
             dist[i]    = ui - pi;
-            subgrad[i] = (include_bd ? (ui >= li && ui <= hi) : (ui > li && ui < hi)) ? T(1) : T(0);
+            subgrad[i] = include_bd ? (ui >= li && ui <= hi) : (ui > li && ui < hi);
         }
     }
     const Vec& compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
     T compute_grad_Lagrangian_unscaled_inf_norm(const Vec& grad_L);
-    void split_by_mask(const Vec& u, const BoolArr& mask, int t, Vec& u_sel, Vec& u_unsel);
+    void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);
     void rebuild_G();
     void retrieve_row_order(const Vec& u_sel, const Vec& u_unsel, const BoolArr& mask, Vec& out);
     bool choose_schur_ldlt(const SpMat& G, const BoolArr& active_K);

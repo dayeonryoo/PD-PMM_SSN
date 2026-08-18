@@ -324,6 +324,13 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     SpMat Q_reg = Q_sym + delta * I;
     Q_reg.makeCompressed();
 
+    // Cache each diagonal's flat storage index (coeffRef returns a reference straight into the
+    // value array) so the retry loop below can patch the diagonal via valuePtr()[idx] (O(1))
+    // instead of coeffRef(k,k) (O(log nnz), binary search) on every attempt.
+    std::vector<int> diag_idx(n);
+    for (int k = 0; k < n; ++k)
+        diag_idx[k] = static_cast<int>(&Q_reg.coeffRef(k, k) - Q_reg.valuePtr());
+
     Eigen::SimplicialLDLT<SpMat> ldlt;
     ldlt.analyzePattern(Q_reg); // sparsity pattern is fixed across retries below; analyze once
 
@@ -341,7 +348,7 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
         }
         // Meaningfully negative pivot: escalate regularization and retry rather than clamping.
         delta *= T(10);
-        for (int k = 0; k < n; ++k) Q_reg.coeffRef(k, k) = Q_diag(k) + delta;
+        for (int k = 0; k < n; ++k) Q_reg.valuePtr()[diag_idx[k]] = Q_diag(k) + delta;
     }
 
     if (!accepted) {
@@ -566,18 +573,26 @@ void KSP_QP<T>::initialize_sols() { // using 0 vectors
 }
 
 template <typename T>
-void KSP_QP<T>::check_bounds() {
-    // Check lower and upper bounds.
+bool KSP_QP<T>::check_bounds() {
+    // An empty box interval (lower > upper) proves the problem primal infeasible outright: no x can
+    // satisfy lx <= x <= ux (or Bx, lw <= Bx <= uw) componentwise. Report this directly rather than
+    // throwing, which would otherwise be caught by the generic setup try/catch and misreported as
+    // NumericalError instead of the certified PrimalInfeasible it actually is.
     for (int i = 0; i < n; ++i) {
         if (lx_orig(i) > ux_orig(i)) {
-            throw std::invalid_argument("Problem is infeasible: lx should be <= ux.");
+            std::cout << "[Infeasibility] Primal infeasible: lx(" << i << ") = " << lx_orig(i)
+                      << " > ux(" << i << ") = " << ux_orig(i) << ".\n";
+            return false;
         }
     }
     for (int i = 0; i < l; ++i) {
         if (lw_orig(i) > uw_orig(i)) {
-            throw std::invalid_argument("Problem is infeasible: lw should be <= uw.");
+            std::cout << "[Infeasibility] Primal infeasible: lw(" << i << ") = " << lw_orig(i)
+                      << " > uw(" << i << ") = " << uw_orig(i) << ".\n";
+            return false;
         }
     }
+    return true;
 }
 
 template <typename T>
@@ -848,7 +863,9 @@ template <typename T>
 Solution<T> KSP_QP<T>::solve() {
     auto solving_start = now_();
 
-    // If an error occurred during setup, exit immediately with opt = NumericalError.
+    // If setup failed, exit immediately with the status already determined during setup
+    // (NumericalError for a genuine setup error, or PrimalInfeasible if check_bounds() found an
+    // empty box interval).
     if (setup_failed) {
         auto solving_end = now_();
         double solve_time = time_diff_s(solving_start, solving_end); // in seconds
@@ -938,9 +955,11 @@ Solution<T> KSP_QP<T>::solve() {
         ResVec new_res_norms = compute_residual_unscaled_inf_norms(Ax_scratch_, Bx_scratch_, Qx_scratch_);
         pmm_tol_achieved = new_res_norms.maxCoeff();
 
-        // Ruiz-descale and shrink to the original dimension (n, m, l) for printing.
-        printable_sol(x, y1, y2, z); // (Modifies x_sol, y1_sol, y2_sol, z_sol.)
-        obj_val = objective_value(x_sol);
+        // obj_val/x_sol/y1_sol/y2_sol/z_sol for printing are skipped when printing is off.
+        if (when != PrintWhen::NEVER && what != PrintWhat::NONE) {
+            printable_sol(x, y1, y2, z); // (Modifies x_sol, y1_sol, y2_sol, z_sol.)
+            obj_val = objective_value(x_sol);
+        }
 
         pmm_iter++;
 
@@ -989,6 +1008,14 @@ Solution<T> KSP_QP<T>::solve() {
     // Loop exhausted max_iter without any other termination condition firing.
     if (!result) result = TerminationStatus::MaxPmmIterations;
     opt = *result;
+
+    // Populate the printable solution/objective from the last accepted (x, y1, y2, z), in case the
+    // loop broke before reaching the in-loop printable_sol() call above (MaxSsnIterations breaks
+    // before it; max_iter == 0 skips the loop body entirely). x/y1/y2/z are always well-defined
+    // here (zero-initialized, only ever updated by a fully-completed SSN iterate), so this is safe
+    // to recompute unconditionally; the infeasibility/error block below still overrides it.
+    printable_sol(x, y1, y2, z);
+    obj_val = objective_value(x_sol);
 
     // Check if infeasiblity or a numerical error is detected.
     if (opt == TerminationStatus::PrimalInfeasible || opt == TerminationStatus::DualInfeasible ||

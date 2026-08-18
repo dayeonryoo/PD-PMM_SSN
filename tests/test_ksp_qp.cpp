@@ -250,15 +250,15 @@ TEST(CheckDimensions, ThrowsWhenBRowsMismatchesL) {
 
 // ===================== check_bounds =====================
 
-TEST(CheckBounds, ThrowsWhenLxExceedsUx) {
+TEST(CheckBounds, ReturnsFalseWhenLxExceedsUx) {
   KSP_QP<double> ns = MakeValidInstance();
   ASSERT_FALSE(ns.setup_failed);
   ns.lx_orig(0) = 5.0;
   ns.ux_orig(0) = 1.0;
-  EXPECT_THROW(ns.check_bounds(), std::invalid_argument);
+  EXPECT_FALSE(ns.check_bounds());
 }
 
-TEST(CheckBounds, ThrowsWhenLwExceedsUw) {
+TEST(CheckBounds, ReturnsFalseWhenLwExceedsUw) {
   SpMat Q = DenseToSparse((Eigen::MatrixXd(1, 1) << 1.0).finished());
   SpMat B = DenseToSparse((Eigen::MatrixXd(1, 1) << 1.0).finished());
   auto problem = MakeProblem(1, 0, 1, Q, SpMat(0, 1), B, Vec::Zero(1), Vec(0), 0.0,
@@ -268,7 +268,27 @@ TEST(CheckBounds, ThrowsWhenLwExceedsUw) {
   ASSERT_FALSE(ns.setup_failed);
   ns.lw_orig(0) = 5.0;
   ns.uw_orig(0) = 1.0;
-  EXPECT_THROW(ns.check_bounds(), std::invalid_argument);
+  EXPECT_FALSE(ns.check_bounds());
+}
+
+TEST(CheckBounds, ReturnsTrueWhenBoundsAreConsistent) {
+  KSP_QP<double> ns = MakeValidInstance();
+  ASSERT_FALSE(ns.setup_failed);
+  EXPECT_TRUE(ns.check_bounds());
+}
+
+TEST(KspQpConstruction, ReportsPrimalInfeasibleWhenLxExceedsUx) {
+  // lx > ux is a certified empty box interval, so the constructor should detect it via
+  // check_bounds() and report PrimalInfeasible directly rather than throwing/NumericalError.
+  SpMat Q = DenseToSparse((Eigen::MatrixXd(1, 1) << 1.0).finished());
+  auto problem = MakeProblem(1, 0, 0, Q, SpMat(0, 1), SpMat(0, 1), Vec::Zero(1), Vec(0), 0.0,
+                              Vec::Constant(1, 5.0), Vec::Constant(1, 1.0), Vec(0), Vec(0));
+  KSP_QP<double> ns(problem);
+  EXPECT_TRUE(ns.setup_failed);
+  EXPECT_EQ(ns.opt, TerminationStatus::PrimalInfeasible);
+
+  auto sol = ns.solve();
+  EXPECT_EQ(sol.opt, TerminationStatus::PrimalInfeasible);
 }
 
 // ===================== ruiz_scaling =====================
@@ -1151,6 +1171,33 @@ TEST(KspQpSolveEndToEnd, TerminatesWithMaxSsnIterationsWhenSsnIterationBudgetIsE
 
   auto sol = ns.solve();
   EXPECT_EQ(sol.opt, TerminationStatus::MaxSsnIterations);
+
+  // Regression check: this break fires before the in-loop printable_sol()/objective_value() call,
+  // so x/y1/y2/z (and obj_val) must be populated from the last accepted iterate after the loop
+  // instead of being left at their default-constructed (size-0 / indeterminate) state.
+  EXPECT_EQ(sol.x.size(), 1);
+  EXPECT_EQ(sol.z.size(), 1);
+  EXPECT_TRUE(std::isfinite(sol.obj_val));
+}
+
+TEST(KspQpSolveEndToEnd, PopulatesSolutionWhenMaxIterIsZero) {
+  // max_iter=0 skips the PMM loop body entirely, so the in-loop printable_sol()/objective_value()
+  // call never runs at all; the returned solution should still be well-formed (the zero-initialized
+  // iterate), not size-0 vectors with an indeterminate objective.
+  SpMat Q = DenseToSparse((Eigen::MatrixXd(1, 1) << 2.0).finished());
+  Vec c(1);
+  c << -4.0;
+  auto problem = MakeProblem(1, 0, 0, Q, SpMat(0, 1), SpMat(0, 1), c, Vec(0), 0.0,
+                              Vec::Constant(1, -1.0), Vec::Constant(1, 1.0), Vec(0), Vec(0),
+                              /*tol=*/1e-14, /*max_iter=*/0);
+  KSP_QP<double> ns(problem);
+  ASSERT_FALSE(ns.setup_failed);
+
+  auto sol = ns.solve();
+  EXPECT_EQ(sol.opt, TerminationStatus::MaxPmmIterations);
+  EXPECT_EQ(sol.x.size(), 1);
+  EXPECT_EQ(sol.z.size(), 1);
+  EXPECT_TRUE(std::isfinite(sol.obj_val));
 }
 
 TEST(KspQpSolveEndToEnd, TerminatesWithMaxPmmIterationsWhenIterationBudgetIsExhausted) {
@@ -1206,6 +1253,13 @@ TEST(ReportHook, CapturesOnePmmIterationRecordPerIterationWithMatchingFinalObjec
                               Vec::Constant(2, -1.0), Vec::Constant(2, 1.0), Vec(0), Vec(0));
   KSP_QP<double> ns(problem);
   ASSERT_FALSE(ns.setup_failed);
+
+  // solve()'s per-iteration IterationRecord::obj_val is only freshly computed when print() would
+  // actually consume it (when != PrintWhen::NEVER && what != PrintWhat::NONE); MakeProblem() sets
+  // NEVER/NONE, so opt in here since this test's own report_ hook needs a fresh obj_val every
+  // iteration too. The final Solution's obj_val is unaffected by this and always correct.
+  ns.when = PrintWhen::ALWAYS;
+  ns.what = PrintWhat::FULL;
 
   std::vector<IterationRecord<double>> records;
   ns.report_ = [&](const IterationRecord<double>& r) { records.push_back(r); };

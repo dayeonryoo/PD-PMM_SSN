@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <unordered_map>
 #include <fstream>
@@ -51,23 +52,33 @@ private:
 
     ParsedModel<T> model_;
 
+    // Reused across lines to avoid a fresh vector (and fresh string copies)
+    // per line: ws_tokens_ holds the current line's raw whitespace split
+    // (needed for both the section-header check and as the free-format
+    // source), and tokens_ holds the final section-specific tokens handed
+    // to parse_*(). Both hold string_views into the current `line`, so they
+    // are only valid until the next getline() call.
+    std::vector<std::string_view> ws_tokens_;
+    std::vector<std::string_view> tokens_;
+
     static bool is_comment_or_blank(const std::string& line);
-    static std::vector<std::string> split_ws(const std::string& line);
-    static std::vector<std::string> split_free_by_section(const std::string& line, Section sec);
-    static std::vector<std::string> split_fixed_by_section(const std::string& line, Section sec);
-    std::vector<std::string> tokenize_line(const std::string& line, Section sec);
-    static std::string trim(const std::string& s);
-    
-    bool set_section(const std::vector<std::string>& tokens);
+    static void split_ws(std::string_view line, std::vector<std::string_view>& out);
+    static void split_free_by_section(const std::vector<std::string_view>& toks, Section sec,
+                                       std::vector<std::string_view>& out);
+    static void split_fixed_by_section(std::string_view line, Section sec,
+                                        std::vector<std::string_view>& out);
+    void tokenize_line(const std::string& line, Section sec);
+    static std::string_view trim(std::string_view s);
+
+    bool set_section(const std::vector<std::string_view>& tokens);
     void decide_format_from(const std::string& line, Section sec);
-    void parse_name(const std::vector<std::string>& tokens);
-    void parse_objsense(const std::vector<std::string>& tokens);
-    void parse_rows(const std::vector<std::string>& tokens);
-    void parse_columns(const std::vector<std::string>& tokens);
-    void parse_rhs(const std::vector<std::string>& tokens);
-    void parse_ranges(const std::vector<std::string>& tokens);
-    void parse_bounds(const std::vector<std::string>& tokens);
-    void parse_quadobj(const std::vector<std::string>& tokens);
+    void parse_objsense(const std::vector<std::string_view>& tokens);
+    void parse_rows(const std::vector<std::string_view>& tokens);
+    void parse_columns(const std::vector<std::string_view>& tokens);
+    void parse_rhs(const std::vector<std::string_view>& tokens);
+    void parse_ranges(const std::vector<std::string_view>& tokens);
+    void parse_bounds(const std::vector<std::string_view>& tokens);
+    void parse_quadobj(const std::vector<std::string_view>& tokens);
 
     void finalize_defaults();
     void finalize_row_bounds();

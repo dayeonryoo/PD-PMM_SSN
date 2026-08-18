@@ -10,8 +10,8 @@
 
 template <typename T>
 const typename SSN<T>::Vec& SSN<T>::compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new) {
-    grad_dist_K_ = compute_dist_box(z / mu + x_new, lx, ux);
-    grad_dist_W_ = compute_dist_box(Bx_new + ((1 - alpha) * y2_new - y2) / mu, lw, uw);
+    compute_dist_box(z / mu + x_new, lx, ux, grad_dist_K_);
+    compute_dist_box(Bx_new + ((1 - alpha) * y2_new - y2) / mu, lw, uw, grad_dist_W_);
     grad_res_p_.noalias() = Ax_new - b;
 
     grad_Atr_resp_.noalias()  = A_tr * grad_res_p_;
@@ -39,7 +39,7 @@ T SSN<T>::compute_grad_Lagrangian_unscaled_inf_norm(const Vec& grad_L) {
 }
 
 template <typename T>
-void SSN<T>::split_by_mask(const Vec& u, const BoolArr& mask, int t, Vec& u_sel, Vec& u_unsel) {
+void SSN<T>::split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel) {
     int i_sel = 0;
     int i_unsel = 0;
     for (int i = 0; i < mask.size(); ++i) {
@@ -332,6 +332,16 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
             K_ldlt_.makeCompressed();
             K_ldlt_built_ = true;
 
+            // Cache each diagonal's flat storage index (coeffRef returns a reference straight
+            // into the value array) so the patch path below can write via valuePtr()[idx]
+            // (O(1)) instead of coeffRef(i,i) (O(log nnz), binary search).
+            ldlt_diag_top_idx_.resize(n);
+            for (int i = 0; i < n; ++i)
+                ldlt_diag_top_idx_[i] = static_cast<int>(&K_ldlt_.coeffRef(i, i) - K_ldlt_.valuePtr());
+            ldlt_diag_bot_idx_.resize(s);
+            for (int i = 0; i < s; ++i)
+                ldlt_diag_bot_idx_[i] = static_cast<int>(&K_ldlt_.coeffRef(n + i, n + i) - K_ldlt_.valuePtr());
+
             if (ldlt_pattern_dirty_) {
                 SSN_TIMER_BLOCK(timer_ldlt_analyze);
                 ldlt_.analyzePattern(K_ldlt_);
@@ -339,12 +349,13 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
             }
         } else {
             // Pattern unchanged (active_W same): only diagonal values changed (H_diag, mu).
-            // Update top-left and bottom-right diagonal entries in-place; G blocks stay.
+            // Update top-left and bottom-right diagonal entries in-place via the cached flat
+            // indices above; G blocks stay.
             for (int i = 0; i < n; ++i)
-                K_ldlt_.coeffRef(i, i) = -H_diag(i);
+                K_ldlt_.valuePtr()[ldlt_diag_top_idx_[i]] = -H_diag(i);
             const T mu_inv = T(1) / mu;
             for (int i = 0; i < s; ++i)
-                K_ldlt_.coeffRef(n + i, n + i) = mu_inv;
+                K_ldlt_.valuePtr()[ldlt_diag_bot_idx_[i]] = mu_inv;
         }
 
         {
@@ -555,15 +566,18 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
     v_ = Bx_ssn_ + ((1 - alpha) * y2_cur_ - y2) / mu;
 
     // Clarke subgradient and distance for K and W
-    compute_subgrad_and_dist(u_, lx, ux, false, new_diag_P_K_, dist_K_u_);
-    compute_subgrad_and_dist(v_, lw, uw, true,  new_diag_P_W_, dist_W_v_);
+    compute_subgrad_and_dist(u_, lx, ux, false, new_active_K_, dist_K_u_);
+    compute_subgrad_and_dist(v_, lw, uw, true,  new_active_W_, dist_W_v_);
+    // W is "active" when v lies OUTSIDE [lw,uw]; the subgrad just written is true when INSIDE
+    // (include_bd=true), so invert it to land new_active_W_ in the same polarity as active_W.
+    new_active_W_ = (new_active_W_ == false);
     }
 
     // Detect active-set changes; recompute on any single change.
-    bool first_ssn_iter = (diag_P_K.size() == 0);
+    bool first_ssn_iter = (active_K.size() == 0);
     ActiveSetDelta delta{
-        /*k_changed=*/first_ssn_iter || (diag_P_K.array() != new_diag_P_K_.array()).any(),
-        /*w_changed=*/first_ssn_iter || (diag_P_W.array() != new_diag_P_W_.array()).any(),
+        /*k_changed=*/first_ssn_iter || (active_K != new_active_K_).any(),
+        /*w_changed=*/first_ssn_iter || (active_W != new_active_W_).any(),
     };
 
     bool update_prec = delta.k_changed || delta.w_changed; // true means rebuilding prec is needed.
@@ -580,15 +594,14 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
     if (recompute_H) {
         SSN_TIMER_BLOCK(timer_prep);
         if (delta.k_changed) {
-            diag_P_K = new_diag_P_K_;
-            active_K = (diag_P_K.array() == 1);
+            active_K = new_active_K_;
         }
 
         // H = Q + mu(I_N - P_K) + I_N / rho
         if (Q_info == 0) {
-            H_diag = mu * (ones_N - diag_P_K) + ones_N / rho;
+            H_diag = mu * (T(1) - active_K.cast<T>()) + T(1)/rho;
         } else {
-            H_diag = Q_diag + mu * (ones_N - diag_P_K) + ones_N / rho;
+            H_diag = Q_diag.array() + mu * (T(1) - active_K.cast<T>()) +  T(1)/rho;
         }
         H_diag = H_diag.cwiseMax(eps_zero); // safeguard for non-positive diagonal entries
         H_diag_inv = H_diag.cwiseInverse();
@@ -601,9 +614,7 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
         SSN_TIMER_BLOCK(timer_prep);
         prev_dy_.resize(0); // No warm-starting for CG
 
-        diag_P_W = new_diag_P_W_;
-        active_W = (diag_P_W.array() == 0);
-        inactive_W = (diag_P_W.array() == 1);
+        active_W = new_active_W_;
         n_active_W = active_W.count();
         n_inactive_W = l - n_active_W;
 
@@ -613,8 +624,8 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
     {
     SSN_TIMER_BLOCK(timer_prep);
     // Compute dy2 in inactive_W: dy2_inactive_W = - (mu / alpha) * dist_W(v)(inactive_W) - y2(inactive_W).
-    split_by_mask(y2_cur_, active_W, n_active_W, y2_active_W_, y2_inactive_W_);
-    split_by_mask(dist_W_v_, active_W, n_active_W, dist_W_v_active_, dist_W_v_inactive_);
+    split_by_mask(y2_cur_, active_W, y2_active_W_, y2_inactive_W_);
+    split_by_mask(dist_W_v_, active_W, dist_W_v_active_, dist_W_v_inactive_);
     dy2_inactive_W_.head(n_inactive_W).noalias() =
         -(mu / alpha) * dist_W_v_inactive_.head(n_inactive_W) - y2_inactive_W_.head(n_inactive_W);
 
@@ -653,10 +664,10 @@ void SSN<T>::iterative_refine_dxdy() {
     for (int k = 0; k < refine_max_iter; ++k) {
         const auto dx_k = dxdy_.head(N);
         const auto dy_k = dxdy_.tail(s);
-        Vec Gtr_dy = G_tr * dy_k;
-        Vec G_dx   = G * dx_k;
-        rho1 = r1_ + H_diag.cwiseProduct(dx_k) - Gtr_dy;
-        rho2 = r2_ - G_dx - dy_k / mu;
+        Gtr_dy_.noalias() = G_tr * dy_k;
+        G_dx_.noalias()   = G * dx_k;
+        rho1 = r1_ + H_diag.cwiseProduct(dx_k) - Gtr_dy_;
+        rho2 = r2_ - G_dx_ - dy_k / mu;
 
         const T res_norm = std::max(inf_norm(rho1), inf_norm(rho2));
         if (res_norm <= std::max(refine_rel_tol * ref_norm, refine_abs_tol)) break;

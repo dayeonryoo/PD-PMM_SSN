@@ -1453,6 +1453,33 @@ TEST(CachedRowCounts, MRowsRemainsUnsetUntilFirstNonzeroRowGCallThenLatches) {
   EXPECT_EQ(SchurPreconditionerTestPeer::M_rows(prec), 1);
 }
 
+TEST(CachedRowCounts, SetNumEqualityRowsPinsMRowsImmediatelyEvenWithZeroRowG) {
+  // Unlike set_data()'s lazy inference (MRowsRemainsUnsetUntilFirstNonzeroRowGCallThenLatches
+  // above), set_num_equality_rows() pins M_rows_ up front -- exactly the fix for the bug where a
+  // G.rows() == 0 first call (no equality rows and no active W rows yet) left M_rows_ at -1 and
+  // spuriously disabled SMW via smw_gate_open()'s MissingData check.
+  Prec prec;
+  prec.set_num_equality_rows(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::M_rows(prec), 0);
+}
+
+TEST(CachedRowCounts, SetNumEqualityRowsPreemptsSetDatasLazyInference) {
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_K = ToBoolArr({true, true, true});
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  Prec prec;
+  prec.set_num_equality_rows(0);  // deliberately inconsistent with the fixture's real M_rows=1,
+                                   // so a later lazy-inference overwrite would be caught here.
+  prec.set_data(G, G_tr, f.H_diag, active_K, active_W, B_rm, f.mu, f.rho, true, true);
+
+  EXPECT_EQ(SchurPreconditionerTestPeer::M_rows(prec), 0);  // unchanged by set_data()'s fallback
+}
+
 TEST(CachedRowCounts, SCurrentTracksRowCountAcrossFullRebuildAndSmwRowCountChange) {
   Fixture f;
   const std::vector<bool> active_k = {true, true, true};

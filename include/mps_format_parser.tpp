@@ -38,6 +38,7 @@ ParsedModel<T> MpsFormatParser<T>::parse(const std::string& filename) {
     A_triplets_.clear(); Q_triplets_.clear();
     obj_name_.clear();
     rhs_values_.clear(); range_values_.clear();
+    ws_tokens_.clear(); tokens_.clear();
 
     std::ifstream f(filename);
     if (!f) throw std::runtime_error("Cannot open MPS file: " + filename);
@@ -47,24 +48,24 @@ ParsedModel<T> MpsFormatParser<T>::parse(const std::string& filename) {
         if (is_comment_or_blank(line)) continue;
 
         // Section header parsing.
-        std::vector<std::string> head = split_ws(line);
-        bool is_header = set_section(head);
+        split_ws(line, ws_tokens_);
+        bool is_header = set_section(ws_tokens_);
         if (section_ == Section::ENDATA) break;
         if (is_header) continue; // Skip section header lines.
 
         decide_format_from(line, section_);
 
-        // Section content parsing depending on format.
-        std::vector<std::string> tokens = tokenize_line(line, section_);
+        // Section content parsing depending on format. Reuses ws_tokens_
+        // (already split above) instead of re-scanning the line.
+        tokenize_line(line, section_);
         switch (section_) {
-            case Section::NAME: parse_name(tokens); break;
-            case Section::OBJSENSE: parse_objsense(tokens); break;
-            case Section::ROWS: parse_rows(tokens); break;
-            case Section::COLUMNS: parse_columns(tokens); break;
-            case Section::RHS: parse_rhs(tokens); break;
-            case Section::RANGES: parse_ranges(tokens); break;
-            case Section::BOUNDS: parse_bounds(tokens); break;
-            case Section::QUADOBJ: parse_quadobj(tokens); break;
+            case Section::OBJSENSE: parse_objsense(tokens_); break;
+            case Section::ROWS: parse_rows(tokens_); break;
+            case Section::COLUMNS: parse_columns(tokens_); break;
+            case Section::RHS: parse_rhs(tokens_); break;
+            case Section::RANGES: parse_ranges(tokens_); break;
+            case Section::BOUNDS: parse_bounds(tokens_); break;
+            case Section::QUADOBJ: parse_quadobj(tokens_); break;
             default: break; // Ignore lines outside of known sections.
         }
     }
@@ -80,7 +81,6 @@ template <typename T>
 KSPQPdata<T> MpsFormatParser<T>::to_kspqp(const ParsedModel<T>& model, T eq_tol, T inf_cap) {
     using Vec = typename MpsFormatParser<T>::Vec;
     using SpMat = typename MpsFormatParser<T>::SpMat;
-    using Triplet = typename MpsFormatParser<T>::Triplet;
 
     auto is_inf = [inf_cap](T val) {
         return std::isinf((double)val) || std::abs((double)val) >= (double)inf_cap;
@@ -115,7 +115,7 @@ KSPQPdata<T> MpsFormatParser<T>::to_kspqp(const ParsedModel<T>& model, T eq_tol,
     // If MAX, convert to MIN by negating objective.
     if (!model.is_min) {
         pd.c = -pd.c;
-        if (model.is_qp) pd.Q = -pd.Q;
+        if (model.is_qp) pd.Q.coeffs() *= -1;
     }
 
     // Process constraints.
@@ -138,71 +138,72 @@ KSPQPdata<T> MpsFormatParser<T>::to_kspqp(const ParsedModel<T>& model, T eq_tol,
     pd.m = (int)eq_rows.size();
     pd.l = (int)ineq_rows.size();
 
-    // Construct A and b for equality constraints.
-    pd.A = SpMat(pd.m, pd.n);
+    // Map each original row to its compacted index within its partition (-1 if in
+    // neither, i.e. a free row). Mutually exclusive, so between them every row of
+    // model.A is claimed by at most one of pd.A/pd.B below.
+    std::vector<int> eq_row_map(model.num_rows, -1), ineq_row_map(model.num_rows, -1);
+
     pd.b = Vec(pd.m);
-    {
-        std::vector<Triplet> triplets;
-        triplets.reserve(model.A.nonZeros());
-        
-        // Row map to track which rows correspond to equality constraints.
-        std::vector<int> row_map(model.num_rows, -1);
-        for (int i = 0; i < eq_rows.size(); ++i) {
-            row_map[eq_rows[i]] = i;
-            pd.b(i) = model.row_lower(eq_rows[i]);
-        }
-
-        for (int col = 0; col < model.A.outerSize(); ++col) {
-            for (typename SpMat::InnerIterator it(model.A, col); it; ++it) {
-                int r = it.row();
-                int loc = row_map[r];
-                if (loc != -1) {
-                    triplets.emplace_back(loc, col, it.value());
-                }
-            }
-        }
-        pd.A.setFromTriplets(triplets.begin(), triplets.end());
-        pd.A.makeCompressed();
+    for (int i = 0; i < (int)eq_rows.size(); ++i) {
+        eq_row_map[eq_rows[i]] = i;
+        pd.b(i) = model.row_lower(eq_rows[i]);
     }
-
-    // Construct B, lw, uw for inequality constraints.
-    pd.B = SpMat(pd.l, pd.n);
     pd.lw = Vec(pd.l);
     pd.uw = Vec(pd.l);
-    {
-        std::vector<Triplet> triplets;
-        triplets.reserve(model.A.nonZeros());
-
-        std::vector<int> row_map(model.num_rows, -1);
-        for (int i = 0; i < ineq_rows.size(); ++i) {
-            int r = ineq_rows[i];
-            row_map[r] = i;
-            pd.lw(i) = model.row_lower(r);
-            pd.uw(i) = model.row_upper(r);
-        }
-
-        for (int col = 0; col < model.A.outerSize(); ++col) {
-            for (typename SpMat::InnerIterator it(model.A, col); it; ++it) {
-                int r = it.row();
-                int loc = row_map[r];
-                if (loc != -1) {
-                    triplets.emplace_back(loc, col, it.value());
-                }
-            }
-        }
-        pd.B.setFromTriplets(triplets.begin(), triplets.end());
-        pd.B.makeCompressed();
+    for (int i = 0; i < (int)ineq_rows.size(); ++i) {
+        int r = ineq_rows[i];
+        ineq_row_map[r] = i;
+        pd.lw(i) = model.row_lower(r);
+        pd.uw(i) = model.row_upper(r);
     }
+
+    // Construct A (equality rows) and B (inequality rows) together in a single pass
+    // over model.A. eq_row_map/ineq_row_map partition its nonzeros between the two,
+    // so together they hold at most nnz(model.A) entries -- reserving nnz(model.A)
+    // for each separately, as two independent passes would, double-counts peak
+    // memory. A cheap counting pass gets the exact split; and since model.A's
+    // InnerIterator is already column-major with strictly increasing row indices --
+    // a property eq_row_map/ineq_row_map preserve within each partition -- the fill
+    // pass can append straight into pd.A/pd.B's compressed storage via
+    // reserve()+startVec()+insertBack(), skipping the Triplet stage (and
+    // setFromTriplets's own working copy) entirely.
+    Eigen::Index eq_nnz = 0, ineq_nnz = 0;
+    for (int col = 0; col < model.A.outerSize(); ++col)
+        for (typename SpMat::InnerIterator it(model.A, col); it; ++it) {
+            if (eq_row_map[it.row()] != -1) ++eq_nnz;
+            else if (ineq_row_map[it.row()] != -1) ++ineq_nnz;
+        }
+
+    pd.A = SpMat(pd.m, pd.n);
+    pd.B = SpMat(pd.l, pd.n);
+    pd.A.reserve(eq_nnz);
+    pd.B.reserve(ineq_nnz);
+    for (int col = 0; col < model.A.outerSize(); ++col) {
+        pd.A.startVec(col);
+        pd.B.startVec(col);
+        for (typename SpMat::InnerIterator it(model.A, col); it; ++it) {
+            const int r = it.row();
+            const int eq_loc = eq_row_map[r];
+            if (eq_loc != -1) {
+                pd.A.insertBack(eq_loc, col) = it.value();
+                continue;
+            }
+            const int ineq_loc = ineq_row_map[r];
+            if (ineq_loc != -1) pd.B.insertBack(ineq_loc, col) = it.value();
+        }
+    }
+    pd.A.finalize();
+    pd.B.finalize();
 
     return pd;
 }
 
 template <typename T>
-bool MpsFormatParser<T>::set_section(const std::vector<std::string>& tokens) {
+bool MpsFormatParser<T>::set_section(const std::vector<std::string_view>& tokens) {
     if (tokens.empty()) return false;
     if (tokens.size() != 1) return false;
 
-    const std::string& sec = tokens[0];
+    std::string_view sec = tokens[0];
     if      (sec == "NAME")     { section_ = Section::NAME;     return true;}
     else if (sec == "OBJSENSE") { section_ = Section::OBJSENSE; return true;}
     else if (sec == "ROWS")     { section_ = Section::ROWS;     return true;}
@@ -229,20 +230,17 @@ void MpsFormatParser<T>::decide_format_from(const std::string& line, Section sec
             return;
     }
 
-    auto fixed = split_fixed_by_section(line, sec);
-    auto free  = split_free_by_section(line, sec);
+    std::vector<std::string_view> fixed;
+    split_fixed_by_section(line, sec, fixed);
+    std::vector<std::string_view> free;
+    split_free_by_section(ws_tokens_, sec, free); // reuse this line's whitespace split
     // Disagreement means the fixed reading was a false positive.
     // Conclude free-format for the rest of this file.
     format_ = (!fixed.empty() && fixed == free) ? Format::FIXED : Format::FREE;
 }
 
 template <typename T>
-void MpsFormatParser<T>::parse_name(const std::vector<std::string>& tokens) {
-    if (tokens.size() >= 2) obj_name_ = tokens[1];
-}
-
-template <typename T>
-void MpsFormatParser<T>::parse_objsense(const std::vector<std::string>& tokens) {
+void MpsFormatParser<T>::parse_objsense(const std::vector<std::string_view>& tokens) {
     if (tokens.size() == 1) sense_ = tokens[0];
     else if (tokens.size() >= 2 && (tokens[0] == "OBJSENSE" || tokens[0] == "'OBJSENSE'")) sense_ = tokens[1];
     else sense_ = tokens.back(); // Take last token as sense.
@@ -257,13 +255,13 @@ void MpsFormatParser<T>::parse_objsense(const std::vector<std::string>& tokens) 
 }
 
 template <typename T>
-void MpsFormatParser<T>::parse_rows(const std::vector<std::string>& tokens) {
+void MpsFormatParser<T>::parse_rows(const std::vector<std::string_view>& tokens) {
     // Free-format ROWS line: <type> <row_name>.
     if (tokens.size() < 2)
         throw std::runtime_error("Malformed ROWS line: expected at least 2 tokens, got " +
                                   std::to_string(tokens.size()) + ".");
     char type = tokens[0].empty() ? 'N' : tokens[0][0]; // Default to 'N' if type is missing.
-    const std::string& rname = tokens[1];
+    std::string rname(tokens[1]);
 
     RowInfo info;
     info.type = type;
@@ -276,34 +274,30 @@ void MpsFormatParser<T>::parse_rows(const std::vector<std::string>& tokens) {
             // Non-objective row with type 'N' is treated as a constraint row with no bounds (free) in finalize_row_bounds().
             info.idx = model_.num_rows++;
         }
+        row_map_[std::move(rname)] = info;
     } else {
-        auto it = row_map_.find(rname);
-        if (it == row_map_.end()) {
-            info.idx = model_.num_rows++; // Assign new index for constraint row.
-        } else {
-            throw std::runtime_error("Duplicate row name in ROWS section: " + rname);
+        // try_emplace does the find-or-insert in a single hash lookup, instead
+        // of a separate find() followed by an unconditional operator[] insert.
+        auto [it, inserted] = row_map_.try_emplace(std::move(rname), info);
+        if (!inserted) {
+            throw std::runtime_error("Duplicate row name in ROWS section: " + it->first);
         }
+        it->second.idx = model_.num_rows++; // Assign new index for constraint row.
     }
-    row_map_[rname] = info;
 }
 
 template <typename T>
-void MpsFormatParser<T>::parse_columns(const std::vector<std::string>& tokens) {
+void MpsFormatParser<T>::parse_columns(const std::vector<std::string_view>& tokens) {
     // Free-format COLUMNS line: <col_name> {<row_name> <value>} ...
     if (tokens.size() < 3)
         throw std::runtime_error("Malformed COLUMNS line: expected at least 3 tokens, got " +
                                   std::to_string(tokens.size()) + ".");
     if (tokens.size() >= 2 && (tokens[1] == "MARKER" || tokens[1] == "'MARKER'")) return; // Ignore marker lines.
 
-    const std::string& cname = tokens[0];
-    int col_idx;
-    auto it = col_map_.find(cname);
-    if (it == col_map_.end()) {
-        col_idx = model_.num_cols++; // Assign new index for variable.
-        col_map_[cname] = col_idx;
-    } else {
-        col_idx = it->second;
-    }
+    // try_emplace does the find-or-insert in a single hash lookup.
+    auto [cit, inserted] = col_map_.try_emplace(std::string(tokens[0]), model_.num_cols);
+    int col_idx = cit->second;
+    if (inserted) ++model_.num_cols; // Assign new index for variable.
 
     // Ensure c is large enough to hold the coefficient for this variable.
     int c_size = model_.c.size();
@@ -313,12 +307,12 @@ void MpsFormatParser<T>::parse_columns(const std::vector<std::string>& tokens) {
     }
 
     for (size_t i = 1; i + 1 < tokens.size(); i += 2) {
-        const std::string& rname = tokens[i];
-        T value = static_cast<T>(std::stod(tokens[i + 1]));
+        std::string_view rname = tokens[i];
+        T value = static_cast<T>(std::stod(std::string(tokens[i + 1])));
 
-        auto it = row_map_.find(rname);
+        auto it = row_map_.find(std::string(rname));
         if (it == row_map_.end()) {
-            throw std::runtime_error("Row name in COLUMNS section not defined in ROWS section: " + rname);
+            throw std::runtime_error("Row name in COLUMNS section not defined in ROWS section: " + std::string(rname));
         }
         const RowInfo& info = it->second;
         if (rname == obj_name_) {
@@ -327,7 +321,7 @@ void MpsFormatParser<T>::parse_columns(const std::vector<std::string>& tokens) {
         } else {
             // Constraint matrix entry
             if (info.idx < 0) {
-                throw std::runtime_error("Invalid row index for constraint in COLUMNS section: " + rname);
+                throw std::runtime_error("Invalid row index for constraint in COLUMNS section: " + std::string(rname));
             }
             A_triplets_.emplace_back(info.idx, col_idx, value);
         }
@@ -335,12 +329,12 @@ void MpsFormatParser<T>::parse_columns(const std::vector<std::string>& tokens) {
 }
 
 template <typename T>
-void MpsFormatParser<T>::parse_rhs(const std::vector<std::string>& tokens) {
+void MpsFormatParser<T>::parse_rhs(const std::vector<std::string_view>& tokens) {
     // Free-format RHS line: <rhs_name> {<row_name> <value>} ...
     if (tokens.size() < 2)
         throw std::runtime_error("Malformed RHS line: expected at least 2 tokens, got " +
                                   std::to_string(tokens.size()) + ".");
-    
+
     // The RHS set name (if present) is read only to detect which token
     // layout this line uses; it is not tracked or validated across lines.
     const size_t start_idx = (tokens.size() == 3 || tokens.size() == 5) ? 1 : 0;
@@ -351,12 +345,12 @@ void MpsFormatParser<T>::parse_rhs(const std::vector<std::string>& tokens) {
     }
 
     for (size_t i = start_idx; i + 1 < tokens.size(); i += 2) {
-        const std::string& rname = tokens[i];
-        T value = static_cast<T>(std::stod(tokens[i + 1]));
+        std::string_view rname = tokens[i];
+        T value = static_cast<T>(std::stod(std::string(tokens[i + 1])));
 
-        auto it = row_map_.find(rname);
+        auto it = row_map_.find(std::string(rname));
         if (it == row_map_.end()) {
-            throw std::runtime_error("Row name in RHS section not defined in ROWS section: " + rname);
+            throw std::runtime_error("Row name in RHS section not defined in ROWS section: " + std::string(rname));
         }
         int idx = it->second.idx;
         if (idx < 0) {
@@ -365,12 +359,12 @@ void MpsFormatParser<T>::parse_rhs(const std::vector<std::string>& tokens) {
         }
 
         // Store the RHS value by row index.
-        rhs_values_[idx] = value; 
+        rhs_values_[idx] = value;
     }
 }
 
 template <typename T>
-void MpsFormatParser<T>::parse_ranges(const std::vector<std::string>& tokens) {
+void MpsFormatParser<T>::parse_ranges(const std::vector<std::string_view>& tokens) {
     // Free-format RANGES line: <range_name> {<row_name> <value>} ...
     if (tokens.size() < 3)
         throw std::runtime_error("Malformed RANGES line: expected at least 3 tokens, got " +
@@ -382,91 +376,81 @@ void MpsFormatParser<T>::parse_ranges(const std::vector<std::string>& tokens) {
     }
 
     for (size_t i = 1; i + 1 < tokens.size(); i += 2) {
-        const std::string& rname = tokens[i];
-        T value = static_cast<T>(std::stod(tokens[i + 1]));
+        std::string_view rname = tokens[i];
+        T value = static_cast<T>(std::stod(std::string(tokens[i + 1])));
 
-        auto it = row_map_.find(rname);
+        auto it = row_map_.find(std::string(rname));
         if (it == row_map_.end()) {
-            throw std::runtime_error("Row name in RANGES section not defined in ROWS section: " + rname);
+            throw std::runtime_error("Row name in RANGES section not defined in ROWS section: " + std::string(rname));
         }
         int idx = it->second.idx;
         if (idx < 0) continue; // Ignore range for objective row or invalid row.
 
         // Store the range value by row index.
-        range_values_[idx] = value; 
+        range_values_[idx] = value;
     }
 }
 
 template <typename T>
-void MpsFormatParser<T>::parse_bounds(const std::vector<std::string>& tokens) {
+void MpsFormatParser<T>::parse_bounds(const std::vector<std::string_view>& tokens) {
     // Free-format BOUNDS line:
     // <bound_type> <bound_name> <col_name> {<value>} ...
     // OR <bound_type> <col_name> {<value>} ... (if bound name is omitted, use default)
-    
+
     if (tokens.size() < 2)
         throw std::runtime_error("Malformed BOUNDS line: expected at least 2 tokens, got " +
                                   std::to_string(tokens.size()) + ".");
 
     const T inf = std::numeric_limits<T>::infinity();
-    const std::string& btype = tokens[0];
+    std::string_view btype = tokens[0];
 
     const bool needs_value = (btype == "LO" || btype == "UP" || btype == "FX" || btype == "LI" || btype == "UI");
-    
-    std::string bname;
-    std::string cname;
-    std::string value_str;
+
+    std::string_view cname;
+    std::string_view value_str;
 
     if (tokens.size() >= 4) {
         // <bound_type> <bound_name> <col_name> <value>
-        bname = tokens[1];
         cname = tokens[2];
         value_str = tokens[3];
     } else if (tokens.size() == 3) {
         // tokens[1] could be either bound name or column name.
         // If tokens[1] is an existing column name or tokens[2] parses as a number,
         // treat it as column name and use default bound name.
-        auto is_number = [](const std::string& s) {
+        auto is_number = [](std::string_view s) {
             if (s.empty()) return false;
             try {
                 size_t pos;
-                std::stod(s, &pos);
+                std::stod(std::string(s), &pos);
                 return pos == s.size();
             } catch (...) {
                 return false;
             }
         };
 
-        if (col_map_.find(tokens[1]) != col_map_.end() || is_number(tokens[2])) {
-            bname = "BND"; // Use default bound name.
+        if (col_map_.find(std::string(tokens[1])) != col_map_.end() || is_number(tokens[2])) {
             cname = tokens[1];
             value_str = tokens[2];
         } else {
-            bname = tokens[1];
             cname = tokens[2];
         }
     } else {
         // tokens.size == 2: we only have bound type and column name, no bound name or value.
-        bname = "BND"; // Use default bound name.
         cname = tokens[1];
     }
 
     // Check if value is provided when required.
     if (needs_value && value_str.empty()) {
-        throw std::runtime_error("Bound type " + btype + " requires a value in BOUNDS section.");
+        throw std::runtime_error("Bound type " + std::string(btype) + " requires a value in BOUNDS section.");
     }
 
     T value = T(0);
-    if (!value_str.empty()) value = static_cast<T>(std::stod(value_str));
+    if (!value_str.empty()) value = static_cast<T>(std::stod(std::string(value_str)));
 
-    // Get or create column index.
-    int col_idx;
-    auto it = col_map_.find(cname);
-    if (it == col_map_.end()) {
-        col_idx = model_.num_cols++; // Assign new index for variable.
-        col_map_[cname] = col_idx;
-    } else {
-        col_idx = it->second;
-    }
+    // Get or create column index (try_emplace: one hash lookup, not two).
+    auto [it, inserted] = col_map_.try_emplace(std::string(cname), model_.num_cols);
+    int col_idx = it->second;
+    if (inserted) ++model_.num_cols; // Assign new index for variable.
 
     // Ensure col_lower and col_upper are large enough to hold bounds for this variable.
     int size = model_.col_lower.size();
@@ -485,27 +469,27 @@ void MpsFormatParser<T>::parse_bounds(const std::vector<std::string>& tokens) {
     else if (btype == "MI") { model_.col_lower(col_idx) = -inf; } // No lower bound
     else if (btype == "PL") { model_.col_upper(col_idx) = inf; }  // No upper bound
     else if (btype == "BV") { model_.col_lower(col_idx) = 0; model_.col_upper(col_idx) = 1; } // Binary variable
-    else throw std::runtime_error("Unknown bound type in BOUNDS section: " + btype);
+    else throw std::runtime_error("Unknown bound type in BOUNDS section: " + std::string(btype));
 }
 
 template <typename T>
-void MpsFormatParser<T>::parse_quadobj(const std::vector<std::string>& tokens) {
+void MpsFormatParser<T>::parse_quadobj(const std::vector<std::string_view>& tokens) {
     // Free-format QUADOBJ line: {<col_name1> <col_name2> <value>} ...
     if (tokens.size() < 3) return; // Invalid line, ignore.
-    if ((tokens.size() % 3) != 0) 
+    if ((tokens.size() % 3) != 0)
         throw std::runtime_error("QUADOBJ line does not have a multiple of 3 tokens.");
 
     for (size_t k = 0; k + 2 < tokens.size(); k += 3) {
-        const std::string& cname1 = tokens[k];
-        const std::string& cname2 = tokens[k + 1];
-        T value = static_cast<T>(std::stod(tokens[k + 2]));
+        std::string_view cname1 = tokens[k];
+        std::string_view cname2 = tokens[k + 1];
+        T value = static_cast<T>(std::stod(std::string(tokens[k + 2])));
 
-        auto it1 = col_map_.find(cname1);
-        auto it2 = col_map_.find(cname2);
+        auto it1 = col_map_.find(std::string(cname1));
+        auto it2 = col_map_.find(std::string(cname2));
         if (it1 == col_map_.end() || it2 == col_map_.end()) {
             throw std::runtime_error(
                 "QUADOBJ references unknown column '" +
-                (it1 == col_map_.end() ? cname1 : cname2) + "'."
+                std::string(it1 == col_map_.end() ? cname1 : cname2) + "'."
             );
         }
 
@@ -602,7 +586,7 @@ void MpsFormatParser<T>::finalize_row_bounds() {
             model_.row_lower(i) = -inf;
             model_.row_upper(i) = inf;
         } else {
-            throw std::runtime_error(std::string("Unknown row type in ROWS section: ") + type);
+            throw std::runtime_error("Unknown row type in ROWS section: row index = " + std::to_string(i));
         }
 
         if (model_.row_lower(i) > model_.row_upper(i)) {
@@ -639,21 +623,22 @@ bool MpsFormatParser<T>::is_comment_or_blank(const std::string& line) {
 }
 
 template <typename T>
-std::vector<std::string> MpsFormatParser<T>::split_fixed_by_section(const std::string& line, Section sec) {
-    auto field = [&](int start, int len) -> std::string {
-        if ((int)line.size() <= start) return "";
+void MpsFormatParser<T>::split_fixed_by_section(std::string_view line, Section sec,
+                                                 std::vector<std::string_view>& out) {
+    auto field = [&](int start, int len) -> std::string_view {
+        if ((int)line.size() <= start) return {};
         return trim(line.substr(start, std::min(len, (int)line.size() - start)));
     };
-    std::string F1 = field(1, 2);
-    std::string F2 = field(4, 8);
-    std::string F3 = field(14, 8);
-    std::string F4 = field(24, 12);
-    std::string F5 = field(39, 8);
-    std::string F6 = field(49, 12);
+    std::string_view F1 = field(1, 2);
+    std::string_view F2 = field(4, 8);
+    std::string_view F3 = field(14, 8);
+    std::string_view F4 = field(24, 12);
+    std::string_view F5 = field(39, 8);
+    std::string_view F6 = field(49, 12);
 
-    std::vector<std::string> tokens;
-    auto push = [&](const std::string& s) {
-        if (!s.empty()) tokens.push_back(s);
+    out.clear();
+    auto push = [&](std::string_view s) {
+        if (!s.empty()) out.push_back(s);
     };
 
     switch (sec) {
@@ -692,26 +677,27 @@ std::vector<std::string> MpsFormatParser<T>::split_fixed_by_section(const std::s
         default:
             break; // For other sections, we don't use fixed-format parsing.
     }
-    return tokens;
 }
 
 template <typename T>
-std::vector<std::string> MpsFormatParser<T>::split_ws(const std::string& line) {
-    std::vector<std::string> tokens;
-    std::istringstream iss(line);
-    std::string tok;
-    while (iss >> tok) {
-        tokens.push_back(tok);
+void MpsFormatParser<T>::split_ws(std::string_view line, std::vector<std::string_view>& out) {
+    out.clear();
+    size_t i = 0;
+    const size_t n = line.size();
+    while (i < n) {
+        while (i < n && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+        if (i >= n) break;
+        size_t start = i;
+        while (i < n && !std::isspace(static_cast<unsigned char>(line[i]))) ++i;
+        out.push_back(line.substr(start, i - start));
     }
-    return tokens;
 }
 
 template <typename T>
-std::vector<std::string> MpsFormatParser<T>::split_free_by_section(const std::string& line, Section sec) {
-    auto toks = split_ws(line); // whitespace split
-    std::vector<std::string> out;
-
-    auto push = [&](const std::string& s) { if (!s.empty()) out.push_back(s); };
+void MpsFormatParser<T>::split_free_by_section(const std::vector<std::string_view>& toks, Section sec,
+                                                std::vector<std::string_view>& out) {
+    out.clear();
+    auto push = [&](std::string_view s) { if (!s.empty()) out.push_back(s); };
 
     switch (sec) {
         case Section::ROWS:
@@ -768,23 +754,25 @@ std::vector<std::string> MpsFormatParser<T>::split_free_by_section(const std::st
 
         default:
             // NAME/OBJSENSE etc.
-            out = toks;
+            out.assign(toks.begin(), toks.end());
             break;
     }
-    return out;
 }
 
 template <typename T>
-std::vector<std::string> MpsFormatParser<T>::tokenize_line(const std::string& line, Section sec) {
-    // Format is decided once per file by decide_format_from().
+void MpsFormatParser<T>::tokenize_line(const std::string& line, Section sec) {
+    // Format is decided once per file by decide_format_from(). Both branches
+    // write the final tokens into the member buffer tokens_ rather than
+    // returning a freshly allocated vector.
     if (format_ == Format::FREE) {
-        return split_free_by_section(line, sec);
+        split_free_by_section(ws_tokens_, sec, tokens_); // reuse this line's whitespace split
+        return;
     }
 
     // Otherwise, try fixed-format first, but validate that the number of tokens is correct for the section.
-    auto fixed = split_fixed_by_section(line, sec);
+    split_fixed_by_section(line, sec, tokens_);
 
-    auto ok_for_section = [&](const std::vector<std::string>& t) {
+    auto ok_for_section = [&](const std::vector<std::string_view>& t) {
         switch (sec) {
             case Section::ROWS:    return t.size() == 2;
             case Section::COLUMNS: return t.size() == 3 || t.size() == 5;
@@ -796,17 +784,17 @@ std::vector<std::string> MpsFormatParser<T>::tokenize_line(const std::string& li
         }
     };
 
-    if (ok_for_section(fixed)) return fixed;
+    if (ok_for_section(tokens_)) return;
 
-    // Fall back to free.
-    auto free = split_free_by_section(line, sec);
-    return free;
+    // Fall back to free, reusing the already-computed whitespace split
+    // instead of re-scanning the line.
+    split_free_by_section(ws_tokens_, sec, tokens_);
 }
 
 template <typename T>
-std::string MpsFormatParser<T>::trim(const std::string& s) {
+std::string_view MpsFormatParser<T>::trim(std::string_view s) {
     size_t start = s.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) return ""; // All whitespace
+    if (start == std::string_view::npos) return {}; // All whitespace
     size_t end = s.find_last_not_of(" \t\r\n");
     return s.substr(start, end - start + 1);
 }

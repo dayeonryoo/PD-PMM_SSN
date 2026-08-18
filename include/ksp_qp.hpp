@@ -218,10 +218,13 @@ public:
             Vec().swap(uw_ruiz);
 
             initialize_sols();
-            check_bounds();
-
-            A_tr = A.transpose();
-            B_tr = B.transpose();
+            if (check_bounds()) {
+                A_tr = A.transpose();
+                B_tr = B.transpose();
+            } else {
+                setup_failed = true;
+                opt = TerminationStatus::PrimalInfeasible;
+            }
         } catch (const std::exception& e) {
             std::cerr << "[KSP_QP] Setup error: " << e.what() << "\n";
             setup_failed = true;
@@ -242,7 +245,7 @@ public:
                                         Vec& c_out, Vec& b_out, Vec& lx_out, Vec& ux_out);
     void set_default(const Problem<T>& problem);
     void initialize_sols();
-    void check_bounds();
+    bool check_bounds();
 
     static inline Vec proj(const Vec& u, const Vec& lower, const Vec& upper) {
         return u.cwiseMax(lower).cwiseMin(upper);

@@ -116,6 +116,12 @@ public:
     SchurPreconditioner(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const BoolArr& active_K, T mu)
         : G_(&G), G_tr_(&G_tr), H_diag_(&H_diag), active_K_(&active_K), mu_(mu) {}
 
+    // Sets the number of equality-constraint (A) rows once, from data already known when the
+    // owning SSN is constructed. Prefer this over relying on set_data()'s lazy inference below,
+    // which stays unset (-1) -- disabling SMW via smw_gate_open()'s MissingData check -- for as
+    // long as G.rows() == 0 (e.g. no equality rows and no active W rows yet).
+    void set_num_equality_rows(int M) { M_rows_ = M; }
+
     void set_data(const SpMat& G, const SpMat& G_tr, const Vec& H_diag,
                  const BoolArr& active_K, const BoolArr& active_W,
                  const RowMajorSpMat& B_rm,
@@ -143,6 +149,9 @@ public:
         rebuild_ = rebuild || size_changed;
 
         // M_rows_ = number of equality-constraint (A) rows = G.rows() - n_active_W; constant.
+        // Fallback only: a no-op once set_num_equality_rows() has already pinned M_rows_ >= 0.
+        // Callers that never call it get this lazy inference instead, which stays unset (-1)
+        // for as long as G.rows() == 0 -- see set_num_equality_rows()'s doc comment.
         if (M_rows_ < 0 && static_cast<int>(G.rows()) > 0)
             M_rows_ = static_cast<int>(G.rows()) - static_cast<int>(active_W.count());
     }
@@ -548,13 +557,30 @@ private:
                 for (Eigen::Index i = 0; i < n; ++i)
                     E_diag_(i) = active_K(i) ? T(1) / H_diag(i) : T(0);
 
-                SpMat GE = G * E_diag_.asDiagonal();
-                GE.prune(T(0)); // drop explicit zero columns from E_diag_ (inactive K).
-                sol.P = GE * G_tr;
+                // Scale G's columns by sqrt(E) directly (E >= 0, so sqrt is well-defined)
+                // instead of routing through a general SparseMatrix * DiagonalMatrix product:
+                // this is a plain O(nnz(G)) value scan over G's own storage.
+                SpMat G_scaled = G;
+                for (Eigen::Index k = 0; k < G_scaled.outerSize(); ++k) {
+                    const T scale = std::sqrt(E_diag_(k));
+                    for (typename SpMat::InnerIterator it(G_scaled, k); it; ++it)
+                        it.valueRef() *= scale;
+                }
+                G_scaled.prune(T(0)); // drop explicit zeros from inactive-K columns.
+
+                // P = G E G^T = G_scaled * G_scaled^T, but SimplicialLLT only ever reads the
+                // lower triangle: rankUpdate(., alpha=0) assigns that triangle directly instead
+                // of materializing the full symmetric product via a general sparse-sparse GEMM.
+                sol.P.template selfadjointView<Eigen::Lower>().rankUpdate(G_scaled, T(0));
                 numeric_dirty_ = false;
 
-                for (Eigen::Index i = 0; i < s; ++i)
-                    sol.P.coeffRef(i, i) += T(1) / mu_;
+                // Add (1/mu) I as a sparse matrix addition so the diagonal stays structurally
+                // present -- coeffRef(i, i) would otherwise insert a fresh nonzero (an O(nnz)
+                // shift plus an uncompress) whenever row i of G is structurally empty.
+                SpMat mu_diag(s, s);
+                mu_diag.setIdentity();
+                mu_diag *= T(1) / mu_;
+                sol.P += mu_diag;
                 sol.P.makeCompressed();
 
                 // Cache each diagonal's flat storage index (valid since sol.P was just

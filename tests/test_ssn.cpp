@@ -80,37 +80,40 @@ Eigen::MatrixXd Dense(const SpMat& sp) { return Eigen::MatrixXd(sp); }
 // ===================== compute_subgrad_and_dist (static) =====================
 
 TEST(SSN, ComputeSubgradAndDistInteriorPointGivesSubgradOneDistZero) {
-  Vec u(2), lo(2), hi(2), subgrad, dist;
+  Vec u(2), lo(2), hi(2), dist;
+  BoolArr subgrad;
   u << 0.5, -0.5;
   lo << -1.0, -1.0;
   hi << 1.0, 1.0;
   SSN<double>::compute_subgrad_and_dist(u, lo, hi, /*include_bd=*/false, subgrad, dist);
-  EXPECT_DOUBLE_EQ(subgrad(0), 1.0);
-  EXPECT_DOUBLE_EQ(subgrad(1), 1.0);
+  EXPECT_TRUE(subgrad(0));
+  EXPECT_TRUE(subgrad(1));
   EXPECT_DOUBLE_EQ(dist(0), 0.0);
   EXPECT_DOUBLE_EQ(dist(1), 0.0);
 }
 
 TEST(SSN, ComputeSubgradAndDistBoundaryIncludeBdTrueCountsActive) {
-  Vec u(1), lo(1), hi(1), subgrad, dist;
+  Vec u(1), lo(1), hi(1), dist;
+  BoolArr subgrad;
   u << -1.0;
   lo << -1.0;
   hi << 1.0;
   SSN<double>::compute_subgrad_and_dist(u, lo, hi, /*include_bd=*/true, subgrad, dist);
-  EXPECT_DOUBLE_EQ(subgrad(0), 1.0);
+  EXPECT_TRUE(subgrad(0));
   EXPECT_DOUBLE_EQ(dist(0), 0.0);
 
   SSN<double>::compute_subgrad_and_dist(u, lo, hi, /*include_bd=*/false, subgrad, dist);
-  EXPECT_DOUBLE_EQ(subgrad(0), 0.0);  // strict inequality fails exactly at the boundary
+  EXPECT_FALSE(subgrad(0));  // strict inequality fails exactly at the boundary
 }
 
 TEST(SSN, ComputeSubgradAndDistOutsideBoundsGivesZeroSubgradNonzeroDist) {
-  Vec u(1), lo(1), hi(1), subgrad, dist;
+  Vec u(1), lo(1), hi(1), dist;
+  BoolArr subgrad;
   u << 2.0;
   lo << -1.0;
   hi << 1.0;
   SSN<double>::compute_subgrad_and_dist(u, lo, hi, false, subgrad, dist);
-  EXPECT_DOUBLE_EQ(subgrad(0), 0.0);
+  EXPECT_FALSE(subgrad(0));
   EXPECT_DOUBLE_EQ(dist(0), 1.0);  // u - proj(u) = 2 - 1
 }
 
@@ -150,7 +153,7 @@ TEST(SSN, SplitByMaskThenRetrieveRowOrderRoundTrips) {
   mask << true, false, true, false;
 
   Vec u_sel(2), u_unsel(2);
-  ns.split_by_mask(u, mask, 2, u_sel, u_unsel);
+  ns.split_by_mask(u, mask, u_sel, u_unsel);
   Vec expected_sel(2), expected_unsel(2);
   expected_sel << 10.0, 30.0;
   expected_unsel << 20.0, 40.0;
@@ -172,7 +175,7 @@ TEST(SSN, SplitByMaskAllTrueMaskPutsEverythingInSelected) {
   mask << true, true, true;
 
   Vec u_sel(3), u_unsel(0);
-  ns.split_by_mask(u, mask, 3, u_sel, u_unsel);
+  ns.split_by_mask(u, mask, u_sel, u_unsel);
   EXPECT_TRUE(u_sel.isApprox(u));
   EXPECT_EQ(u_unsel.size(), 0);
 }
@@ -187,7 +190,7 @@ TEST(SSN, SplitByMaskAllFalseMaskPutsEverythingInUnselected) {
   mask << false, false, false;
 
   Vec u_sel(0), u_unsel(3);
-  ns.split_by_mask(u, mask, 0, u_sel, u_unsel);
+  ns.split_by_mask(u, mask, u_sel, u_unsel);
   EXPECT_EQ(u_sel.size(), 0);
   EXPECT_TRUE(u_unsel.isApprox(u));
 }
@@ -198,7 +201,7 @@ TEST(SSN, SplitByMaskEmptyMaskIsANoOp) {
 
   Vec u(0), u_sel(0), u_unsel(0);
   BoolArr mask(0);
-  ns.split_by_mask(u, mask, 0, u_sel, u_unsel);
+  ns.split_by_mask(u, mask, u_sel, u_unsel);
   EXPECT_EQ(u_sel.size(), 0);
   EXPECT_EQ(u_unsel.size(), 0);
 }
