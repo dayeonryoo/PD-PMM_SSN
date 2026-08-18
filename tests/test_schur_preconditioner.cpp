@@ -68,7 +68,7 @@ struct Fixture {
 
   RowMajorSpMat B_rm() const { return DenseToSparseRowMajor(B_rows); }
 
-  // G = [A; B_active_W]
+  // G = [A; active rows of B]
   Eigen::MatrixXd StackG(const std::vector<bool>& active_w) const {
     std::vector<Eigen::MatrixXd> rows{A_row};
     for (std::size_t i = 0; i < active_w.size(); ++i)

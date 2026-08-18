@@ -59,12 +59,10 @@ void SSN<T>::rebuild_G() {
     const int n_inact = l - n_act;
 
     // Partitioning B into active and inactive.
-    B_act_trips_.clear();
     B_inact_trips_.clear();
-    B_act_trips_.reserve(B_rm.nonZeros());
     B_inact_trips_.reserve(B_rm.nonZeros());
 
-    // G = [A; B_active_W]
+    // G = [A; active rows of B]
     G_trips_.clear();
     G_trips_.reserve(G_A_trips_.size() + B_rm.nonZeros());
     G_trips_.insert(G_trips_.end(), G_A_trips_.begin(), G_A_trips_.end());
@@ -72,10 +70,8 @@ void SSN<T>::rebuild_G() {
     int i_act = 0, i_inact = 0;
     for (int i = 0; i < l; ++i) {
         if (active_W(i)) {
-            for (RIt it(B_rm, i); it; ++it) {
-                B_act_trips_.emplace_back(i_act, it.col(), it.value());
+            for (RIt it(B_rm, i); it; ++it)
                 G_trips_.emplace_back(M + i_act, it.col(), it.value());
-            }
             ++i_act;
         } else {
             for (RIt it(B_rm, i); it; ++it)
@@ -83,10 +79,6 @@ void SSN<T>::rebuild_G() {
             ++i_inact;
         }
     }
-
-    B_active_W.resize(n_act, N);
-    B_active_W.setFromTriplets(B_act_trips_.begin(), B_act_trips_.end());
-    B_active_W.makeCompressed();
 
     B_inactive_W.resize(n_inact, N);
     B_inactive_W.setFromTriplets(B_inact_trips_.begin(), B_inact_trips_.end());
@@ -615,7 +607,7 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
         n_active_W = active_W.count();
         n_inactive_W = l - n_active_W;
 
-        rebuild_G(); // Rebuild G = [A; B_active_W], B_active_W, B_inactive_W, G_tr.
+        rebuild_G(); // Rebuild G = [A; active rows of B], B_inactive_W, G_tr.
     }
 
     {

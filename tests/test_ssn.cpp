@@ -217,7 +217,8 @@ TEST(SSN, RebuildGStacksAWithActiveBRowsInOriginalOrder) {
   Eigen::MatrixXd expected_G(2, 3);
   expected_G << 1, 1, 1,  1, 0, 0;
   EXPECT_TRUE(Dense(ns.G).isApprox(expected_G));
-  EXPECT_TRUE(Dense(ns.B_active_W).isApprox((Eigen::MatrixXd(1, 3) << 1, 0, 0).finished()));
+  EXPECT_TRUE(Dense(ns.G).bottomRows(ns.n_active_W)
+                  .isApprox((Eigen::MatrixXd(1, 3) << 1, 0, 0).finished()));
   EXPECT_TRUE(Dense(ns.B_inactive_W).isApprox((Eigen::MatrixXd(1, 3) << 0, 1, 0).finished()));
 }
 
@@ -231,7 +232,7 @@ TEST(SSN, RebuildGHandlesAllRowsInactiveW) {
   ns.rebuild_G();
 
   EXPECT_TRUE(Dense(ns.G).isApprox((Eigen::MatrixXd(1, 3) << 1, 1, 1).finished()));
-  EXPECT_EQ(ns.B_active_W.rows(), 0);
+  EXPECT_EQ(ns.G.rows(), f.M);  // no active-W rows appended to A
   Eigen::MatrixXd expected_inactive(2, 3);
   expected_inactive << 1, 0, 0,  0, 1, 0;
   EXPECT_TRUE(Dense(ns.B_inactive_W).isApprox(expected_inactive));
@@ -251,7 +252,7 @@ TEST(SSN, RebuildGHandlesAllRowsActiveW) {
   EXPECT_TRUE(Dense(ns.G).isApprox(expected_G));
   Eigen::MatrixXd expected_active(2, 3);
   expected_active << 1, 0, 0,  0, 1, 0;
-  EXPECT_TRUE(Dense(ns.B_active_W).isApprox(expected_active));
+  EXPECT_TRUE(Dense(ns.G).bottomRows(ns.n_active_W).isApprox(expected_active));
   EXPECT_EQ(ns.B_inactive_W.rows(), 0);
 }
 
@@ -267,7 +268,7 @@ TEST(SSN, RebuildGHandlesZeroInequalityRowsGEqualsAOnly) {
   ns.rebuild_G();
 
   EXPECT_TRUE(Dense(ns.G).isApprox(Dense(A)));
-  EXPECT_EQ(ns.B_active_W.rows(), 0);
+  EXPECT_EQ(ns.G.rows(), f.M);  // no active-W rows appended to A
   EXPECT_EQ(ns.B_inactive_W.rows(), 0);
 }
 

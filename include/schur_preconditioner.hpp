@@ -273,7 +273,7 @@ public:
         std::vector<int>().swap(delta_K_idx_);
         std::vector<int>().swap(ldlt_act_idx_);
         std::vector<Triplet>().swap(ldlt_build_trips_);
-        std::vector<Triplet>().swap(chol_build_trips_);
+        E_diag_.resize(0);
         std::vector<int>().swap(ldlt_diag_top_idx_);
         std::vector<int>().swap(ldlt_diag_bot_idx_);
         std::vector<int>().swap(diag_idx_chol_);
@@ -544,16 +544,13 @@ private:
                 // change: E = 1/H_diag is nonlinear in rho on active_K entries, so unlike mu's
                 // separate additive (1/mu) I term below, it can't be diagonal-shifted.
                 assert(H_diag.minCoeff() > T(0));
-                chol_build_trips_.clear();
-                chol_build_trips_.reserve(n);
+                E_diag_.resize(n);
                 for (Eigen::Index i = 0; i < n; ++i)
-                    if (active_K(i))
-                        chol_build_trips_.emplace_back(i, i, T(1) / H_diag(i));
-                SpMat E(n, n);
-                E.setFromTriplets(chol_build_trips_.begin(), chol_build_trips_.end());
-                E.makeCompressed();
+                    E_diag_(i) = active_K(i) ? T(1) / H_diag(i) : T(0);
 
-                sol.P = G * E * G_tr;
+                SpMat GE = G * E_diag_.asDiagonal();
+                GE.prune(T(0)); // drop explicit zero columns from E_diag_ (inactive K).
+                sol.P = GE * G_tr;
                 numeric_dirty_ = false;
 
                 for (Eigen::Index i = 0; i < s; ++i)
@@ -914,7 +911,7 @@ private:
 
     std::vector<int> ldlt_act_idx_;
     std::vector<Triplet> ldlt_build_trips_;
-    std::vector<Triplet> chol_build_trips_;
+    Vec E_diag_; // factorize_by_chol()'s E diagonal (1/H_diag on active_K, 0 elsewhere)
 
     // Cached flat storage indices (into sol.P/sol.P_hat's valuePtr()) for the diagonal entries
     // touched by the mu/rho-only patch paths in factorize_by_chol()/factorize_by_ldlt(); avoids

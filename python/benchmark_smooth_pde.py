@@ -44,6 +44,7 @@ Settings: tol = 1e-6, time limit = 600 s (10 min), max iterations = infinity by 
         --tol:        to change the solver tolerance (default: 1e-9).
         --time-limit: to change the solver time limit in seconds (default: 600).
         --cooldown:   to change the cooldown time in seconds between solver runs (default: 0).
+        --lumped-mass: 0 to use the consistent mass matrix (default), 1 to use the lumped mass matrix.
 """
 
 import sys
@@ -124,17 +125,18 @@ def _fmt_bound(v: float) -> str:
 # Subprocess worker functions
 # ---------------------------------------------------------------------------
 
-def _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps):
+def _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, lumped_mass):
     return ksp_qp_bind.generate_pde_l2_qp(
-        choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps
+        choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
+        lumped_mass=lumped_mass
     )
 
 
-def _worker_ssn(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
+def _worker_ssn(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, lumped_mass,
                  tol, time_limit, max_iter, conn):
     result = {}
     try:
-        pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps)
+        pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, lumped_mass)
         result["n_vars"] = pd_data["n"]
         result["res"] = ksp_qp_bind.solve_from_data(pd_data, tol, max_iter, time_limit)
     except Exception as e:
@@ -143,11 +145,11 @@ def _worker_ssn(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
     conn.close()
 
 
-def _worker_qpalm(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
+def _worker_qpalm(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, lumped_mass,
                    tol, time_limit, conn):
     result = {}
     try:
-        pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps)
+        pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, lumped_mass)
         qpalm_data = kspqp_to_qpalm(pd_data)
         result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
@@ -156,11 +158,11 @@ def _worker_qpalm(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
     conn.close()
 
 
-def _worker_osqp(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
+def _worker_osqp(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, lumped_mass,
                   tol, time_limit, conn):
     result = {}
     try:
-        pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps)
+        pd_data = _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, lumped_mass)
         qpalm_data = kspqp_to_qpalm(pd_data)
         result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
     except Exception as e:
@@ -175,16 +177,17 @@ def _worker_osqp(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
 
 def run_one(result: dict, choice: str, nc: int, beta: float,
             y_lower: float, y_upper: float, u_lower: float, u_upper: float,
-            eps: float,
+            eps: float, lumped_mass: bool,
             tol: float, time_limit: float, max_iter: int, solvers: set,
             cooldown: float = 0.0, flush_cb=None) -> dict:
     """Solve one problem with all three solvers in isolated subprocesses."""
     n_disp = _n_display(nc)
     print(f"  {choice} nc={nc} (n={n_disp:.2e})  alpha2={beta:.0e}  "
           f"y=[{_fmt_bound(y_lower)},{_fmt_bound(y_upper)}]  "
-          f"u=[{_fmt_bound(u_lower)},{_fmt_bound(u_upper)}]", flush=True)
+          f"u=[{_fmt_bound(u_lower)},{_fmt_bound(u_upper)}]  "
+          f"mass={'lumped' if lumped_mass else 'consistent'}", flush=True)
 
-    worker_args = (choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps)
+    worker_args = (choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, lumped_mass)
     return run_solvers(result, worker_args, _worker_ssn, _worker_qpalm, _worker_osqp,
                        tol, time_limit, max_iter, solvers, cooldown, flush_cb)
 
@@ -195,7 +198,7 @@ def run_one(result: dict, choice: str, nc: int, beta: float,
 
 CSV_FIELDS = [
     "table", "choice", "nc", "n_display", "alpha2",
-    "y_lower", "y_upper", "u_lower", "u_upper",
+    "y_lower", "y_upper", "u_lower", "u_upper", "lumped_mass",
     "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter", "pmm_tol_achieved", "ssn_time", "ssn_obj",
     "qpalm_status", "qpalm_solved", "qpalm_iter", "qpalm_inner_iter", "qpalm_tol_achieved", "qpalm_time", "qpalm_obj",
     "osqp_status",  "osqp_solved",  "osqp_iter",  "osqp_tol_achieved",  "osqp_time",  "osqp_obj",
@@ -206,7 +209,7 @@ CSV_FIELDS = [
 # Table runners
 # ---------------------------------------------------------------------------
 
-def _run_poisson_control(nc_list, betas, tol, time_limit, max_iter, result_dir,
+def _run_poisson_control(nc_list, betas, lumped_mass, tol, time_limit, max_iter, result_dir,
                          solvers, cooldown, name_prefix):
     label = "poisson_control"
     csv_path = result_dir / f"{name_prefix}smooth_{label}.csv"
@@ -224,15 +227,16 @@ def _run_poisson_control(nc_list, betas, tol, time_limit, max_iter, result_dir,
             print(f"\n[{label}  {done}/{n_total}]")
             row = {"table": label, "choice": "poisson", "nc": nc,
                    "n_display": _n_display(nc), "alpha2": beta,
-                   "y_lower": -INF, "y_upper": INF, "u_lower": 0.0, "u_upper": u_upper}
+                   "y_lower": -INF, "y_upper": INF, "u_lower": 0.0, "u_upper": u_upper,
+                   "lumped_mass": int(lumped_mass)}
             rows.append(row)
-            run_one(row, "poisson", nc, beta, -INF, INF, 0.0, u_upper, DEFAULT_EPS,
+            run_one(row, "poisson", nc, beta, -INF, INF, 0.0, u_upper, DEFAULT_EPS, lumped_mass,
                     tol, time_limit, max_iter, solvers, cooldown, flush_cb=_flush)
     print(f"  Saved: {csv_path}")
     return rows
 
 
-def _run_poisson_state(nc_list, betas, tol, time_limit, max_iter, result_dir,
+def _run_poisson_state(nc_list, betas, lumped_mass, tol, time_limit, max_iter, result_dir,
                        solvers, cooldown, name_prefix):
     label = "poisson_state"
     csv_path = result_dir / f"{name_prefix}smooth_{label}.csv"
@@ -250,15 +254,16 @@ def _run_poisson_state(nc_list, betas, tol, time_limit, max_iter, result_dir,
             print(f"\n[{label}  {done}/{n_total}]")
             row = {"table": label, "choice": "poisson_state", "nc": nc,
                    "n_display": _n_display(nc), "alpha2": beta,
-                   "y_lower": -0.1, "y_upper": y_upper, "u_lower": -INF, "u_upper": INF}
+                   "y_lower": -0.1, "y_upper": y_upper, "u_lower": -INF, "u_upper": INF,
+                   "lumped_mass": int(lumped_mass)}
             rows.append(row)
             run_one(row, "poisson_state", nc, beta, -0.1, y_upper, -INF, INF, DEFAULT_EPS,
-                    tol, time_limit, max_iter, solvers, cooldown, flush_cb=_flush)
+                    lumped_mass, tol, time_limit, max_iter, solvers, cooldown, flush_cb=_flush)
     print(f"  Saved: {csv_path}")
     return rows
 
 
-def _run_convdiff_both(nc_list, betas, tol, time_limit, max_iter, result_dir,
+def _run_convdiff_both(nc_list, betas, lumped_mass, tol, time_limit, max_iter, result_dir,
                        solvers, cooldown, name_prefix):
     label = "convdiff_both"
     csv_path = result_dir / f"{name_prefix}smooth_{label}.csv"
@@ -278,10 +283,11 @@ def _run_convdiff_both(nc_list, betas, tol, time_limit, max_iter, result_dir,
             row = {"table": label, "choice": "convdiff", "nc": nc,
                    "n_display": _n_display(nc), "alpha2": beta,
                    "y_lower": 0.0, "y_upper": y_upper,
-                   "u_lower": -u_bound, "u_upper": u_bound}
+                   "u_lower": -u_bound, "u_upper": u_bound,
+                   "lumped_mass": int(lumped_mass)}
             rows.append(row)
             run_one(row, "convdiff", nc, beta, 0.0, y_upper, -u_bound, u_bound, DEFAULT_EPS,
-                    tol, time_limit, max_iter, solvers, cooldown, flush_cb=_flush)
+                    lumped_mass, tol, time_limit, max_iter, solvers, cooldown, flush_cb=_flush)
     print(f"  Saved: {csv_path}")
     return rows
 
@@ -308,6 +314,9 @@ def main() -> None:
                         help="Solvers to run (default: all three). Choices: ksp-qp qpalm osqp")
     parser.add_argument("--cooldown",   type=float, default=0.0,
                         help="Seconds to sleep between solver runs to prevent CPU throttling (default: 0)")
+    parser.add_argument("--lumped-mass", type=int, default=0, choices=[0, 1], metavar="{0,1}",
+                        help="0 to use the consistent mass matrix (default), "
+                             "1 to use the lumped mass matrix.")
     parser.add_argument("--out",       default="",
                         help="Prefix for output filenames (e.g. '0727' -> '0727_smooth_poisson_control.csv')")
     args = parser.parse_args()
@@ -322,21 +331,22 @@ def main() -> None:
     max_iter   = 10_000_000_000
     tables     = set(args.table)
     solvers    = set(args.solver)
+    lumped_mass = bool(args.lumped_mass)
     name_prefix = f"{args.out}_" if args.out else ""
 
     if "poisson_control" in tables:
         nc_list = args.nc or TABLE1_NC
-        _run_poisson_control(nc_list, TABLE1_BETAS, tol, time_limit, max_iter,
+        _run_poisson_control(nc_list, TABLE1_BETAS, lumped_mass, tol, time_limit, max_iter,
                              result_dir, solvers, cooldown, name_prefix)
 
     if "poisson_state" in tables:
         nc_list = args.nc or TABLE2_NC
-        _run_poisson_state(nc_list, TABLE2_BETAS, tol, time_limit, max_iter,
+        _run_poisson_state(nc_list, TABLE2_BETAS, lumped_mass, tol, time_limit, max_iter,
                            result_dir, solvers, cooldown, name_prefix)
 
     if "convdiff_both" in tables:
         nc_list = args.nc or TABLE3_NC
-        _run_convdiff_both(nc_list, TABLE3_BETAS, tol, time_limit, max_iter,
+        _run_convdiff_both(nc_list, TABLE3_BETAS, lumped_mass, tol, time_limit, max_iter,
                            result_dir, solvers, cooldown, name_prefix)
 
 
