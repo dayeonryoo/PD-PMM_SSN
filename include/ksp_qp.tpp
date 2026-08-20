@@ -595,7 +595,7 @@ bool KSP_QP<T>::check_bounds() {
     }
     return true;
 }
-
+/*
 template <typename T>
 typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx) {
     // Return the unscaled residual norms (primal, dual, complementarity for x, complementarity for Bx).
@@ -693,6 +693,73 @@ typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const 
     res_norms_unscaled << res_p_unscaled, res_d_unscaled, compl_x_unscaled, compl_w_unscaled;
     return res_norms_unscaled;
 }
+*/
+
+template <typename T>
+typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx) {
+    // Return the unscaled residual norms (primal, dual, complementarity for x, complementarity for Bx).
+    Vec& A_tr_y1 = A_tr_y1_scratch_;
+    Vec& B_tr_y2 = B_tr_y2_scratch_;
+
+    // Dual residual, scaled space (needed below to derive the unscaled dual residual).
+    Vec& num = num_scratch_;
+    num.noalias() = c + z;
+    if (Q_info != 0) num += Qx;
+    if (M != 0) {
+        A_tr_y1.noalias() = A_tr * y1;
+        num -= A_tr_y1;
+    }
+    if (l != 0) {
+        B_tr_y2.noalias() = B_tr * y2;
+        num -= B_tr_y2;
+    }
+
+    // ===== Unscaled residual norms =====
+    T res_p_unscaled; // Primal residual norm
+    if (M == 0) res_p_unscaled = T(0);
+    else {
+        Vec& Ax_unscaled = Ax_unscaled_scratch_;
+        Ax_unscaled.noalias() = Ax.cwiseProduct(D1A_ext_inv);
+        T denom_unscaled = T(1) + std::max(inf_norm(Ax_unscaled), inf_norm(b_orig));
+        res_p_unscaled = inf_norm(Ax_unscaled - b_orig) / denom_unscaled;
+    }
+
+    // Dual residual norm
+    Vec& z_unscaled = z_unscaled_scratch_;
+    Vec& num_unscaled = num_unscaled_scratch_;
+    z_unscaled.noalias() = z.cwiseProduct(D2_ext_inv);
+    num_unscaled.noalias() = num.cwiseProduct(D2_ext_inv);
+    T denom_unscaled = std::max(inf_norm(c_orig), inf_norm(z_unscaled));
+    if (Q_info != 0) denom_unscaled = std::max(denom_unscaled, inf_norm(Qx.cwiseProduct(D2_ext_inv)));
+    if (M != 0)      denom_unscaled = std::max(denom_unscaled, inf_norm(A_tr_y1.cwiseProduct(D2_ext_inv)));
+    if (l != 0)      denom_unscaled = std::max(denom_unscaled, inf_norm(B_tr_y2.cwiseProduct(D2_ext_inv)));
+    denom_unscaled += T(1);
+    T res_d_unscaled = inf_norm(num_unscaled) / denom_unscaled;
+
+    // Complementarity residual norm for box constraints on x
+    Vec& x_unscaled = x_unscaled_scratch_;
+    x_unscaled.noalias() = x.cwiseProduct(D2_ext);
+    Vec& proj_K_unscaled = proj_K_unscaled_scratch_;
+    proj_K_unscaled.noalias() = proj(x_unscaled + z_unscaled, lx_orig, ux_orig);
+    T compl_x_unscaled = inf_norm(x_unscaled - proj_K_unscaled) / (T(1) + std::max(inf_norm(z_unscaled), inf_norm(proj_K_unscaled)));
+
+    // Complementarity residual norm for box constraints on Bx
+    T compl_w_unscaled;
+    if (l == 0) compl_w_unscaled = T(0);
+    else {
+        Vec& Bx_unscaled = Bx_unscaled_scratch_;
+        Vec& y2_unscaled = y2_unscaled_scratch_;
+        Bx_unscaled.noalias() = Bx.cwiseProduct(D1B_diag_inv);
+        y2_unscaled.noalias() = y2.cwiseProduct(D1B_diag);
+        Vec& proj_W_unscaled = proj_W_unscaled_scratch_;
+        proj_W_unscaled.noalias() = proj(Bx_unscaled - y2_unscaled, lw_orig, uw_orig);
+        compl_w_unscaled = inf_norm(Bx_unscaled - proj_W_unscaled) / (T(1) + std::max(inf_norm(y2_unscaled), inf_norm(proj_W_unscaled)));
+    }
+
+    ResVec res_norms_unscaled;
+    res_norms_unscaled << res_p_unscaled, res_d_unscaled, compl_x_unscaled, compl_w_unscaled;
+    return res_norms_unscaled;
+}
 
 template <typename T>
 T KSP_QP<T>::objective_value(const Vec& x_orig) {
@@ -732,13 +799,14 @@ void KSP_QP<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new
         rho = std::min(rho_limit, T(2) * rho);
         ssn_tol = std::max(eps_limit, T(0.1) * ssn_tol);
 
-    } else if (ssn_opt == SsnStatus::LineSearchFailed ||
-               ((ssn_opt == SsnStatus::MaxInnerIterations || ssn_opt == SsnStatus::Stagnated) && ssn_res > T(100) * new_worst_res)) {
-        // Linesearch failed, or SSN residual is too large compared to PMM tolerance achieved.
+    } else if (ssn_opt == SsnStatus::LineSearchFailed) {
         mu = std::max(mu0, T(0.5) * mu);
         rho = std::max(rho0, T(0.5) * rho);
         ssn_tol = std::min({worst_res, T(1.1) * ssn_tol, T(1e-2)});
 
+    } else if (new_worst_res > 0.9 * worst_res) {
+        mu = std::min(mu_limit, T(1.1) * mu);
+        rho = std::min(rho_limit, T(1.1) * rho);
     }
 }
 
