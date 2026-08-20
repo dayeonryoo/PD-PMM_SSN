@@ -44,6 +44,10 @@ private:
     std::unordered_map<std::string, RowInfo> row_map_;
     std::unordered_map<std::string, int> col_map_;
 
+    // Per-column: true once an explicit LO/FX/MI/BV/FR entry has set that column's lower bound.
+    // See the "Default choices of the parser" comment in mps_format_parser.tpp.
+    std::vector<char> col_lower_explicit_;
+
     std::vector<T> rhs_values_;
     std::vector<T> range_values_;
 

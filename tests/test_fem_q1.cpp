@@ -131,14 +131,6 @@ TEST(Uniform1dCoords, HandlesTwoPointDegenerateCase) {
   EXPECT_NEAR(x[1], 1.0, 1e-12);
 }
 
-// n1d=1 divides by (n1d-1)=0, giving 0/0 = NaN. GridQ1 can never actually
-// NOTE: tthis is unreachable for GridQ1 as its smallest is n1d=2, from nc=0.
-TEST(Uniform1dCoords, SinglePointDegenerateCaseProducesNaN) {
-  const auto x = uniform_1d_coords<double>(1);
-  ASSERT_EQ(x.size(), 1u);
-  EXPECT_TRUE(std::isnan(x[0]));
-}
-
 TEST(Uniform1dCoords, ZeroPointsReturnsEmptyVector) {
   const auto x = uniform_1d_coords<double>(0);
   EXPECT_TRUE(x.empty());

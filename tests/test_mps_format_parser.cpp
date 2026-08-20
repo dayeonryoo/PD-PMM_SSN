@@ -681,8 +681,10 @@ TEST(MpsFormatParserParse, InconsistentColumnBoundsThrows) {
 }
 
 
-// This parser has default lower bound 0, so a negative UP without an explicit LO is inconsistent and throws.
-TEST(MpsFormatParserParse, UpBoundNegativeWithoutLowerBoundThrowsAsDesigned) {
+// A negative UP with no explicit LO relaxes the lower bound to -inf (the common MPS-reader
+// convention) instead of leaving the default lower bound (0) and throwing on the resulting
+// lower(0) > upper(<0).
+TEST(MpsFormatParserParse, UpBoundNegativeWithoutLowerBoundRelaxesLowerBoundToMinusInf) {
   std::string content;
   content += "ROWS\n";
   content += MpsLine({{2, "N"}, {5, "COST"}}) + "\n";
@@ -693,7 +695,50 @@ TEST(MpsFormatParserParse, UpBoundNegativeWithoutLowerBoundThrowsAsDesigned) {
   content += "ENDATA\n";
 
   MpsFormatParser<double> parser;
+  ParsedModel<double> model;
+  EXPECT_NO_THROW(model = parser.parse(WriteTempMps(content)));
+
+  const double inf = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(model.col_lower(0), -inf);
+  EXPECT_NEAR(model.col_upper(0), -1.0, kTight);
+}
+
+// An explicit LO (even LO 0) disables the auto-relax above: the negative UP that follows it is a
+// genuine conflict, not a defaulted one, so this must still throw.
+TEST(MpsFormatParserParse, UpBoundNegativeWithExplicitZeroLowerBoundStillThrows) {
+  std::string content;
+  content += "ROWS\n";
+  content += MpsLine({{2, "N"}, {5, "COST"}}) + "\n";
+  content += "COLUMNS\n";
+  content += MpsLine({{5, "X1"}, {15, "COST"}, {25, "1.0"}}) + "\n";
+  content += "BOUNDS\n";
+  content += MpsLine({{2, "LO"}, {5, "BND"}, {15, "X1"}, {25, "0.0"}}) + "\n";
+  content += MpsLine({{2, "UP"}, {5, "BND"}, {15, "X1"}, {25, "-1.0"}}) + "\n";
+  content += "ENDATA\n";
+
+  MpsFormatParser<double> parser;
   EXPECT_THROW(parser.parse(WriteTempMps(content)), std::runtime_error);
+}
+
+// The relaxation must key off "was an explicit lower-bound entry ever seen for this column",
+// not "was it seen before this UP entry specifically" -- so a negative UP followed later by a
+// consistent explicit LO must keep that explicit value, not the -inf relaxation.
+TEST(MpsFormatParserParse, UpBoundNegativeBeforeExplicitLowerBoundKeepsExplicitLowerBound) {
+  std::string content;
+  content += "ROWS\n";
+  content += MpsLine({{2, "N"}, {5, "COST"}}) + "\n";
+  content += "COLUMNS\n";
+  content += MpsLine({{5, "X1"}, {15, "COST"}, {25, "1.0"}}) + "\n";
+  content += "BOUNDS\n";
+  content += MpsLine({{2, "UP"}, {5, "BND"}, {15, "X1"}, {25, "-1.0"}}) + "\n";
+  content += MpsLine({{2, "LO"}, {5, "BND"}, {15, "X1"}, {25, "-5.0"}}) + "\n";
+  content += "ENDATA\n";
+
+  MpsFormatParser<double> parser;
+  auto model = parser.parse(WriteTempMps(content));
+
+  EXPECT_NEAR(model.col_lower(0), -5.0, kTight);  // explicit LO, not the -inf relaxation
+  EXPECT_NEAR(model.col_upper(0), -1.0, kTight);
 }
 
 TEST(MpsFormatParserParse, RhsSecondSetWithDifferentNameStillApplies) {

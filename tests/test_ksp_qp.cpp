@@ -801,32 +801,6 @@ TEST(UpdatePmmParameters, StagnatedWithSsnResWithinBoundLeavesParametersUnchange
   EXPECT_DOUBLE_EQ(ns.ssn_tol, 0.001);
 }
 
-TEST(UpdatePmmParameters, OldResNormsParameterHasNoEffectOnOutput) {
-  // update_PMM_parameters(res_norms, new_res_norms, ...) takes both the previous AND current
-  // residual norms, but its body only ever reads new_res_norms (via worst_res =
-  // new_res_norms.maxCoeff()) -- `res_norms` is passed by every call site but never referenced.
-  // Confirmed by calling twice with identical everything except res_norms and checking the
-  // outputs are bit-identical.
-  KSP_QP<double> a = MakeValidInstance();
-  a.mu = 10.0; a.rho = 20.0; a.ssn_tol = 0.001;
-  KSP_QP<double> b = MakeValidInstance();
-  b.mu = 10.0; b.rho = 20.0; b.ssn_tol = 0.001;
-
-  KSP_QP<double>::ResVec new_res_norms, res_norms_tiny, res_norms_huge;
-  new_res_norms << 0.5, 0.5, 0.5, 0.5;
-  res_norms_tiny << 1e-10, 1e-10, 1e-10, 1e-10;
-  res_norms_huge << 1e10, 1e10, 1e10, 1e10;
-
-  a.update_PMM_parameters(res_norms_tiny, new_res_norms,
-                           SSN<double>::TerminationStatus::LineSearchFailed, 0.0, 0);
-  b.update_PMM_parameters(res_norms_huge, new_res_norms,
-                           SSN<double>::TerminationStatus::LineSearchFailed, 0.0, 0);
-
-  EXPECT_DOUBLE_EQ(a.mu, b.mu);
-  EXPECT_DOUBLE_EQ(a.rho, b.rho);
-  EXPECT_DOUBLE_EQ(a.ssn_tol, b.ssn_tol);
-}
-
 // ===================== primal_infeas / dual_infeas =====================
 // Certificates are built directly from the solver's own (ruiz-scaled) matrices/vectors after
 // construction, so these tests validate the documented formula (see the docstrings in

@@ -2,7 +2,9 @@
 #include "mps_format_parser.hpp"
 
 // Default choices of the parser:
-//  - Column bounds: default is [0, +inf) unless overridden by a BOUNDS entry.
+//  - Column bounds: default is [0, +inf) unless overridden by a BOUNDS entry. A negative UP
+//    value with no other explicit lower-bound entry (LO/FX/MI/BV/FR) for that column relaxes
+//    the lower bound to -inf.
 //  - Row bounds: E/L/G rows follow [rhs-|range|, rhs+|range|];
 //    a RANGES entry's sign is ignored (only its magnitude matters).
 //    A second N-type row (i.e. not the objective) is always free (-inf, +inf),
@@ -38,6 +40,7 @@ ParsedModel<T> MpsFormatParser<T>::parse(const std::string& filename) {
     A_triplets_.clear(); Q_triplets_.clear();
     obj_name_.clear();
     rhs_values_.clear(); range_values_.clear();
+    col_lower_explicit_.clear();
     ws_tokens_.clear(); tokens_.clear();
 
     std::ifstream f(filename);
@@ -460,15 +463,17 @@ void MpsFormatParser<T>::parse_bounds(const std::vector<std::string_view>& token
         model_.col_lower.segment(size, model_.num_cols - size).setZero();         // Default lower bound is 0.
         model_.col_upper.segment(size, model_.num_cols - size).setConstant(inf);  // Default upper bound is inf.
     }
+    if (static_cast<int>(col_lower_explicit_.size()) < model_.num_cols)
+        col_lower_explicit_.resize(model_.num_cols, 0);
 
     // Set bounds based on bound type.
-    if      (btype == "LO") { model_.col_lower(col_idx) = value; } // Lower bound
+    if      (btype == "LO") { model_.col_lower(col_idx) = value; col_lower_explicit_[col_idx] = 1; } // Lower bound
     else if (btype == "UP") { model_.col_upper(col_idx) = value; } // Upper bound
-    else if (btype == "FX") { model_.col_lower(col_idx) = value; model_.col_upper(col_idx) = value; } // Fixed variable
-    else if (btype == "FR") { model_.col_lower(col_idx) = -inf;  model_.col_upper(col_idx) = inf; }   // Free variable
-    else if (btype == "MI") { model_.col_lower(col_idx) = -inf; } // No lower bound
+    else if (btype == "FX") { model_.col_lower(col_idx) = value; model_.col_upper(col_idx) = value; col_lower_explicit_[col_idx] = 1; } // Fixed variable
+    else if (btype == "FR") { model_.col_lower(col_idx) = -inf;  model_.col_upper(col_idx) = inf; col_lower_explicit_[col_idx] = 1; }   // Free variable
+    else if (btype == "MI") { model_.col_lower(col_idx) = -inf; col_lower_explicit_[col_idx] = 1; } // No lower bound
     else if (btype == "PL") { model_.col_upper(col_idx) = inf; }  // No upper bound
-    else if (btype == "BV") { model_.col_lower(col_idx) = 0; model_.col_upper(col_idx) = 1; } // Binary variable
+    else if (btype == "BV") { model_.col_lower(col_idx) = 0; model_.col_upper(col_idx) = 1; col_lower_explicit_[col_idx] = 1; } // Binary variable
     else throw std::runtime_error("Unknown bound type in BOUNDS section: " + std::string(btype));
 }
 
@@ -542,6 +547,14 @@ void MpsFormatParser<T>::finalize_defaults() {
     // actual values will be set in finalize_row_bounds().
     model_.row_lower = ParsedModel<T>::Vec::Constant(model_.num_rows, -inf);
     model_.row_upper = ParsedModel<T>::Vec::Constant(model_.num_rows, inf);
+
+    // A negative UP with no other explicit lower-bound entry relaxes the lower bound to -inf
+    // (see the "Default choices of the parser" comment above).
+    if (static_cast<int>(col_lower_explicit_.size()) < model_.num_cols)
+        col_lower_explicit_.resize(model_.num_cols, 0);
+    for (int i = 0; i < model_.num_cols; ++i)
+        if (!col_lower_explicit_[i] && model_.col_upper(i) < T(0))
+            model_.col_lower(i) = -inf;
 
     // Validate bound consistency.
     for (int i = 0; i < model_.num_cols; ++i)

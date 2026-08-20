@@ -691,7 +691,8 @@ template <typename T>
 void KSP_QP<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, typename SSN<T>::TerminationStatus ssn_opt, T ssn_res, int ssn_inner_iters) {
     using SsnStatus = typename SSN<T>::TerminationStatus;
 
-    T worst_res = new_res_norms.maxCoeff();
+    T worst_res = res_norms.maxCoeff();
+    T new_worst_res = new_res_norms.maxCoeff();
 
     if (ssn_opt == SsnStatus::Optimal) {
         mu = std::min(mu_limit, T(2) * mu);
@@ -699,7 +700,7 @@ void KSP_QP<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new
         ssn_tol = std::max(eps_limit, T(0.1) * ssn_tol);
 
     } else if (ssn_opt == SsnStatus::LineSearchFailed ||
-               ((ssn_opt == SsnStatus::MaxInnerIterations || ssn_opt == SsnStatus::Stagnated) && ssn_res > T(100) * worst_res)) {
+               ((ssn_opt == SsnStatus::MaxInnerIterations || ssn_opt == SsnStatus::Stagnated) && ssn_res > T(100) * new_worst_res)) {
         // Linesearch failed, or SSN residual is too large compared to PMM tolerance achieved.
         mu = std::max(mu0, T(0.5) * mu);
         rho = std::max(rho0, T(0.5) * rho);
