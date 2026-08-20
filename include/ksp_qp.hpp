@@ -103,6 +103,8 @@ public:
     Vec z_unscaled_scratch_, num_unscaled_scratch_; // size N
     Vec x_unscaled_scratch_;                        // size N
     Vec Bx_unscaled_scratch_, y2_unscaled_scratch_; // size l
+    Vec x_head_scaled_scratch_, Qx_true_scratch_;   // size n; Q_info==2 only
+    Vec Atr_y1a_scratch_;                            // size N; Q_info==2 only
 
     T inf = std::numeric_limits<T>::infinity();
     T eps_zero = T(100) * std::numeric_limits<T>::epsilon(); // ~2.2e-14 for double

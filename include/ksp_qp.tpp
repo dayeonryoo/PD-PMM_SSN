@@ -315,8 +315,8 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
 
     T Q_scale = mat_inf_norm(Q_sym);
     if (Q_scale == T(0)) Q_scale = T(1);
-    const T delta_noise = eps_zero * Q_scale; // noise floor: ordinary LDLT rounding, not genuine indefiniteness
-    T delta = std::sqrt(eps) * Q_scale;       // relative regularization seed
+    const T delta_noise = eps_zero * Q_scale; // noise floor for LDLT
+    T delta = T(0); // Regularization factor; only increased to nonzero if 0 fails the pivot check below.
     Vec Q_diag = Q_sym.diagonal();
 
     SpMat I(n, n);
@@ -324,9 +324,7 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     SpMat Q_reg = Q_sym + delta * I;
     Q_reg.makeCompressed();
 
-    // Cache each diagonal's flat storage index (coeffRef returns a reference straight into the
-    // value array) so the retry loop below can patch the diagonal via valuePtr()[idx] (O(1))
-    // instead of coeffRef(k,k) (O(log nnz), binary search) on every attempt.
+    // Cache each diagonal's flat storage index for the retry loop below.
     std::vector<int> diag_idx(n);
     for (int k = 0; k < n; ++k)
         diag_idx[k] = static_cast<int>(&Q_reg.coeffRef(k, k) - Q_reg.valuePtr());
@@ -338,23 +336,24 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     bool accepted = false;
     for (int attempt = 0; attempt < kLdltMaxAttempts; ++attempt) {
         ldlt.factorize(Q_reg); // reuses the analyzePattern above -- no repeated ordering cost
-        if (ldlt.info() != Eigen::Success) {
-            throw std::runtime_error("LDLT factorization on Q failed. Q is possibly singular.");
+        if (ldlt.info() == Eigen::Success) {
+            D = ldlt.vectorD();
+            if (D.minCoeff() >= -delta_noise) {
+                accepted = true;
+                break;
+            }
         }
-        D = ldlt.vectorD();
-        if (D.minCoeff() >= -delta_noise) {
-            accepted = true;
-            break;
-        }
-        // Meaningfully negative pivot: escalate regularization and retry rather than clamping.
-        delta *= T(10);
+        // When either the factorization itself failed or a meaningfully negative pivot was found,
+        // escalate regularization and retry rather than giving up immediately.
+        delta = (delta == T(0)) ? std::sqrt(eps) * Q_scale : delta * T(10);
         for (int k = 0; k < n; ++k) Q_reg.valuePtr()[diag_idx[k]] = Q_diag(k) + delta;
     }
 
     if (!accepted) {
         throw std::runtime_error(
-            "set_L_from_LLT: Q remains indefinite after regularization retries; refusing to "
-            "silently replace it with a clamped PSD approximation.");
+            "set_L_from_LLT: Q remains indefinite (or its LDLT factorization failed) after "
+            "regularization retries; refusing to silently replace it with a clamped PSD "
+            "approximation.");
     }
 
     const bool clamped = (D.minCoeff() < T(0));
@@ -364,9 +363,7 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     SpMat L_D = ldlt.matrixL(); // lower triangular from LDL^T
     L = (P.transpose() * L_D) * D_sqrt.asDiagonal();
 
-    // Verify L*L^T actually approximates Q before accepting it. When no pivot was clamped, the
-    // LDLT reconstruction of Q_reg is exact up to floating-point rounding, so analytically
-    // L*L^T - Q == Q_reg - Q == delta*I (inf-norm == delta) -- no need to form the product.
+    // When pivots were clamped, verify L*L^T actually approximates Q before accepting it.
     if (!clamped) {
         if (delta > kLdltVerifyTol * Q_scale) {
             throw std::runtime_error(
@@ -570,6 +567,10 @@ void KSP_QP<T>::initialize_sols() { // using 0 vectors
     x_unscaled_scratch_     = Vec::Zero(N);
     Bx_unscaled_scratch_    = Vec::Zero(l);
     y2_unscaled_scratch_    = Vec::Zero(l);
+
+    x_head_scaled_scratch_  = Vec::Zero(n);
+    Qx_true_scratch_        = Vec::Zero(n);
+    Atr_y1a_scratch_        = Vec::Zero(N);
 }
 
 template <typename T>
@@ -614,27 +615,59 @@ typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const 
         num -= B_tr_y2;
     }
 
+    // Q_info==2 lifts the problem via Q ≈ L*Lᵀ with an auxiliary v=Lᵀx (x.tail(n)) and its own
+    // multiplier y_v=y1.tail(n). So dual residual must be recomputed directly from the true Q
+    // and the original A_ruizᵀ, bypassing v/y_v entirely.
+    if (Q_info == 2) {
+        x_head_scaled_scratch_.noalias() = D2_diag.cwiseProduct(x.head(n));
+        Qx_true_scratch_.noalias() = Q.template selfadjointView<Eigen::Lower>() * x_head_scaled_scratch_;
+        num.head(n).noalias() = c.head(n) + z.head(n) + D2_diag.cwiseProduct(Qx_true_scratch_);
+        if (m != 0) {
+            Atr_y1a_scratch_.noalias() = A_tr.leftCols(m) * y1.head(m);
+            num.head(n) -= Atr_y1a_scratch_.head(n);
+        }
+        if (l != 0) num.head(n) -= B_tr_y2.head(n);
+    }
+
     // ===== Unscaled residual norms =====
-    T res_p_unscaled; // Primal residual norm
+    // Primal residual norm. For Q_info==2, restricted to the original m-row block of Ax/b_orig.
+    T res_p_unscaled;
     if (M == 0) res_p_unscaled = T(0);
     else {
         Vec& Ax_unscaled = Ax_unscaled_scratch_;
         Ax_unscaled.noalias() = Ax.cwiseProduct(D1A_ext_inv);
-        T denom_unscaled = T(1) + std::max(inf_norm(Ax_unscaled), inf_norm(b_orig));
-        res_p_unscaled = inf_norm(Ax_unscaled - b_orig) / denom_unscaled;
+        if (Q_info == 2) {
+            if (m == 0) res_p_unscaled = T(0);
+            else {
+                T denom_unscaled = T(1) + std::max(inf_norm(Ax_unscaled.head(m)), inf_norm(b_orig.head(m)));
+                res_p_unscaled = inf_norm(Ax_unscaled.head(m) - b_orig.head(m)) / denom_unscaled;
+            }
+        } else {
+            T denom_unscaled = T(1) + std::max(inf_norm(Ax_unscaled), inf_norm(b_orig));
+            res_p_unscaled = inf_norm(Ax_unscaled - b_orig) / denom_unscaled;
+        }
     }
 
-    // Dual residual norm
+    // Dual residual norm. For Q_info==2, both the residual itself and its normalization scale are
+    // restricted to the original x-block (head(n)) and computed from true Q/A_ruiz data only.
     Vec& z_unscaled = z_unscaled_scratch_;
     Vec& num_unscaled = num_unscaled_scratch_;
     z_unscaled.noalias() = z.cwiseProduct(D2_ext_inv);
     num_unscaled.noalias() = num.cwiseProduct(D2_ext_inv);
     T denom_unscaled = std::max(inf_norm(c_orig), inf_norm(z_unscaled));
-    if (Q_info != 0) denom_unscaled = std::max(denom_unscaled, inf_norm(Qx.cwiseProduct(D2_ext_inv)));
-    if (M != 0)      denom_unscaled = std::max(denom_unscaled, inf_norm(A_tr_y1.cwiseProduct(D2_ext_inv)));
-    if (l != 0)      denom_unscaled = std::max(denom_unscaled, inf_norm(B_tr_y2.cwiseProduct(D2_ext_inv)));
+    T num_d_norm;
+    if (Q_info == 2) {
+        denom_unscaled = std::max(denom_unscaled, inf_norm(Qx_true_scratch_));
+        if (m != 0) denom_unscaled = std::max(denom_unscaled, inf_norm(Atr_y1a_scratch_.head(n).cwiseProduct(D2_ext_inv.head(n))));
+        num_d_norm = inf_norm(num_unscaled.head(n));
+    } else {
+        if (Q_info != 0) denom_unscaled = std::max(denom_unscaled, inf_norm(Qx.cwiseProduct(D2_ext_inv)));
+        if (M != 0)      denom_unscaled = std::max(denom_unscaled, inf_norm(A_tr_y1.cwiseProduct(D2_ext_inv)));
+        num_d_norm = inf_norm(num_unscaled);
+    }
+    if (l != 0) denom_unscaled = std::max(denom_unscaled, inf_norm(B_tr_y2.cwiseProduct(D2_ext_inv)));
     denom_unscaled += T(1);
-    T res_d_unscaled = inf_norm(num_unscaled) / denom_unscaled;
+    T res_d_unscaled = num_d_norm / denom_unscaled;
 
     // Complementarity residual norm for box constraints on x
     Vec& x_unscaled = x_unscaled_scratch_;
@@ -846,6 +879,7 @@ void KSP_QP<T>::free_scratch_memory() {
     z_unscaled_scratch_.resize(0); num_unscaled_scratch_.resize(0);
     x_unscaled_scratch_.resize(0);
     Bx_unscaled_scratch_.resize(0); y2_unscaled_scratch_.resize(0);
+    x_head_scaled_scratch_.resize(0); Qx_true_scratch_.resize(0); Atr_y1a_scratch_.resize(0);
 }
 
 template <typename T>
