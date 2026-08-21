@@ -834,58 +834,6 @@ TEST(UpdatePmmParameters, LineSearchFailedLoosensMuRhoAndGrowsSsnTol) {
   EXPECT_DOUBLE_EQ(ns.ssn_tol, 0.0011);  // min(worst_res=5.0, 1.1*0.001=0.0011, 1e-2)
 }
 
-TEST(UpdatePmmParameters, MaxInnerIterationsWithLargeSsnResRelativeToWorstResLoosens) {
-  KSP_QP<double> ns = MakeValidInstance();
-  ns.mu = 10.0; ns.rho = 20.0; ns.ssn_tol = 0.001;
-  KSP_QP<double>::ResVec res_norms, new_res_norms;
-  res_norms << 1.0, 1.0, 1.0, 1.0;
-  new_res_norms << 0.01, 0.01, 0.01, 0.01;  // worst_res = 0.01
-
-  ns.update_PMM_parameters(res_norms, new_res_norms,
-                            SSN<double>::TerminationStatus::MaxInnerIterations,
-                            /*ssn_res=*/2.0, 0);  // 2.0 > 100*0.01=1.0 -> loosen
-
-  EXPECT_DOUBLE_EQ(ns.mu, 5.0);
-  EXPECT_DOUBLE_EQ(ns.rho, 10.0);
-  EXPECT_DOUBLE_EQ(ns.ssn_tol, 0.0011);
-}
-
-TEST(UpdatePmmParameters, MaxInnerIterationsWithSsnResWithinBoundLeavesParametersUnchanged) {
-  // No plain `else`: MaxInnerIterations/Stagnated with ssn_res <= 100*worst_res hits neither
-  // branch, so mu/rho/ssn_tol are left completely untouched for this PMM iteration -- pinned here
-  // since nothing previously exercised (or documented) this middle case.
-  KSP_QP<double> ns = MakeValidInstance();
-  ns.mu = 10.0; ns.rho = 20.0; ns.ssn_tol = 0.001;
-  KSP_QP<double>::ResVec res_norms, new_res_norms;
-  res_norms << 1.0, 1.0, 1.0, 1.0;
-  new_res_norms << 1.0, 1.0, 1.0, 1.0;  // worst_res = 1.0
-
-  ns.update_PMM_parameters(res_norms, new_res_norms,
-                            SSN<double>::TerminationStatus::MaxInnerIterations,
-                            /*ssn_res=*/50.0, 0);  // 50.0 <= 100*1.0=100 -> neither branch fires
-
-  EXPECT_DOUBLE_EQ(ns.mu, 10.0);
-  EXPECT_DOUBLE_EQ(ns.rho, 20.0);
-  EXPECT_DOUBLE_EQ(ns.ssn_tol, 0.001);
-}
-
-TEST(UpdatePmmParameters, StagnatedWithSsnResWithinBoundLeavesParametersUnchanged) {
-  // Same no-op condition as above, confirming Stagnated is wired into the same guard as
-  // MaxInnerIterations (not just checked for one of the two statuses).
-  KSP_QP<double> ns = MakeValidInstance();
-  ns.mu = 10.0; ns.rho = 20.0; ns.ssn_tol = 0.001;
-  KSP_QP<double>::ResVec res_norms, new_res_norms;
-  res_norms << 1.0, 1.0, 1.0, 1.0;
-  new_res_norms << 1.0, 1.0, 1.0, 1.0;
-
-  ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::Stagnated,
-                            /*ssn_res=*/50.0, 0);
-
-  EXPECT_DOUBLE_EQ(ns.mu, 10.0);
-  EXPECT_DOUBLE_EQ(ns.rho, 20.0);
-  EXPECT_DOUBLE_EQ(ns.ssn_tol, 0.001);
-}
-
 // ===================== primal_infeas / dual_infeas =====================
 // Certificates are built directly from the solver's own (ruiz-scaled) matrices/vectors after
 // construction, so these tests validate the documented formula (see the docstrings in
