@@ -296,10 +296,8 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     const int n = Q.rows();
     const T eps = std::numeric_limits<T>::epsilon();
 
-    // Q may arrive lower-triangular-only or full symmetric (both conventions occur -- set_default
-    // passes the lower-triangular-only Q_ruiz, but this method is also unit-tested directly with
-    // full matrices). Only the lower triangle is meaningful (SimplicialLDLT itself only reads it),
-    // so materialize the full symmetric matrix from it once, for correct norm/residual comparisons.
+    // Q may arrive lower-triangular-only or full symmetric (both conventions occur.
+    // Only the lower triangle is meaningful, so materialize the full symmetric matrix from it once.
     std::vector<Triplet> sym_trip;
     sym_trip.reserve(2 * Q.nonZeros());
     for (int k = 0; k < Q.outerSize(); ++k) {
@@ -318,6 +316,18 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     const T delta_noise = eps_zero * Q_scale; // noise floor for LDLT
     T delta = T(0); // Regularization factor; only increased to nonzero if 0 fails the pivot check below.
     Vec Q_diag = Q_sym.diagonal();
+
+    // A genuinely PSD Q with Q_ii == 0 must have row/column i identically zero (Cauchy-Schwarz:
+    // |Q_ij| <= sqrt(Q_ii*Q_jj) = 0), so these directions carry no real curvature.
+    // Detect them up front so L can be scrubbed back to exactly zero there after factorization,
+    // regardless of what delta ends up being needed elsewhere in Q.
+    std::vector<bool> is_null_row(n, false);
+    for (int k = 0; k < n; ++k) {
+        T col_abs_max = T(0);
+        for (typename SpMat::InnerIterator it(Q_sym, k); it; ++it)
+            col_abs_max = std::max(col_abs_max, std::abs(it.value()));
+        is_null_row[k] = (col_abs_max <= delta_noise);
+    }
 
     SpMat I(n, n);
     I.setIdentity();
@@ -362,6 +372,14 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     auto P = ldlt.permutationP();
     SpMat L_D = ldlt.matrixL(); // lower triangular from LDL^T
     L = (P.transpose() * L_D) * D_sqrt.asDiagonal();
+
+    // Scrub any regularization that leaked into null-space rows of L.
+    // L's rows stay in original-variable order even after AMD reordering (only columns follow
+    // the elimination/pivot order), so checking it.row() here.
+    for (int outer = 0; outer < L.outerSize(); ++outer) {
+        for (typename SpMat::InnerIterator it(L, outer); it; ++it)
+            if (is_null_row[it.row()]) it.valueRef() = T(0);
+    }
 
     // When pivots were clamped, verify L*L^T actually approximates Q before accepting it.
     if (!clamped) {

@@ -411,6 +411,24 @@ TEST(SetLFromLLT, ThrowsOnGenuinelyIndefiniteQRegardlessOfOverallMatrixScale) {
   EXPECT_THROW(ns.set_L_from_LLT(Q), std::runtime_error);
 }
 
+TEST(SetLFromLLT, NullDiagonalRowGetsExactlyZeroRowInL) {
+  // Index 2 has a zero diagonal, which means that the entire row/col with index 2
+  // are zero for a PSD matrix (Cauchy-Schwarz).
+  KSP_QP<double> ns = MakeValidInstance();
+  SpMat Q = DenseToSparse((Eigen::MatrixXd(3, 3) <<
+                            4.0, 1.0, 0.0,
+                            1.0, 3.0, 0.0,
+                            0.0, 0.0, 0.0).finished());
+  ns.set_L_from_LLT(Q);
+
+  Eigen::MatrixXd L_dense(ns.L);
+  EXPECT_TRUE(L_dense.row(2).isZero(0.0));
+
+  Eigen::MatrixXd LLT = L_dense * L_dense.transpose();
+  Eigen::MatrixXd Q_dense(Q);
+  EXPECT_TRUE(LLT.isApprox(Q_dense, 1e-6));
+}
+
 // ===================== build_reformulated_vecs (static) =====================
 
 TEST(BuildReformulatedVecs, NoReformulationBranchDefaultsEmptyVectorsAndBoundsIndependently) {
@@ -670,6 +688,41 @@ TEST(ComputeResidualUnscaledInfNorms, PrimalResidualIndependentOfAuxiliaryBlockS
   // constraint's own violation (L^T*x - v) must not leak into the original problem's primal
   // residual.
   EXPECT_NEAR(res_p_for_v(0.0), res_p_for_v(1e6), 1e-9);
+}
+
+TEST(ComputeResidualUnscaledInfNorms, DualResidualUnaffectedByNullDirectionMagnitudeWhenQInfoIsTwo) {
+  // Index 2 has zero row/column in Q, i.e. L's row 2 is exactly zero.
+  // With A = I and c, b = 0, the dual residual c+z-A_ruiz^T*y1_top-L*y_v=0 must vanish
+  // regardless of x_head(2)'s magnitude.
+  SpMat Q = DenseToSparse((Eigen::MatrixXd(3, 3) <<
+                            4.0, 1.0, 0.0,
+                            1.0, 3.0, 0.0,
+                            0.0, 0.0, 0.0).finished());
+  SpMat A = DenseToSparse(Eigen::MatrixXd::Identity(3, 3));
+  Vec c = Vec::Zero(3);
+  Vec b = Vec::Zero(3);
+  auto problem = MakeProblem(3, 3, 0, Q, A, SpMat(0, 3), c, b, 0.0,
+                              Vec::Constant(3, -kInf), Vec::Constant(3, kInf), Vec(0), Vec(0));
+  KSP_QP<double> ns(problem);
+  ASSERT_FALSE(ns.setup_failed);
+  ASSERT_EQ(ns.Q_info, 2);
+  ASSERT_TRUE(ns.D1A_diag.isApprox(Vec::Ones(3)));  // A=I needs no rescaling
+
+  ns.y2 = Vec::Zero(0);
+  ns.z = Vec::Zero(6);
+
+  auto res_d_for_x2 = [&](double x2) {
+    Vec x_head(3); x_head << 1.0, 1.0, x2;
+    Vec v = ns.L.transpose() * x_head;  // exact primal feasibility of the lifting row
+    ns.x = Vec(6); ns.x << x_head, v;
+    Vec y1_top = ns.L * v;              // what the lifted x_head-stationarity forces y1_top to
+    ns.y1 = Vec(6); ns.y1 << y1_top, -v;  // y_v = -v satisfies the v-block's own stationarity
+    Vec Ax = ns.A * ns.x;
+    Vec Qx = ns.Q_diag.cwiseProduct(ns.x);
+    return ns.compute_residual_unscaled_inf_norms(Ax, Vec::Zero(0), Qx)(1);
+  };
+
+  EXPECT_NEAR(res_d_for_x2(1.0), res_d_for_x2(1e6), 1e-9);
 }
 
 // ===================== objective_value =====================

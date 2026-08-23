@@ -125,7 +125,7 @@ public:
     int ssn_max_iter = 120000;
     int ssn_max_in_iter = 50;
     T eps_limit = tol;
-    T mu_limit = 1e9;
+    T mu_limit = 1e7;
     T rho_limit = 1e7;
     T alpha = 0.95;
     double time_limit = 60.0; // in seconds
@@ -139,7 +139,7 @@ public:
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e2;
-    T rho = 1e7;
+    T rho = rho_limit;
     T ssn_tol = 1e-2;
      
     // Outputs:
