@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
     int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
     double time_limit = cli::get_double(argc, argv, "--time-limit", 600.0); // in seconds
     PrintWhen when = PrintWhen::ALWAYS;
-    PrintWhat what = PrintWhat::TUNING;
+    PrintWhat what = PrintWhat::SSN;
 
     std::time_t curr_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::cout << std::ctime(&curr_time);

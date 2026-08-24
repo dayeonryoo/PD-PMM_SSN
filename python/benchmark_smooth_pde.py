@@ -37,11 +37,11 @@ python3 benchmark_smooth_pde.py
 
 Settings: tol = 1e-6, time limit = 600 s (10 min), max iterations = infinity by default.
         --root:       to change the output directory (default: results/).
-        --out:       to change the output file prefix (default: smooth_*.csv).
+        --out:        to change the output file prefix (default: smooth_*.csv).
         --solver:     to select which solvers to run among ksp-qp, qpalm, osqp (default: all three).
         --table:      to select which tables to run among poisson_control, poisson_state, convdiff_both (default: all three).
         --nc:         to select which grid exponents to run for vary-n tables (default: 7 8 9 10; see sweep parameters).
-        --tol:        to change the solver tolerance (default: 1e-9).
+        --tol:        to change the solver tolerance (default: 1e-6).
         --time-limit: to change the solver time limit in seconds (default: 600).
         --cooldown:   to change the cooldown time in seconds between solver runs (default: 0).
         --lumped-mass: 0 to use the consistent mass matrix (default), 1 to use the lumped mass matrix.

@@ -220,7 +220,6 @@ int main(int argc, char** argv) {
     }
 
     // ---- Single-problem solve ----
-    int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 

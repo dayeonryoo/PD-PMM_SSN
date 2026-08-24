@@ -502,10 +502,8 @@ private:
                 for (Eigen::Index i = 0; i < s; ++i)
                     ldlt_diag_bot_idx_[i] = static_cast<int>(&sol.P_hat.coeffRef(n_act + i, n_act + i) - sol.P_hat.valuePtr());
             } else {
-                // Same active set as last full build (numeric_dirty_ tracks pattern staleness
-                // identically to pattern_dirty_). Unlike chol's G*E*G^T (an actual matrix
-                // product), P_hat's blocks sit directly on the diagonal, so both a mu-only and
-                // a rho-only change can be patched in place without reassembling any triplet:
+                // Same active set as last full build.
+                // Both a mu-only and a rho-only change are patched in place without reassembling any triplet:
                 //  - mu only affects the bottom-right (1/mu) I block (H_diag's mu term vanishes
                 //    exactly on active_K entries, so mu never touches -H_act).
                 //  - rho only affects the top-left -H_act block (H_diag(i) = Q_diag(i) + 1/rho
