@@ -139,7 +139,7 @@ public:
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e2;
-    T rho = rho_limit;
+    T rho = 1e5;
     T ssn_tol = 1e-2;
      
     // Outputs:

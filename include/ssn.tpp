@@ -410,7 +410,8 @@ T exact_line_search(const SsnLineSearchParams<T>& p,
                     Eigen::Matrix<T, Eigen::Dynamic, 1>& ls_s_scratch,
                     Eigen::Matrix<T, Eigen::Dynamic, 1>& ls_v_scratch,
                     Eigen::Matrix<T, Eigen::Dynamic, 1>& ls_dv_scratch,
-                    std::vector<SsnBreakpoint<T>>& breakpoints_scratch) {
+                    std::vector<SsnBreakpoint<T>>& breakpoints_scratch,
+                    bool extend_armijo) {
     /*
     psi'(t) = <∇ M(u + t du), du>
             = eta t + zeta + mu <dist_K (s + t dx), dx> + <mu / alpha dv, dist_W (v + t dv)>,
@@ -423,6 +424,13 @@ T exact_line_search(const SsnLineSearchParams<T>& p,
     Write psi'(t) = p + m (t - t_prev).
     For each breakpoint t, if psi'(t) >= 0, return t = t_prev - p / m;
     otherwise, set p = psi'(t), t_prev = t and continue.
+
+    psi(t) is convex here (Q PSD, and each box term is a squared distance to a convex set), so this
+    walk finds its exact global minimizer along the ray. When extend_armijo is true, a second,
+    capped pass (see the "Armijo extension" block below) additionally looks for a *further* point
+    that still gives sufficient decrease relative to psi(0) -- see
+    project_ssn_linesearch_armijo_extension memory for why the exact minimizer alone can be an
+    excessively conservative step on some problems, and why extending past it is still safe.
     */
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
     using Breakpoint = SsnBreakpoint<T>;
@@ -533,29 +541,82 @@ T exact_line_search(const SsnLineSearchParams<T>& p,
     breakpoints.resize(n_uniq);
 
     // Check if psi'(0) >= 0; if so, return 0 (no crossing, linesearch failed).
-    T p_val = zeta;
-    p_val += mu * dist_K_s.dot(dx);
-    p_val += mu / alpha * dist_W_v.dot(ls_dv_scratch);
-    if (p_val >= T(0)) return T(0);
+    const T p0 = zeta + mu * dist_K_s.dot(dx) + mu / alpha * dist_W_v.dot(ls_dv_scratch);
+    if (p0 >= T(0)) return T(0);
 
-    // If psi'(0) < 0, check at every breakpoint t.
-    T t_prev = T(0);
+    // If psi'(0) < 0, check at every breakpoint t (exact minimization -- unchanged from before).
+    T tau_exact;
+    {
+        T t_prev = T(0), p_val = p0, m_cur = m;
+        bool found = false;
+        for (const Breakpoint& bp : breakpoints) {
+            T t = bp.t;
+            T p_t = p_val + m_cur * (t - t_prev);
+            if (p_t >= T(0)) {
+                tau_exact = t_prev - p_val / std::max(m_cur, eps_zero * (T(1) + eta));
+                found = true;
+                break;
+            }
+            t_prev = t;
+            p_val = p_t;
+            m_cur += bp.slope_change;
+        }
+        if (!found) {
+            // Checking the last breakpoint; m should be >= 0.
+            tau_exact = (m_cur >= T(0)) ? t_prev - p_val / std::max(m_cur, eps_zero * (T(1) + eta))
+                                         : T(0); // safeguard: m truly negative
+        }
+    }
+    if (!extend_armijo) return tau_exact;
+
+    // Armijo extension: psi(t) is convex here (see the docstring above), so its exact minimizer
+    // tau_exact always satisfies the Armijo sufficient-decrease condition below trivially -- this
+    // block only ever extends tau_exact upward (or leaves it unchanged), never below it. Capped at
+    // t=1 (the natural Newton step scale); skipped entirely if tau_exact is already >= that cap,
+    // since there is then no room left to extend into.
+    if (tau_exact >= T(1)) return tau_exact;
+
+    constexpr T kArmijoSigma = T(1e-4);
+    constexpr T kArmijoCap = T(1);
+
+    T tau_best = tau_exact;
+    T t_prev = T(0), p_val = p0, m_cur = m, psi_rel = T(0); // psi_rel = psi(t_prev) - psi(0)
+    enum { kRunning, kCapped, kViolated } state = kRunning;
+
     for (const Breakpoint& bp : breakpoints) {
-        T t = bp.t;
-        T p_t = p_val + m * (t - t_prev);
-        if (p_t >= T(0)) return t_prev - p_val / std::max(m, eps_zero * (T(1) + eta));
+        T t_full = bp.t;
+        bool at_cap = t_full >= kArmijoCap;
+        T t = at_cap ? kArmijoCap : t_full;
+        T dt = t - t_prev;
+        T p_t = p_val + m_cur * dt;
+        T psi_t = psi_rel + p_val * dt + T(0.5) * m_cur * dt * dt;
 
-        // Cross the breakpoint(s).
+        if (psi_t <= kArmijoSigma * t * p0) {
+            // Never move tau_best backward: this breakpoint may be earlier than the tau_exact
+            // floor we started from (walked in increasing-t order, but tau_exact can sit inside
+            // a later segment), so only accept it as an improvement, not an overwrite.
+            tau_best = std::max(tau_best, t);
+        } else {
+            state = kViolated;
+            break;
+        }
+        if (at_cap) { state = kCapped; break; }
+
         t_prev = t;
         p_val = p_t;
-        m += bp.slope_change;
+        psi_rel = psi_t;
+        m_cur += bp.slope_change;
     }
 
-    // Checking the last breakpoint; m should be >= 0.
-    if (m >= T(0)) {
-        return t_prev - p_val / std::max(m, eps_zero * (T(1) + eta));
+    // Breakpoints ran out before reaching the cap (and Armijo never got violated): extend the
+    // final flat segment (no more slope changes left) up to the cap.
+    if (state == kRunning && t_prev < kArmijoCap) {
+        T dt = kArmijoCap - t_prev;
+        T psi_t = psi_rel + p_val * dt + T(0.5) * m_cur * dt * dt;
+        if (psi_t <= kArmijoSigma * kArmijoCap * p0) tau_best = kArmijoCap;
     }
-    return T(0); // safeguard: m truly negative
+
+    return tau_best;
 }
 
 template <typename T>
@@ -711,7 +772,7 @@ typename SSN<T>::LineSearchResult SSN<T>::line_search_with_steepest_descent_fall
     T tau = exact_line_search(line_search_params, x_cur_, y2_cur_, dx_, dy2_,
                                 Ax_ssn_, Bx_ssn_, Adx_, Bdx_,
                                 dist_K_u_, dist_W_v_,
-                                ls_s_, ls_v_, ls_dv_, breakpoints_);
+                                ls_s_, ls_v_, ls_dv_, breakpoints_, /*extend_armijo=*/false);
 
     // If linesearch found step size <= 0 with the Newton direction, ...
     if (tau <= T(0)) {
@@ -730,7 +791,7 @@ typename SSN<T>::LineSearchResult SSN<T>::line_search_with_steepest_descent_fall
         tau = exact_line_search(line_search_params, x_cur_, y2_cur_, dx_, dy2_,
                                 Ax_ssn_, Bx_ssn_, Adx_, Bdx_,
                                 dist_K_u_, dist_W_v_,
-                                ls_s_, ls_v_, ls_dv_, breakpoints_);
+                                ls_s_, ls_v_, ls_dv_, breakpoints_, /*extend_armijo=*/true);
 
         // If linesearch still fails, exit SSN loop and let PMM adjust penalties.
         if (tau <= T(0)) {

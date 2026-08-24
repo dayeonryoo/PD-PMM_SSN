@@ -815,10 +815,10 @@ void KSP_QP<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new
 
     T worst_res = res_norms.maxCoeff();
     T new_worst_res = new_res_norms.maxCoeff();
-
+    
     if (ssn_opt == SsnStatus::Optimal) {
-        mu = std::min(mu_limit, T(2) * mu);
-        rho = std::min(rho_limit, T(2) * rho);
+        mu = std::min(mu_limit, T(1.1) * mu);
+        rho = std::min(rho_limit, T(1.1) * rho);
         ssn_tol = std::max(eps_limit, T(0.1) * ssn_tol);
 
     } else if (ssn_opt == SsnStatus::LineSearchFailed) {
@@ -830,6 +830,7 @@ void KSP_QP<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new
         mu = std::min(mu_limit, T(1.1) * mu);
         rho = std::min(rho_limit, T(1.1) * rho);
     }
+
 }
 
 template <typename T>

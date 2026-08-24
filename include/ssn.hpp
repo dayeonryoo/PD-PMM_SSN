@@ -73,7 +73,13 @@ T exact_line_search(const SsnLineSearchParams<T>& p,
                      Eigen::Matrix<T, Eigen::Dynamic, 1>& ls_s_scratch,
                      Eigen::Matrix<T, Eigen::Dynamic, 1>& ls_v_scratch,
                      Eigen::Matrix<T, Eigen::Dynamic, 1>& ls_dv_scratch,
-                     std::vector<SsnBreakpoint<T>>& breakpoints_scratch);
+                     std::vector<SsnBreakpoint<T>>& breakpoints_scratch,
+                     // When false (default), returns the exact minimizer of psi(t) -- unchanged
+                     // legacy behavior, relied on by the ExactLineSearch.* unit tests. When true,
+                     // additionally extends past the exact minimizer (up to t=1) as far as an
+                     // Armijo sufficient-decrease condition still holds, never returning less than
+                     // the exact minimizer. See project_ssn_linesearch_armijo_extension memory.
+                     bool extend_armijo = false);
 // -------------------------------------------------------------------------------
 
 template <typename T>

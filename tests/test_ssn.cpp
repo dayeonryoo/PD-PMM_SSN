@@ -620,6 +620,98 @@ TEST(ExactLineSearch, SlopeSafeguardHandlesNearZeroAccumulatedSlopeFromRounding)
   EXPECT_GT(tau, 1.0);
 }
 
+// ===================== exact_line_search: extend_armijo =====================
+// See project_ssn_linesearch_armijo_extension memory for why this exists: on some large
+// PDE-constrained problems, the exact minimizer of psi(t) is an excessively conservative step
+// (a handful of near-degenerate box breakpoints throttle tau to ~1e-3 for many SSN iterations
+// in a row). extend_armijo=true lets the search continue past the exact minimizer, up to t=1,
+// as long as psi(t) still gives sufficient decrease relative to psi(0) -- a strictly weaker,
+// still-valid-descent requirement than exact minimization.
+
+TEST(ExactLineSearchArmijoExtension, ExtendsPastExactMinimizerWhenSufficientDecreaseHoldsFurther) {
+  // Three K components, all upper-bound crossings: (dx=2, breakpoint t=0.5, big slope jump +4),
+  // (dx=0.2, breakpoint t=5, tiny slope jump +0.04, irrelevant here), (dx=0.1 with z(2)=0.93 so
+  // s=0.93, breakpoint t=0.7, tiny slope jump +0.01). Hand-derived: eta=4.05, zeta=-2.2.
+  // Exact walk: crosses t=0.5 (p_t=-0.175<0), then p_t(0.7)=1.435>=0 -> stops within [0.5,0.7),
+  // tau_exact = 0.5 - (-0.175)/8.05 = 0.5217391...
+  // Armijo walk (sigma=1e-4, cap=1): psi(0.5)=-0.59375 (holds, threshold=-0.00011); psi(0.7)=
+  // -0.46775 (holds, threshold=-0.000154, even though p_t(0.7) is already positive -- psi is
+  // still well below psi(0)); psi(1)=0.32545 (violates, threshold=-0.00022) -> stop at last good
+  // breakpoint, tau=0.7. This demonstrates a real extension: 0.7 > tau_exact.
+  LineSearchCase lc(3);
+  lc.c << -1.0, -1.0, 0.0;
+  lc.z(2) = 0.93;
+  Vec dx(3);
+  dx << 2.0, 0.2, 0.1;
+  const auto p = lc.Params();
+
+  Vec x_curr = Vec::Zero(3), y2_curr = Vec::Zero(0), dy2 = Vec::Zero(0);
+  Vec Ax = Vec::Zero(0), Bx = Vec::Zero(0), Adx = Vec::Zero(0), Bdx = Vec::Zero(0);
+  Vec dist_K_s = Vec::Zero(3), dist_W_v = Vec::Zero(0);
+  Vec ls_s(3), ls_v(0), ls_dv(0);
+  std::vector<SsnBreakpoint<double>> breakpoints;
+
+  const double tau_exact = exact_line_search(p, x_curr, y2_curr, dx, dy2, Ax, Bx, Adx, Bdx,
+                                              dist_K_s, dist_W_v, ls_s, ls_v, ls_dv, breakpoints);
+  EXPECT_NEAR(tau_exact, 0.5 - (-0.175) / 8.05, 1e-9);
+
+  const double tau_extended = exact_line_search(p, x_curr, y2_curr, dx, dy2, Ax, Bx, Adx, Bdx,
+                                                 dist_K_s, dist_W_v, ls_s, ls_v, ls_dv, breakpoints,
+                                                 /*extend_armijo=*/true);
+  EXPECT_NEAR(tau_extended, 0.7, 1e-9);
+  EXPECT_GT(tau_extended, tau_exact);
+}
+
+TEST(ExactLineSearchArmijoExtension, NeverReturnsLessThanTheExactMinimizer) {
+  // Same scenario as ExactLineSearch.FindsExactBreakpointForSingleActiveBoundCrossing (tau=0.5
+  // exactly at the only breakpoint), but the single post-breakpoint segment overshoots the
+  // Armijo line badly by t=1 (psi(1)=0.5 vs threshold -0.0002), so extension finds nothing
+  // better: extend_armijo=true must return exactly the same 0.5, not less.
+  LineSearchCase lc(1);
+  lc.c(0) = -1.0;
+  const auto p = lc.Params();
+
+  Vec x_curr = Vec::Zero(1), y2_curr = Vec::Zero(0), dx(1), dy2 = Vec::Zero(0);
+  dx << 2.0;
+  Vec Ax = Vec::Zero(0), Bx = Vec::Zero(0), Adx = Vec::Zero(0), Bdx = Vec::Zero(0);
+  Vec dist_K_s = Vec::Zero(1), dist_W_v = Vec::Zero(0);
+  Vec ls_s(1), ls_v(0), ls_dv(0);
+  std::vector<SsnBreakpoint<double>> breakpoints;
+
+  const double tau = exact_line_search(p, x_curr, y2_curr, dx, dy2, Ax, Bx, Adx, Bdx, dist_K_s,
+                                        dist_W_v, ls_s, ls_v, ls_dv, breakpoints,
+                                        /*extend_armijo=*/true);
+  EXPECT_NEAR(tau, 0.5, 1e-9);
+}
+
+TEST(ExactLineSearchArmijoExtension, CapsAtOneWhenSufficientDecreaseHoldsAllTheWayToTheCap) {
+  // K is unbounded (no breakpoints at all), eta=1, zeta=-0.9: the true unconstrained minimizer
+  // is at t*=0.9 (< 1, so extension is attempted). psi(1) = -0.9 + 0.5 = -0.4, comfortably below
+  // the threshold -0.00009, so Armijo holds all the way to the cap: extend_armijo=true must
+  // return exactly 1.0, not the uncapped continuation past it.
+  LineSearchCase lc(1);
+  lc.lx(0) = -std::numeric_limits<double>::infinity();
+  lc.ux(0) = std::numeric_limits<double>::infinity();
+  lc.c(0) = -0.9;
+  const auto p = lc.Params();
+
+  Vec x_curr = Vec::Zero(1), y2_curr = Vec::Zero(0), dx(1), dy2 = Vec::Zero(0);
+  dx << 1.0;
+  Vec Ax = Vec::Zero(0), Bx = Vec::Zero(0), Adx = Vec::Zero(0), Bdx = Vec::Zero(0);
+  Vec dist_K_s = Vec::Zero(1), dist_W_v = Vec::Zero(0);
+  Vec ls_s(1), ls_v(0), ls_dv(0);
+  std::vector<SsnBreakpoint<double>> breakpoints;
+
+  const double tau_exact = exact_line_search(p, x_curr, y2_curr, dx, dy2, Ax, Bx, Adx, Bdx,
+                                              dist_K_s, dist_W_v, ls_s, ls_v, ls_dv, breakpoints);
+  EXPECT_NEAR(tau_exact, 0.9, 1e-9);
+
+  const double tau_extended = exact_line_search(p, x_curr, y2_curr, dx, dy2, Ax, Bx, Adx, Bdx,
+                                                 dist_K_s, dist_W_v, ls_s, ls_v, ls_dv, breakpoints,
+                                                 /*extend_armijo=*/true);
+  EXPECT_NEAR(tau_extended, 1.0, 1e-9);
+}
+
 // =====================================================================================
 // Tests for solve_ssn()'s decomposed per-iteration phases
 // =====================================================================================
@@ -1526,12 +1618,15 @@ TEST(LineSearchWithSteepestDescentFallback, ProceedOutcomeOnFirstAttemptMatchesI
   EXPECT_NEAR(ls.tau, 0.25, 1e-9);
 
   // Cross-check against an independent call to the separately-tested free exact_line_search().
+  // extend_armijo=true here to match line_search_with_steepest_descent_fallback()'s production
+  // call (see ArmijoExtension.* tests below); this particular scenario's single breakpoint at
+  // t=1 overshoots the Armijo line badly, so the extension is a no-op and tau stays 0.25.
   auto params = ns.make_line_search_params();
   Vec ls_s(3), ls_v(2), ls_dv(2);
   std::vector<SsnBreakpoint<double>> bps;
   double tau_expected = exact_line_search(params, ns.x_cur_, ns.y2_cur_, ns.dx_, ns.dy2_,
                                            ns.Ax_ssn_, ns.Bx_ssn_, ns.Adx_, ns.Bdx_, ns.dist_K_u_,
-                                           ns.dist_W_v_, ls_s, ls_v, ls_dv, bps);
+                                           ns.dist_W_v_, ls_s, ls_v, ls_dv, bps, /*extend_armijo=*/true);
   EXPECT_DOUBLE_EQ(ls.tau, tau_expected);
 }
 
