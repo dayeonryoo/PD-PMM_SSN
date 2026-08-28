@@ -112,6 +112,7 @@ public:
             std::cout << "Number of SSN iterations (ssn_iter): " << ssn_iter << std::endl;
             std::cout << "Number of Krylov iterations (krylov_iter): " << krylov_iter << std::endl;
             std::cout << "Number of factorizations (fact): " << fact << std::endl;
+            std::cout << "Number of low-rank updates (smw_count): " << smw_count << std::endl;
             std::cout << "PMM tolerance achieved (pmm_tol_achieved): " << pmm_tol_achieved << std::endl;
             std::cout << "SSN tolerance achieved (ssn_tol_achieved): " << ssn_tol_achieved << std::endl;
         }
