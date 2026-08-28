@@ -111,13 +111,16 @@ Returns dict:
   run_time          – setup_time + solve_time
   pmm_iter          – PMM outer iterations
   ssn_iter          – total SSN inner iterations
+  krylov_iter       – total Krylov iterations
+  fact              – total number of factorizations
+  smw_count         – total number of SMW preconditioner applications
   pmm_tol_achieved  – tolerance achieved by PMM at termination
 -----------------------------------------------------------------------*/
 py::dict solve_from_sif(const std::string& filename,
                         double tol         = 1e-6,
                         long long max_iter = 1'000'000'000LL,
                         double time_limit  = 600.0) {
-    int opt, pmm_iter, ssn_iter;
+    int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
     {
         py::gil_scoped_release release;
@@ -136,6 +139,9 @@ py::dict solve_from_sif(const std::string& filename,
         run_time         = sol.run_time;
         pmm_iter         = sol.pmm_iter;
         ssn_iter         = sol.ssn_iter;
+        krylov_iter      = sol.krylov_iter;
+        fact             = sol.fact;
+        smw_count        = sol.smw_count;
         pmm_tol_achieved = (double)sol.pmm_tol_achieved;
     }
 
@@ -147,6 +153,9 @@ py::dict solve_from_sif(const std::string& filename,
     out["run_time"]         = run_time;
     out["pmm_iter"]         = pmm_iter;
     out["ssn_iter"]         = ssn_iter;
+    out["krylov_iter"]      = krylov_iter;
+    out["fact"]             = fact;
+    out["smw_count"]        = smw_count;
     out["pmm_tol_achieved"] = pmm_tol_achieved;
     return out;
 }
@@ -213,7 +222,7 @@ py::dict solve_from_data(const py::dict& pd_dict,
                          double time_limit  = 600.0) {
     KSPQPdata<T> pd = dict_to_kspqp(pd_dict); // reads Python objects
 
-    int opt, pmm_iter, ssn_iter;
+    int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
     {
         py::gil_scoped_release release;
@@ -228,6 +237,9 @@ py::dict solve_from_data(const py::dict& pd_dict,
         run_time         = sol.run_time;
         pmm_iter         = sol.pmm_iter;
         ssn_iter         = sol.ssn_iter;
+        krylov_iter      = sol.krylov_iter;
+        fact             = sol.fact;
+        smw_count        = sol.smw_count;
         pmm_tol_achieved = (double)sol.pmm_tol_achieved;
     }
 
@@ -239,6 +251,9 @@ py::dict solve_from_data(const py::dict& pd_dict,
     out["run_time"]         = run_time;
     out["pmm_iter"]         = pmm_iter;
     out["ssn_iter"]         = ssn_iter;
+    out["krylov_iter"]      = krylov_iter;
+    out["fact"]             = fact;
+    out["smw_count"]        = smw_count;
     out["pmm_tol_achieved"] = pmm_tol_achieved;
     return out;
 }
@@ -356,7 +371,8 @@ The sparse matrices are in CSC format (data / indices / indptr / shape).)");
           py::arg("time_limit") = 600.0,
           R"(Parse a SIF/MPS file and solve it with the KSP-QP solver.
 
-Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter, pmm_tol_achieved.
+Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter,
+krylov_iter, fact, smw_count, pmm_tol_achieved.
 status == 0  → optimal solution found
 status <  0  → infeasibility detected
 status >  0  → iteration / time limit reached)");
@@ -408,5 +424,6 @@ directly to solve_from_data() and used with kspqp_to_qpalm().)");
           py::arg("time_limit") = 600.0,
           R"(Solve with KSP-QP using already-parsed problem data (dict from parse_sif).
 
-Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter, pmm_tol_achieved.)");
+Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter,
+krylov_iter, fact, smw_count, pmm_tol_achieved.)");
 }

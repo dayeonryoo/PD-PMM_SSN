@@ -174,7 +174,8 @@ def run_one(result: dict, problem: str, nc: int, alpha1: float, alpha2: float,
 
 CSV_FIELDS = [
     "problem", "nc", "n_display", "alpha1", "alpha2", "lumped_mass",
-    "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter", "pmm_tol_achieved", "ssn_time", "ssn_obj",
+    "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter",
+    "krylov_iter", "fact", "smw_count", "pmm_tol_achieved", "ssn_time", "ssn_obj",
     "qpalm_status", "qpalm_solved", "qpalm_iter", "qpalm_inner_iter", "qpalm_tol_achieved", "qpalm_time", "qpalm_obj",
     "osqp_status",  "osqp_solved",  "osqp_iter",  "osqp_tol_achieved",  "osqp_time",  "osqp_obj",
 ]

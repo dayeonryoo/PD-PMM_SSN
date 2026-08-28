@@ -55,8 +55,6 @@ void KSP_QP<T>::determine_dimensions(const Problem<T>& problem) {
     } else if (Q_info == 1) {
         n = problem_Q_diag.size();
     } else { // Q_info == 2
-        // Must read problem.Q, not the member Q: this runs before `Q = problem.Q;` later in the
-        // constructor, so the member is still its default-constructed (0x0) state here.
         n = problem.Q.rows();
     }
 
@@ -296,8 +294,7 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     const int n = Q.rows();
     const T eps = std::numeric_limits<T>::epsilon();
 
-    // Q may arrive lower-triangular-only or full symmetric (both conventions occur.
-    // Only the lower triangle is meaningful, so materialize the full symmetric matrix from it once.
+    // Q may arrive lower-triangular-only or full symmetric, but only look at the lower triangle.
     std::vector<Triplet> sym_trip;
     sym_trip.reserve(2 * Q.nonZeros());
     for (int k = 0; k < Q.outerSize(); ++k) {
@@ -317,8 +314,8 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     T delta = T(0); // Regularization factor; only increased to nonzero if 0 fails the pivot check below.
     Vec Q_diag = Q_sym.diagonal();
 
-    // A genuinely PSD Q with Q_ii == 0 must have row/column i identically zero (Cauchy-Schwarz:
-    // |Q_ij| <= sqrt(Q_ii*Q_jj) = 0), so these directions carry no real curvature.
+    // A genuinely PSD Q with Q_ii == 0 must have row/column i identically zero by Cauchy-Schwarz,
+    // i.e. these directions carry no real curvature.
     // Detect them up front so L can be scrubbed back to exactly zero there after factorization,
     // regardless of what delta ends up being needed elsewhere in Q.
     std::vector<bool> is_null_row(n, false);
@@ -345,7 +342,7 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     Vec D;
     bool accepted = false;
     for (int attempt = 0; attempt < kLdltMaxAttempts; ++attempt) {
-        ldlt.factorize(Q_reg); // reuses the analyzePattern above -- no repeated ordering cost
+        ldlt.factorize(Q_reg);
         if (ldlt.info() == Eigen::Success) {
             D = ldlt.vectorD();
             if (D.minCoeff() >= -delta_noise) {
@@ -354,7 +351,7 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
             }
         }
         // When either the factorization itself failed or a meaningfully negative pivot was found,
-        // escalate regularization and retry rather than giving up immediately.
+        // escalate regularization and retry.
         delta = (delta == T(0)) ? std::sqrt(eps) * Q_scale : delta * T(10);
         for (int k = 0; k < n; ++k) Q_reg.valuePtr()[diag_idx[k]] = Q_diag(k) + delta;
     }
@@ -374,8 +371,6 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     L = (P.transpose() * L_D) * D_sqrt.asDiagonal();
 
     // Scrub any regularization that leaked into null-space rows of L.
-    // L's rows stay in original-variable order even after AMD reordering (only columns follow
-    // the elimination/pivot order), so checking it.row() here.
     for (int outer = 0; outer < L.outerSize(); ++outer) {
         for (typename SpMat::InnerIterator it(L, outer); it; ++it)
             if (is_null_row[it.row()]) it.valueRef() = T(0);
@@ -454,7 +449,7 @@ void KSP_QP<T>::set_default(const Problem<T>& problem) {
     if (Q_info == 2) {
         N = 2 * n; M = m + n;
 
-        // L s.t. Q = LL^T
+        // L s.t. Q_ruiz = LL^T
         set_L_from_LLT(Q_ruiz);
 
         // Q = [0 0; 0 I_n]
@@ -467,7 +462,7 @@ void KSP_QP<T>::set_default(const Problem<T>& problem) {
             std::vector<Triplet> trip;
             trip.reserve(A_ruiz.nonZeros() + L.nonZeros() + n);
 
-            // Top-left block: A (ruiz scaled)
+            // Top-left block: A (Ruiz scaled)
             if (A_ruiz.rows() != 0 && A_ruiz.cols() != 0) {
                 for (int k = 0; k < n; ++k) {
                     for (typename SpMat::InnerIterator it(A_ruiz, k); it; ++it) {
@@ -475,7 +470,7 @@ void KSP_QP<T>::set_default(const Problem<T>& problem) {
                     }
                 }
             }
-            // Bottom-left block: L^T
+            // Bottom-left block: L^T (from Ruiz scaled Q)
             for (int k = 0; k < n; ++k) {
                 for (typename SpMat::InnerIterator it(L, k); it; ++it) {
                     trip.emplace_back(m + it.col(), it.row(), it.value());
@@ -524,11 +519,10 @@ void KSP_QP<T>::set_default(const Problem<T>& problem) {
 
     // Set up scaled and unscaled data, reformulated in case of general non-diagonal Q.
     build_reformulated_vecs(n, m, N, M, inf, c_ruiz, b_ruiz, lx_ruiz, ux_ruiz, c, b, lx, ux);
-    // c_orig is set in the constructor.
     Vec place_holder;
     build_reformulated_vecs(n, m, N, M, inf, problem.c, problem.b, problem.lx, problem.ux, place_holder, b_orig, lx_orig, ux_orig);
 
-    // lw, uw remain the same for any Q
+    // lw, uw remain the same for any Q.
     if (problem.lw.size() == 0) {
         lw = Vec::Constant(l, -inf);
         lw_orig = Vec::Constant(l, -inf);
@@ -593,10 +587,7 @@ void KSP_QP<T>::initialize_sols() { // using 0 vectors
 
 template <typename T>
 bool KSP_QP<T>::check_bounds() {
-    // An empty box interval (lower > upper) proves the problem primal infeasible outright: no x can
-    // satisfy lx <= x <= ux (or Bx, lw <= Bx <= uw) componentwise. Report this directly rather than
-    // throwing, which would otherwise be caught by the generic setup try/catch and misreported as
-    // NumericalError instead of the certified PrimalInfeasible it actually is.
+    // An empty box interval (lower > upper) proves the problem primal infeasible outright.
     for (int i = 0; i < n; ++i) {
         if (lx_orig(i) > ux_orig(i)) {
             std::cout << "[Infeasibility] Primal infeasible: lx(" << i << ") = " << lx_orig(i)
@@ -682,7 +673,6 @@ typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const 
 }
 */
 
-
 template <typename T> // unlifted
 typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx) {
     // Return the unscaled residual norms (primal, dual, complementarity for x, complementarity for Bx).
@@ -702,9 +692,8 @@ typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const 
         num -= B_tr_y2;
     }
 
-    // Q_info==2 lifts the problem via Q ≈ L*Lᵀ with an auxiliary v=Lᵀx (x.tail(n)) and its own
-    // multiplier y_v=y1.tail(n). So dual residual must be recomputed directly from the true Q
-    // and the original A_ruizᵀ, bypassing v/y_v entirely.
+    // In case the problem is lifted via Q ≈ LLᵀ with an auxiliary v = Lᵀx (x.tail(n)) and its own multiplier y_v = y1.tail(n),
+    // the dual residual must be recomputed directly from the true Q and the original A_ruizᵀ, bypassing v/y_v entirely.
     if (Q_info == 2) {
         x_head_scaled_scratch_.noalias() = D2_diag.cwiseProduct(x.head(n));
         Qx_true_scratch_.noalias() = Q.template selfadjointView<Eigen::Lower>() * x_head_scaled_scratch_;
@@ -756,14 +745,14 @@ typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const 
     denom_unscaled += T(1);
     T res_d_unscaled = num_d_norm / denom_unscaled;
 
-    // Complementarity residual norm for box constraints on x
+    // Complementarity residual norm for box constraints on x.
     Vec& x_unscaled = x_unscaled_scratch_;
     x_unscaled.noalias() = x.cwiseProduct(D2_ext);
     Vec& proj_K_unscaled = proj_K_unscaled_scratch_;
     proj_K_unscaled.noalias() = proj(x_unscaled + z_unscaled, lx_orig, ux_orig);
     T compl_x_unscaled = inf_norm(x_unscaled - proj_K_unscaled) / (T(1) + std::max(inf_norm(z_unscaled), inf_norm(proj_K_unscaled)));
 
-    // Complementarity residual norm for box constraints on Bx
+    // Complementarity residual norm for box constraints on Bx.
     T compl_w_unscaled;
     if (l == 0) compl_w_unscaled = T(0);
     else {
@@ -780,7 +769,6 @@ typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const 
     res_norms_unscaled << res_p_unscaled, res_d_unscaled, compl_x_unscaled, compl_w_unscaled;
     return res_norms_unscaled;
 }
-
 
 
 template <typename T>
@@ -942,6 +930,18 @@ void KSP_QP<T>::accept_ssn_iterate(const SSN<T>& NS) {
 }
 
 template <typename T>
+void KSP_QP<T>::update_multipliers_if_accurate(typename SSN<T>::TerminationStatus ssn_opt, Vec& delta_y1, Vec& delta_z) {
+    // Update multipliers y1, z if SSN solve is optimal or accurate enough.
+    if (ssn_opt == SSN<T>::TerminationStatus::Optimal || ssn_tol_achieved <= T(100) * pmm_tol_achieved) {
+        delta_y1 = -mu * (Ax_scratch_ - b);
+        y1 += delta_y1;
+        delta_z = mu * (x - proj(z / mu + x, lx, ux));
+        z += delta_z;
+    }
+    // else, keep y1, z, delta_y1, delta_z from previous PMM iteration
+}
+
+template <typename T>
 void KSP_QP<T>::free_scratch_memory() {
     // Setup-only leftovers: dead weight since the constructor finished, regardless of interruption.
     Q_ruiz = SpMat(); A_ruiz = SpMat(); B_ruiz = SpMat();
@@ -972,25 +972,13 @@ void KSP_QP<T>::free_scratch_memory() {
     x_head_scaled_scratch_.resize(0); Qx_true_scratch_.resize(0); Atr_y1a_scratch_.resize(0);
 }
 
-template <typename T>
-void KSP_QP<T>::update_multipliers_if_accurate(typename SSN<T>::TerminationStatus ssn_opt, Vec& delta_y1, Vec& delta_z) {
-    // Update multipliers y1, z if SSN solve is accurate enough.
-    if (ssn_opt == SSN<T>::TerminationStatus::Optimal || ssn_tol_achieved <= T(100) * pmm_tol_achieved) {
-        delta_y1 = -mu * (Ax_scratch_ - b);
-        y1 += delta_y1;
-        delta_z = mu * (x - proj(z / mu + x, lx, ux));
-        z += delta_z;
-    }
-    // else, keep y1, z, delta_y1, delta_z from previous PMM iteration
-}
 
 template <typename T>
 Solution<T> KSP_QP<T>::solve() {
     auto solving_start = now_();
 
-    // If setup failed, exit immediately with the status already determined during setup
-    // (NumericalError for a genuine setup error, or PrimalInfeasible if check_bounds() found an
-    // empty box interval).
+    // If setup failed, exit immediately with the status already determined during setup:
+    // NumericalError for a genuine setup error or PrimalInfeasible if check_bounds() found an empty box interval.
     if (setup_failed) {
         auto solving_end = now_();
         double solve_time = time_diff_s(solving_start, solving_end); // in seconds
@@ -999,8 +987,7 @@ Solution<T> KSP_QP<T>::solve() {
                             setup_time, solve_time, 0, 0);
     }
 
-    // Initialize variables. `result` holds the terminal status once known; std::nullopt while the
-    // PMM loop is still running (also covers exhausting max_iter without any other break firing).
+    // Initialize variables.
     std::optional<TerminationStatus> result;
     pmm_iter = 0;
     ssn_iter = 0;
@@ -1030,7 +1017,7 @@ Solution<T> KSP_QP<T>::solve() {
         return time_diff_s(solving_start, now_()) > time_limit;
     };
 
-    // Print header
+    // Print header.
     print_header(when, what);
 
     try {
@@ -1066,7 +1053,7 @@ Solution<T> KSP_QP<T>::solve() {
         accept_ssn_iterate(NS);
         update_multipliers_if_accurate(NS.opt, delta_y1, delta_z);
 
-        // Infeasibility checks
+        // Infeasibility checks.
         if (primal_infeas(delta_y1, y2 - y2_old_scratch_, delta_z)) {
             result = TerminationStatus::PrimalInfeasible; std::cout << "[Infeasibility] Primal infeasible.\n";
             break;
@@ -1080,7 +1067,7 @@ Solution<T> KSP_QP<T>::solve() {
         ResVec new_res_norms = compute_residual_unscaled_inf_norms(Ax_scratch_, Bx_scratch_, Qx_scratch_);
         pmm_tol_achieved = new_res_norms.maxCoeff();
 
-        // obj_val/x_sol/y1_sol/y2_sol/z_sol for printing are skipped when printing is off.
+        // Intermediate obj_val/x_sol/y1_sol/y2_sol/z_sol computation for printing; skipped when printing is off.
         if (when != PrintWhen::NEVER && what != PrintWhat::NONE) {
             printable_sol(x, y1, y2, z); // (Modifies x_sol, y1_sol, y2_sol, z_sol.)
             obj_val = objective_value(x_sol);
@@ -1106,16 +1093,13 @@ Solution<T> KSP_QP<T>::solve() {
         Ax_old_scratch_.swap(Ax_scratch_);
         Bx_old_scratch_.swap(Bx_scratch_);
 
-        // NS.opt catches interruption detected mid-inner-loop (checked every SSN iteration);
-        // re-polling interrupted_() also catches interruption requested between PMM iterations.
+        // NS.opt catches interruption/time-limit detected mid-inner-loop (checked every SSN iteration);
+        // the second conditions catches them occured between PMM iterations.
         if (NS.opt == SSN<T>::TerminationStatus::Interrupted || interrupted_()) {
             result = TerminationStatus::Interrupted;
             free_scratch_memory();
             break;
         }
-
-        // NS.opt catches the time limit detected mid-inner-loop (checked every SSN iteration);
-        // re-checking here also catches the limit being hit between PMM iterations.
         auto solving_current = now_();
         double solving_current_time = time_diff_s(solving_start, solving_current); // in seconds
         if (NS.opt == SSN<T>::TerminationStatus::TimeLimit || solving_current_time > time_limit) {
@@ -1130,21 +1114,18 @@ Solution<T> KSP_QP<T>::solve() {
         result = TerminationStatus::NumericalError;
     }
 
-    // Loop exhausted max_iter without any other termination condition firing.
+    // Loop hit max_iter without any other termination condition firing.
     if (!result) result = TerminationStatus::MaxPmmIterations;
     opt = *result;
 
-    // Populate the printable solution/objective from the last accepted (x, y1, y2, z), in case the
-    // loop broke before reaching the in-loop printable_sol() call above (MaxSsnIterations breaks
-    // before it; max_iter == 0 skips the loop body entirely). x/y1/y2/z are always well-defined
-    // here (zero-initialized, only ever updated by a fully-completed SSN iterate), so this is safe
-    // to recompute unconditionally; the infeasibility/error block below still overrides it.
+    // Populate the printable solution/objective from the last accepted (x, y1, y2, z).
     printable_sol(x, y1, y2, z);
     obj_val = objective_value(x_sol);
 
     // Check if infeasiblity or a numerical error is detected.
-    if (opt == TerminationStatus::PrimalInfeasible || opt == TerminationStatus::DualInfeasible ||
-        opt == TerminationStatus::NumericalError) {
+    if (opt == TerminationStatus::PrimalInfeasible ||
+        opt == TerminationStatus::DualInfeasible   ||
+        opt == TerminationStatus::NumericalError)  {
         obj_val = 1e20;
         res_norms = ResVec::Constant(1e20);
         pmm_tol_achieved = 1e20;

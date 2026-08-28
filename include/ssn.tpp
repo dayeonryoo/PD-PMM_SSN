@@ -241,7 +241,7 @@ typename SSN<T>::Vec SSN<T>::solve_using_cg(const SpMat& G, const SpMat& G_tr, c
 
     // Set up and attempt to solve by PCG.
     // bad_alloc can come from build() (P_base_ = G E G^T) or from Eigen's CG iteration internals;
-    // fall back to LDLT in either case.
+    // in either case, fall back to solving the KKT system directly via LDLT.
     Vec dy_;
     bool ok = false;
     try {
@@ -332,9 +332,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
             K_ldlt_.makeCompressed();
             K_ldlt_built_ = true;
 
-            // Cache each diagonal's flat storage index (coeffRef returns a reference straight
-            // into the value array) so the patch path below can write via valuePtr()[idx]
-            // (O(1)) instead of coeffRef(i,i) (O(log nnz), binary search).
+            // Cache each diagonal's flat storage index so the patch path below can write 
+            // via valuePtr()[idx] (O(1)) instead of coeffRef(i,i) (O(log nnz), binary search).
             ldlt_diag_top_idx_.resize(n);
             for (int i = 0; i < n; ++i)
                 ldlt_diag_top_idx_[i] = static_cast<int>(&K_ldlt_.coeffRef(i, i) - K_ldlt_.valuePtr());
@@ -349,8 +348,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
             }
         } else {
             // Pattern unchanged (active_W same): only diagonal values changed (H_diag, mu).
-            // Update top-left and bottom-right diagonal entries in-place via the cached flat
-            // indices above; G blocks stay.
+            // Update top-left and bottom-right diagonal entries in-place via the cached flat indices above;
+            // G blocks stay.
             for (int i = 0; i < n; ++i)
                 K_ldlt_.valuePtr()[ldlt_diag_top_idx_[i]] = -H_diag(i);
             const T mu_inv = T(1) / mu;
@@ -380,9 +379,8 @@ typename SSN<T>::Vec SSN<T>::solve_using_ldlt(const SpMat& G, const Vec& H_diag,
 
 template <typename T>
 SsnLineSearchParams<T> SSN<T>::make_line_search_params() {
-    // Cached once per SSN iteration (Ax_ssn_ doesn't move across a line-search attempt and its
-    // steepest-descent retry) so exact_line_search() doesn't recompute this sparse mat-vec on
-    // every call.
+    // Cached once per SSN iteration as Ax_ssn_ doesn't move across a line-search attempt
+    // and its steepest-descent retry. 
     grad_res_p_.noalias()    = Ax_ssn_ - b;
     grad_Atr_resp_.noalias() = A_tr * grad_res_p_;
 
@@ -507,13 +505,11 @@ T exact_line_search(const SsnLineSearchParams<T>& p,
         }
     }
 
-    // If there is no breakpoint and the direction (dx, dy2) is nearly zero,
-    // return a full step (i.e. trivial case).
+    // If there is no breakpoint and the direction (dx, dy2) is nearly zero, return a full step (i.e. trivial case).
     // Note: eta is the weighted squared norm of the direction.
     if (breakpoints.empty() && eta < eps_zero) return T(1);
-    // Otherwise (no breakpoints but a non-negligible direction, e.g. no finite box
-    // bounds at all), fall through to the psi'(0) check and solve
-    // psi(t) = eta/2 t^2 + zeta t + const exactly.
+    // Otherwise (no breakpoints but a non-negligible direction, e.g. no finite box bounds at all), 
+    // fall through to the psi'(0) check and solve psi(t) = eta/2 t^2 + zeta t + const exactly.
 
     // Sort breakpoints by t in ascending order.
     std::sort(breakpoints.begin(), breakpoints.end(), [](const Breakpoint& a, const Breakpoint& b){ return a.t < b.t; });
@@ -568,7 +564,7 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
     // Clarke subgradient and distance for K and W
     compute_subgrad_and_dist(u_, lx, ux, false, new_active_K_, dist_K_u_);
     compute_subgrad_and_dist(v_, lw, uw, true,  new_active_W_, dist_W_v_);
-    // W is "active" when v lies OUTSIDE [lw,uw]; the subgrad just written is true when INSIDE
+    // W is active when v lies OUTSIDE [lw,uw]; the subgrad just written is true when INSIDE
     // (include_bd=true), so invert it to land new_active_W_ in the same polarity as active_W.
     new_active_W_ = (new_active_W_ == false);
     }
@@ -587,9 +583,7 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
     if (delta.w_changed) ldlt_pattern_dirty_ = true;
     if (delta.k_changed || delta.w_changed) ldlt_numeric_dirty_ = true; 
 
-    // Recompute H if active_K changed, or mu/rho drifted since H_diag was last built
-    // (H_diag = Q + mu(I_N - P_K) + I_N / rho depends on both, and mu/rho move every PMM
-    // iteration independently of the active set).
+    // Recompute H if active_K changed, or mu/rho drifted since H_diag was last built.
     bool recompute_H = delta.k_changed || (mu != H_diag_mu_) || (rho != H_diag_rho_);
     if (recompute_H) {
         SSN_TIMER_BLOCK(timer_prep);

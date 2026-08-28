@@ -170,7 +170,7 @@ public:
 #endif
 
     // Kylov (conjugate gradient) parameters
-    T krylov_tol = 1e-12;
+    T krylov_tol = 1e-12; // Eigen's convention error is ||rhs - S*dy||_2 / ||rhs||_2.
     int krylov_max_in_iter = 100;
 
     // Iterative refinement parameters
@@ -232,9 +232,8 @@ public:
     SpMat K_ldlt_;
     bool K_ldlt_built_ = false;
 
-    // Cached flat storage indices (into K_ldlt_.valuePtr()) for the diagonal entries, populated
-    // during the triplet rebuild above. Lets the diagonal-only patch path in solve_using_ldlt()
-    // write via valuePtr()[idx] (O(1)) instead of coeffRef(i,i) (O(log nnz), binary search).
+    // Cached flat storage indices (into K_ldlt_.valuePtr()) for the diagonal entries.
+    // Lets the diagonal-only patch path in solve_using_ldlt() write via valuePtr()[idx].
     std::vector<int> ldlt_diag_top_idx_; // size n, top-left -H block
     std::vector<int> ldlt_diag_bot_idx_; // size s, bottom-right (1/mu)I block
 
@@ -264,9 +263,7 @@ public:
         delta_x = Vec::Zero(N);
         delta_y2 = Vec::Zero(l);
 
-        // M is fixed for this SSN's lifetime; pass it now rather than letting SchurPreconditioner
-        // infer it lazily from G.rows() - n_active_W, which stays unset until some call sees
-        // G.rows() > 0 (see SchurPreconditioner::set_num_equality_rows()).
+        // M is fixed for this SSN's lifetime.
         cg.preconditioner().set_num_equality_rows(M);
 
         y2_active_W_.resize(l);
@@ -304,19 +301,15 @@ public:
         ldlt_numeric_dirty_ = true;  // mu, rho may have changed.
         A_tr_y1_ = A_tr * y1;        // y1 is fixed for the entire SSN run; cache A^T y1 once.
         linesearch_fail = 0;         // Reset line search failure count for this SSN iteration.
-        cg.preconditioner().reset_smw_fail_streak(); // Reset SMW suppression
+        cg.preconditioner().reset_smw_fail_streak(); // Reset SMW suppression.
     }
-    // Templated on the argument's Eigen expression type (rather than taking a concrete Vec) so
-    // callers can pass an unevaluated expression (e.g. a.cwiseProduct(b)) directly -- binding it
-    // to a concrete Vec& parameter would force it to materialize into a temporary first.
+
     template <typename Derived>
     static inline T inf_norm(const Eigen::MatrixBase<Derived>& v) {
         if (v.size() == 0) return T(0);
         return v.cwiseAbs().maxCoeff();
     }
-    // Out-parameter form, mirroring compute_subgrad_and_dist(): writes into a pre-sized `dist`
-    // instead of returning by value, and takes `v` as an expression (see inf_norm above) so
-    // e.g. compute_dist_box(z / mu + x_new, lx, ux, grad_dist_K_) does zero heap allocations.
+
     template <typename Derived>
     static void compute_dist_box(const Eigen::MatrixBase<Derived>& v, const Vec& lower, const Vec& upper, Vec& dist) {
         const int sz = static_cast<int>(v.size());
@@ -326,6 +319,7 @@ public:
             dist[i] = vi - std::max(lower[i], std::min(upper[i], vi));
         }
     }
+
     static void compute_subgrad_and_dist(const Vec& u, const Vec& lower, const Vec& upper,
                                          bool include_bd, BoolArr& subgrad, Vec& dist) {
         const int sz = static_cast<int>(u.size());
@@ -338,6 +332,7 @@ public:
             subgrad[i] = include_bd ? (ui >= li && ui <= hi) : (ui > li && ui < hi);
         }
     }
+    
     const Vec& compute_grad_Lagrangian(const Vec& x_new, const Vec& y2_new, const Vec& Ax_new, const Vec& Bx_new);
     T compute_grad_Lagrangian_unscaled_inf_norm(const Vec& grad_L);
     void split_by_mask(const Vec& u, const BoolArr& mask, Vec& u_sel, Vec& u_unsel);

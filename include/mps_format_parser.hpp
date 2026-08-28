@@ -44,8 +44,6 @@ private:
     std::unordered_map<std::string, RowInfo> row_map_;
     std::unordered_map<std::string, int> col_map_;
 
-    // Per-column: true once an explicit LO/FX/MI/BV/FR entry has set that column's lower bound.
-    // See the "Default choices of the parser" comment in mps_format_parser.tpp.
     std::vector<char> col_lower_explicit_;
 
     std::vector<T> rhs_values_;
@@ -56,12 +54,9 @@ private:
 
     ParsedModel<T> model_;
 
-    // Reused across lines to avoid a fresh vector (and fresh string copies)
-    // per line: ws_tokens_ holds the current line's raw whitespace split
-    // (needed for both the section-header check and as the free-format
-    // source), and tokens_ holds the final section-specific tokens handed
-    // to parse_*(). Both hold string_views into the current `line`, so they
-    // are only valid until the next getline() call.
+    // ws_tokens_ holds the current line's raw whitespace split,
+    // tokens_ holds the final section-specific tokens handed to parse_*().
+    // Both are reused for each line, so they are only valid until the next getline() call.
     std::vector<std::string_view> ws_tokens_;
     std::vector<std::string_view> tokens_;
 

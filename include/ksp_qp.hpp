@@ -74,10 +74,10 @@ public:
     T obj_const;
 
     int n, m, l;
-    int N, M; // extended dimensions for general Q (N = n + m + l, M = m + l)
+    int N, M;   // extended dimensions for general Q (N = 2n, M = m + n)
     int Q_info; // 0 = zero; 1 = diagonal; 2 = general
     Vec Q_diag;
-    SpMat L;
+    SpMat L;    // Cholesky factor of general Q
     SpMat A_tr, B_tr;
 
     SpMat Q_ruiz, A_ruiz, B_ruiz;
@@ -114,8 +114,7 @@ public:
     static constexpr T   kRuizTol     = T(1e-3);
 
     // set_L_from_LLT regularization constants (see ksp_qp.tpp): on a negative LDLT pivot beyond
-    // noise level, the diagonal regularization is escalated by 10x, up to this many attempts,
-    // before giving up rather than silently clamping.
+    // noise level, the diagonal regularization is escalated by 10x, up to this many attempts.
     static constexpr int kLdltMaxAttempts = 6;
     static constexpr T   kLdltVerifyTol   = T(1e-5);
 
@@ -150,25 +149,21 @@ public:
     int krylov_iter = 0, fact = 0, krylov_fail = 0;
     T pmm_tol_achieved, ssn_tol_achieved;
     ResVec res_norms;
-    bool kkt_ldlt_used = false; // mirrors SSN::kkt_ldlt_used: was the full-KKT LDLT fallback used
-    double setup_time = 0.0;   // wall-clock time spent in this constructor, in seconds
-    bool setup_failed = false; // true if an error occurred during setup
+    bool   kkt_ldlt_used = false; // mirrors SSN::kkt_ldlt_used: was the full-KKT LDLT fallback used
+    double setup_time    = 0.0;   // wall-clock time spent in this constructor, in seconds
+    bool   setup_failed  = false; // true if an error occurred during setup
 
-    // Clock used for setup_time/solve_time and the time_limit check in solve(); overridable so
-    // tests can inject a deterministic fake clock instead of depending on real wall-clock timing.
+    // Clock used for setup_time/solve_time and the time_limit check in solve().
     std::function<std::chrono::steady_clock::time_point()> now_ = [] { return std::chrono::steady_clock::now(); };
 
-    // Interruption check, polled once per PMM iteration in solve() (and forwarded into the inner
-    // SSN solve, polled once per SSN iteration too). Defaults to never-interrupted; overridable
-    // (e.g. by tests, or by a caller wiring up a signal handler) to request early termination.
+    // Interruption check, polled once per PMM iteration in solve().
     std::function<bool()> interrupted_ = [] { return false; };
 
     // Printing
     PrintWhen when = PrintWhen::NEVER;
     PrintWhat what = PrintWhat::NONE;
 
-    // Iteration-trace hook; defaults to the class's own print() call. Overridable (e.g. by tests)
-    // to capture the trace without redirecting std::cout.
+    // Iteration-trace hook; defaults to the class's own print() call.
     std::function<void(const IterationRecord<T>&)> report_ = [this](const IterationRecord<T>& r) {
         print<T, Vec>(when, what, r.pmm_iter, r.ssn_iter, r.krylov_iter, r.fact, r.obj_val, r.res_norms,
                       r.ssn_res, r.mu, r.rho, r.eps, r.linesearch_fail, r.krylov_fail, r.show_pmm_iter);
@@ -264,7 +259,7 @@ public:
     bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     void accept_ssn_iterate(const SSN<T>& NS);
     void update_multipliers_if_accurate(typename SSN<T>::TerminationStatus ssn_opt, Vec& delta_y1, Vec& delta_z);
-    void free_scratch_memory();
+    void free_scratch_memory(); // in case the solver is abruptly stopped due to time limit or user iteruption
     Solution<T> solve();
 };
 

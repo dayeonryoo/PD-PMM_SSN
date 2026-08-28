@@ -96,9 +96,12 @@ TABLE2_Y_UPPER = {1.0: 0.002, 1e-2: 0.175, 1e-4: 0.9, 1e-6: 1.0}
 
 # 2D convection-diffusion control, both state and control bounds
 TABLE3_NC    = [7, 8, 9, 10]
-TABLE3_BETAS = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
-TABLE3_Y_UPPER = {1e-1: 0.2, 1e-2: 0.5, 1e-3: 0.5, 1e-4: 0.75, 1e-5: 0.75}
-TABLE3_U_BOUND = {1e-1: 0.75, 1e-2: 2.0, 1e-3: 3.0, 1e-4: 5.0, 1e-5: 6.0}
+# TABLE3_BETAS = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+# TABLE3_Y_UPPER = {1e-1: 0.2, 1e-2: 0.5, 1e-3: 0.5, 1e-4: 0.75, 1e-5: 0.75}
+# TABLE3_U_BOUND = {1e-1: 0.75, 1e-2: 2.0, 1e-3: 3.0, 1e-4: 5.0, 1e-5: 6.0}
+TABLE3_BETAS = [1e-2, 1e-3, 1e-4]
+TABLE3_Y_UPPER = {1e-2: 0.5, 1e-3: 0.5, 1e-4: 0.75}
+TABLE3_U_BOUND = {1e-2: 2.0, 1e-3: 3.0, 1e-4: 5.0}
 
 ALL_TABLES = ["poisson_control", "poisson_state", "convdiff_both"]
 
@@ -199,7 +202,8 @@ def run_one(result: dict, choice: str, nc: int, beta: float,
 CSV_FIELDS = [
     "table", "choice", "nc", "n_display", "alpha2",
     "y_lower", "y_upper", "u_lower", "u_upper", "lumped_mass",
-    "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter", "pmm_tol_achieved", "ssn_time", "ssn_obj",
+    "ssn_status", "ssn_solved", "pmm_iter", "ssn_iter",
+    "krylov_iter", "fact", "smw_count", "pmm_tol_achieved", "ssn_time", "ssn_obj",
     "qpalm_status", "qpalm_solved", "qpalm_iter", "qpalm_inner_iter", "qpalm_tol_achieved", "qpalm_time", "qpalm_obj",
     "osqp_status",  "osqp_solved",  "osqp_iter",  "osqp_tol_achieved",  "osqp_time",  "osqp_obj",
 ]

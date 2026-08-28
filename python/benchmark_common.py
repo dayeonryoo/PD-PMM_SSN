@@ -199,7 +199,9 @@ def run_solvers(result: dict, worker_args: tuple,
         if "error" in ssn_out:
             print(f"    KSP-QP  ERROR — {ssn_out['error']}")
             result.update(ssn_status=-99, ssn_solved=0, ssn_time=float("inf"),
-                          pmm_iter=-1, ssn_iter=-1, pmm_tol_achieved=float("nan"),
+                          pmm_iter=-1, ssn_iter=-1,
+                          krylov_iter=-1, fact=-1, smw_count=-1,
+                          pmm_tol_achieved=float("nan"),
                           ssn_obj=float("nan"))
         else:
             r = ssn_out["res"]
@@ -207,12 +209,14 @@ def run_solvers(result: dict, worker_args: tuple,
                 ssn_status=r["status"], ssn_solved=int(r["status"] == 0),
                 ssn_time=r["run_time"],
                 pmm_iter=r["pmm_iter"], ssn_iter=r["ssn_iter"],
+                krylov_iter=r["krylov_iter"], fact=r["fact"], smw_count=r["smw_count"],
                 pmm_tol_achieved=r["pmm_tol_achieved"],
                 ssn_obj=r["obj_val"],
             )
             ok = "OK" if r["status"] == 0 else f"status={r['status']}"
             print(f"    KSP-QP  {ok:8s}  t={r['run_time']:.2f}s  "
-                  f"{r['pmm_iter']}({r['ssn_iter']})[tol={r['pmm_tol_achieved']:.2e}]")
+                  f"{r['pmm_iter']}({r['ssn_iter']})[tol={r['pmm_tol_achieved']:.2e}]  "
+                  f"krylov={r['krylov_iter']} fact={r['fact']} smw={r['smw_count']}")
         if flush_cb is not None:
             flush_cb()
         if cooldown > 0:

@@ -2,9 +2,9 @@
 #include "mps_format_parser.hpp"
 
 // Default choices of the parser:
-//  - Column bounds: default is [0, +inf) unless overridden by a BOUNDS entry. A negative UP
-//    value with no other explicit lower-bound entry (LO/FX/MI/BV/FR) for that column relaxes
-//    the lower bound to -inf.
+//  - Column bounds: default is [0, +inf) unless overridden by a BOUNDS entry.
+//    A negative UP value with no other explicit lower-bound entry (LO/FX/MI/BV/FR)
+//    for that column relaxes the lower bound to -inf.
 //  - Row bounds: E/L/G rows follow [rhs-|range|, rhs+|range|];
 //    a RANGES entry's sign is ignored (only its magnitude matters).
 //    A second N-type row (i.e. not the objective) is always free (-inf, +inf),
@@ -12,8 +12,8 @@
 //  - Objective: the first N row encountered becomes the objective row;
 //    a file with no N row at all gets an implicit "OBJ" row.
 //    An RHS entry naming the objective row is added to obj_const,
-//    and to_kspqp() negates obj_const on the way out since it was
-//    read off the RHS side of the equation.
+//    and obj_const is negated during problem formulation (by to_kspqp())
+//    since it was read off the RHS side of the equation.
 //  - RHS/RANGES/BOUNDS set names (e.g. "RHS", "BND") are read only to
 //    determine token layout on a given line; they are never validated for
 //    consistency across lines, so a second block under a different set
@@ -58,8 +58,7 @@ ParsedModel<T> MpsFormatParser<T>::parse(const std::string& filename) {
 
         decide_format_from(line, section_);
 
-        // Section content parsing depending on format. Reuses ws_tokens_
-        // (already split above) instead of re-scanning the line.
+        // Section content parsing depending on format.
         tokenize_line(line, section_);
         switch (section_) {
             case Section::OBJSENSE: parse_objsense(tokens_); break;
@@ -141,9 +140,8 @@ KSPQPdata<T> MpsFormatParser<T>::to_kspqp(const ParsedModel<T>& model, T eq_tol,
     pd.m = (int)eq_rows.size();
     pd.l = (int)ineq_rows.size();
 
-    // Map each original row to its compacted index within its partition (-1 if in
-    // neither, i.e. a free row). Mutually exclusive, so between them every row of
-    // model.A is claimed by at most one of pd.A/pd.B below.
+    // Map each original row to its compacted index within its partition (-1 if in neither, i.e. a free row).
+    // Mutually exclusive, so between them every row of model.A is claimed by at most one of pd.A/pd.B below.
     std::vector<int> eq_row_map(model.num_rows, -1), ineq_row_map(model.num_rows, -1);
 
     pd.b = Vec(pd.m);
@@ -160,16 +158,12 @@ KSPQPdata<T> MpsFormatParser<T>::to_kspqp(const ParsedModel<T>& model, T eq_tol,
         pd.uw(i) = model.row_upper(r);
     }
 
-    // Construct A (equality rows) and B (inequality rows) together in a single pass
-    // over model.A. eq_row_map/ineq_row_map partition its nonzeros between the two,
-    // so together they hold at most nnz(model.A) entries -- reserving nnz(model.A)
-    // for each separately, as two independent passes would, double-counts peak
-    // memory. A cheap counting pass gets the exact split; and since model.A's
-    // InnerIterator is already column-major with strictly increasing row indices --
-    // a property eq_row_map/ineq_row_map preserve within each partition -- the fill
-    // pass can append straight into pd.A/pd.B's compressed storage via
-    // reserve()+startVec()+insertBack(), skipping the Triplet stage (and
-    // setFromTriplets's own working copy) entirely.
+    // Construct A (equality rows) and B (inequality rows) together in a single pass over model.A.
+    // eq_row_map/ineq_row_map partition its nonzeros between the two, so together they hold at most nnz(model.A) entries.
+    // Since model.A's InnerIterator is already column-major with strictly increasing row indices
+    // -- a property eq_row_map/ineq_row_map preserve within each partition -- 
+    // the fill pass can append straight into pd.A/pd.B's compressed storage
+    // via reserve()+startVec()+insertBack(), skipping the Triplet stage entirely.
     Eigen::Index eq_nnz = 0, ineq_nnz = 0;
     for (int col = 0; col < model.A.outerSize(); ++col)
         for (typename SpMat::InnerIterator it(model.A, col); it; ++it) {
@@ -279,8 +273,7 @@ void MpsFormatParser<T>::parse_rows(const std::vector<std::string_view>& tokens)
         }
         row_map_[std::move(rname)] = info;
     } else {
-        // try_emplace does the find-or-insert in a single hash lookup, instead
-        // of a separate find() followed by an unconditional operator[] insert.
+        // try_emplace does the find-or-insert in a single hash lookup.
         auto [it, inserted] = row_map_.try_emplace(std::move(rname), info);
         if (!inserted) {
             throw std::runtime_error("Duplicate row name in ROWS section: " + it->first);
@@ -338,8 +331,8 @@ void MpsFormatParser<T>::parse_rhs(const std::vector<std::string_view>& tokens) 
         throw std::runtime_error("Malformed RHS line: expected at least 2 tokens, got " +
                                   std::to_string(tokens.size()) + ".");
 
-    // The RHS set name (if present) is read only to detect which token
-    // layout this line uses; it is not tracked or validated across lines.
+    // The RHS set name (if present) is read only to detect which token layout this line uses;
+    // it is not tracked or validated across lines.
     const size_t start_idx = (tokens.size() == 3 || tokens.size() == 5) ? 1 : 0;
 
     // Ensure rhs_values is large enough to hold the RHS for all constraints.
@@ -774,9 +767,7 @@ void MpsFormatParser<T>::split_free_by_section(const std::vector<std::string_vie
 
 template <typename T>
 void MpsFormatParser<T>::tokenize_line(const std::string& line, Section sec) {
-    // Format is decided once per file by decide_format_from(). Both branches
-    // write the final tokens into the member buffer tokens_ rather than
-    // returning a freshly allocated vector.
+    // Format is decided once per file by decide_format_from().
     if (format_ == Format::FREE) {
         split_free_by_section(ws_tokens_, sec, tokens_); // reuse this line's whitespace split
         return;
@@ -796,11 +787,9 @@ void MpsFormatParser<T>::tokenize_line(const std::string& line, Section sec) {
             default:               return !t.empty();
         }
     };
-
     if (ok_for_section(tokens_)) return;
 
-    // Fall back to free, reusing the already-computed whitespace split
-    // instead of re-scanning the line.
+    // Fall back to free.
     split_free_by_section(ws_tokens_, sec, tokens_);
 }
 

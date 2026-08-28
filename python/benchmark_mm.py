@@ -520,7 +520,9 @@ def main() -> None:
     csv_path = result_dir / f"{prefix}comparison_mm.csv"
     fieldnames = [
         "name",
-        "ssn_solved",   "ssn_status",   "pmm_iter", "ssn_iter",   "ssn_obj",   "pmm_tol_achieved",   "ssn_time",
+        "ssn_solved",   "ssn_status",   "pmm_iter", "ssn_iter",
+        "krylov_iter",  "fact",         "smw_count",
+        "ssn_obj",   "pmm_tol_achieved",   "ssn_time",
         "qpalm_solved", "qpalm_status", "qpalm_iter", "qpalm_inner_iter", "qpalm_obj", "qpalm_tol_achieved", "qpalm_time",
         "osqp_solved",  "osqp_status",  "osqp_iter",                      "osqp_obj",  "osqp_tol_achieved",  "osqp_time",
     ]
@@ -549,6 +551,7 @@ def main() -> None:
                 print(f"  KSP-QP : ERROR — {ssn_out['error']}")
                 row.update(ssn_status=-99, ssn_solved=0, ssn_time=np.inf,
                            pmm_iter=np.inf, ssn_iter=np.inf,
+                           krylov_iter=np.inf, fact=np.inf, smw_count=np.inf,
                            ssn_obj=np.nan, pmm_tol_achieved=np.nan)
             else:
                 r = ssn_out["res"]
@@ -557,11 +560,15 @@ def main() -> None:
                 row["ssn_time"]         = r["run_time"]
                 row["pmm_iter"]         = r["pmm_iter"]
                 row["ssn_iter"]         = r["ssn_iter"]
+                row["krylov_iter"]      = r["krylov_iter"]
+                row["fact"]             = r["fact"]
+                row["smw_count"]        = r["smw_count"]
                 row["ssn_obj"]          = r["obj_val"]
                 row["pmm_tol_achieved"] = r["pmm_tol_achieved"]
                 status_str = "OPTIMAL" if r["status"] == 0 else f"status={r['status']}"
                 print(f"  KSP-QP : {status_str:12s}  t = {r['run_time']:.3f} s  "
-                      f"pmm={r['pmm_iter']} ssn={r['ssn_iter']}  "
+                      f"pmm={r['pmm_iter']} ssn={r['ssn_iter']} "
+                      f"krylov={r['krylov_iter']} fact={r['fact']} smw={r['smw_count']}  "
                       f"tol={r['pmm_tol_achieved']:.2e}  obj = {r['obj_val']:.6g}")
             _flush()
             if cooldown > 0:
