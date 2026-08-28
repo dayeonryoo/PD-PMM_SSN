@@ -605,7 +605,7 @@ bool KSP_QP<T>::check_bounds() {
     return true;
 }
 
-/*
+
 template <typename T> // lifted
 typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx) {
     // Return the unscaled residual norms (primal, dual, complementarity for x, complementarity for Bx).
@@ -671,8 +671,8 @@ typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const 
     res_norms_unscaled << res_p_unscaled, res_d_unscaled, compl_x_unscaled, compl_w_unscaled;
     return res_norms_unscaled;
 }
-*/
 
+/*
 template <typename T> // unlifted
 typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx) {
     // Return the unscaled residual norms (primal, dual, complementarity for x, complementarity for Bx).
@@ -769,7 +769,7 @@ typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const 
     res_norms_unscaled << res_p_unscaled, res_d_unscaled, compl_x_unscaled, compl_w_unscaled;
     return res_norms_unscaled;
 }
-
+*/
 
 template <typename T>
 T KSP_QP<T>::objective_value(const Vec& x_orig) {
