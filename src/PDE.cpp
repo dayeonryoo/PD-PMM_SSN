@@ -26,19 +26,21 @@ static const std::vector<std::string> kAllProblems = {
 
 // Builds the named PDE-constrained QP (see include/pde_generator.hpp for the generators).
 // nc is the grid exponent passed straight through to the generator (grid size ~ 2^nc).
-KSPQPdata<T> build_problem(const std::string& problem_name, int nc) {
+KSPQPdata<T> build_problem(const std::string& problem_name, int nc, bool lump_mass) {
     double inf = std::numeric_limits<double>::infinity();
 
     if (problem_name == "l1l2_poisson") {
-        return pdegen::make_poisson_l1l2_control<T>(nc, 1e-2, 1e-2);
+        return pdegen::make_poisson_l1l2_control<T>(nc, 1e-2, 1e-2,
+            T(-2), T(1.5), -inf, inf, lump_mass);
     } else if (problem_name == "l1l2_convdiff") {
-        return pdegen::make_convdiff_l1l2_control<T>(nc, 1e-2, 1e-2);
+        return pdegen::make_convdiff_l1l2_control<T>(nc, 1e-2, 1e-2,
+            T(-2), T(1.5), T(0.02), -inf, inf, lump_mass);
     } else if (problem_name == "l2_poisson_control") {
-        return pdegen::make_poisson_l2_control<T>(nc, 1e-2, -inf, inf, 0, 1);
+        return pdegen::make_poisson_l2_control<T>(nc, 1e-2, -inf, inf, 0, 1, lump_mass);
     } else if (problem_name == "l2_poisson_state") {
-        return pdegen::make_poisson_l2_state_control<T>(nc, 1e-4, -0.1, 0.9, -inf, inf);
+        return pdegen::make_poisson_l2_state_control<T>(nc, 1e-4, -0.1, 0.9, -inf, inf, lump_mass);
     } else if (problem_name == "l2_convdiff") {
-        return pdegen::make_convdiff_l2_control<T>(nc, 1e-1, 0.0, 0.2, -0.75, 0.75);
+        return pdegen::make_convdiff_l2_control<T>(nc, 1e-1, 0.0, 0.2, -0.75, 0.75, T(0.01), lump_mass);
     }
 
     throw std::invalid_argument("Unknown problem name: " + problem_name);
@@ -55,7 +57,9 @@ int main(int argc, char** argv) {
             "  --nc N           grid exponent passed to the PDE generator (default: 6)\n"
             "  --tol T          primal-dual tolerance (default: 1e-6)\n"
             "  --max-iter N     max PMM iterations (default: 3000)\n"
-            "  --time-limit S   time limit in seconds (default: 600)\n";
+            "  --time-limit S   time limit in seconds (default: 600)\n"
+            "  --lump-mass      use a lumped (diagonal) mass matrix instead of the\n"
+            "                   consistent FEM mass matrix (default: off)\n";
         return 0;
     }
 
@@ -64,6 +68,7 @@ int main(int argc, char** argv) {
     double tol = cli::get_double(argc, argv, "--tol", 1e-6);
     int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
     double time_limit = cli::get_double(argc, argv, "--time-limit", 600.0); // in seconds
+    bool lump_mass = cli::has_flag(argc, argv, "--lump-mass");
     PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::SSN;
 
@@ -74,7 +79,7 @@ int main(int argc, char** argv) {
 
     for (const std::string& problem_name : problems) {
         std::cout << "========== Solving " << problem_name << " ==========\n";
-        KSPQPdata<T> data = build_problem(problem_name, nc);
+        KSPQPdata<T> data = build_problem(problem_name, nc, lump_mass);
         Problem<T> pb(data, tol, max_iter, time_limit, when, what);
         KSP_QP<T> solver(pb);
         Solution<T> sol = solver.solve();
