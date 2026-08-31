@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <variant>
+#include "ordering_select.hpp"
 
 // Timer master switch; 0 (off) by default; set via -DSSN_ENABLE_TIMERS=1.
 #ifndef SSN_ENABLE_TIMERS
@@ -331,9 +332,12 @@ private:
             ldlt_rhs_.resize(n_act_ + s);
             ldlt_rhs_.head(n_act_).setZero();
             ldlt_rhs_.tail(s) = b;
-            direct_result_ = std::get<LdltSolver>(active_solver_).ldlt.solve(ldlt_rhs_).tail(s);
+            direct_result_ = std::get<LdltSolver>(active_solver_).ldlt->solve(ldlt_rhs_).tail(s);
         } else {
-            direct_result_ = std::get<CholSolver>(active_solver_).llt.solve(b);
+            // Vec(b): the ISymmetricSolver interface overloads solve() on concrete Vec/Mat
+            // (not a generic MatrixBase<Rhs>, which would be ambiguous between the two), so a
+            // template-typed b needs an explicit concrete conversion here.
+            direct_result_ = std::get<CholSolver>(active_solver_).llt->solve(Vec(b));
         }
         return direct_result_;
     }
@@ -350,9 +354,9 @@ private:
             ldlt_rhs_.resize(n_act_ + s);
             ldlt_rhs_.head(n_act_).setZero();
             ldlt_rhs_.tail(s) = r_pad_;
-            u_base_ = std::get<LdltSolver>(active_solver_).ldlt.solve(ldlt_rhs_).tail(s);
+            u_base_ = std::get<LdltSolver>(active_solver_).ldlt->solve(ldlt_rhs_).tail(s);
         } else {
-            u_base_ = std::get<CholSolver>(active_solver_).llt.solve(r_pad_);
+            u_base_ = std::get<CholSolver>(active_solver_).llt->solve(r_pad_);
         }
 
         // Lambda = g_all - V_all^T u_base.
@@ -518,7 +522,25 @@ private:
             }
         }
 
-        finish_factorization(sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, structural_change, n_act);
+        // CHOLMOD-like ordering selection: on a fresh pattern (same trigger as the assembly
+        // rebuild above, since numeric_dirty_ and pattern_dirty_ are set together on every
+        // structural change -- see the flag-dependency doc block at the top of this class), try
+        // AMD/Natural/METIS on the freshly-assembled P_hat and (re)construct the solver with
+        // whichever produces the least fill. Always reconstructing (rather than only on a
+        // changed winner) is deliberate: a fresh empty solver is trivial next to the
+        // analyzePattern()+factorize() that unconditionally follow in finish_factorization().
+        if (pattern_dirty_) {
+            auto order_result = ordering_select::try_orderings<SpMat, typename SpMat::StorageIndex>(sol.P_hat);
+#if SSN_ENABLE_TIMERS
+            fprintf(stderr, "[SchurOrderSelect]");
+            for (const auto& c : order_result.candidates)
+                fprintf(stderr, " %s(nnzL=%lld,t=%.6f)", c.name.c_str(), c.nnz_l, c.analyze_seconds);
+            fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
+#endif
+            sol.ldlt = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>(order_result.winner);
+        }
+
+        finish_factorization(*sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, structural_change, n_act);
     }
 
     // Build P = G E G^T + (1/mu) I (or shift its mu diagonal), then factorize with Cholesky.
@@ -596,7 +618,20 @@ private:
             }
         }
 
-        finish_factorization(sol.llt, sol.P, s, /*is_ldlt=*/false, structural_change);
+        // See the matching block in factorize_by_ldlt() for why this is gated on pattern_dirty_
+        // and always reconstructs.
+        if (pattern_dirty_) {
+            auto order_result = ordering_select::try_orderings<SpMat, typename SpMat::StorageIndex>(sol.P);
+#if SSN_ENABLE_TIMERS
+            fprintf(stderr, "[SchurOrderSelect]");
+            for (const auto& c : order_result.candidates)
+                fprintf(stderr, " %s(nnzL=%lld,t=%.6f)", c.name.c_str(), c.nnz_l, c.analyze_seconds);
+            fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
+#endif
+            sol.llt = ordering_select::make_solver<SpMat, /*IsLdlt=*/false>(order_result.winner);
+        }
+
+        finish_factorization(*sol.llt, sol.P, s, /*is_ldlt=*/false, structural_change);
     }
 
     // ------ SMW low-rank update ------
@@ -785,9 +820,9 @@ private:
         auto solve_base_vec = [&](const Vec& rhs) -> Vec {
             if (use_ldlt_) {
                 smw_ldlt_padded_.tail(s_old_) = rhs;
-                return std::get<LdltSolver>(active_solver_).ldlt.solve(smw_ldlt_padded_).tail(s_old_);
+                return std::get<LdltSolver>(active_solver_).ldlt->solve(smw_ldlt_padded_).tail(s_old_);
             } else {
-                return std::get<CholSolver>(active_solver_).llt.solve(rhs);
+                return std::get<CholSolver>(active_solver_).llt->solve(rhs);
             }
         };
 
@@ -813,9 +848,9 @@ private:
             if (use_ldlt_) {
                 Mat padded_V = Mat::Zero(n_act_ + s_old_, q_);
                 padded_V.bottomRows(s_old_) = V_plus_;
-                Y_all_.rightCols(q_) = std::get<LdltSolver>(active_solver_).ldlt.solve(padded_V).bottomRows(s_old_);
+                Y_all_.rightCols(q_) = std::get<LdltSolver>(active_solver_).ldlt->solve(padded_V).bottomRows(s_old_);
             } else {
-                Y_all_.rightCols(q_) = std::get<CholSolver>(active_solver_).llt.solve(V_plus_);
+                Y_all_.rightCols(q_) = std::get<CholSolver>(active_solver_).llt->solve(V_plus_);
             }
         }
     }
@@ -918,13 +953,17 @@ private:
     bool use_ldlt_ = false;
     bool use_ldlt_at_last_fact_ = false;
 
+    // ldlt/llt are type-erased (ordering_select::ISymmetricSolver) rather than concrete Eigen
+    // types so the winning ordering (AMD/Natural/METIS, chosen fresh on each pattern_dirty_
+    // rebuild -- see factorize_by_ldlt()/factorize_by_chol()) can vary without a variant over
+    // {AMD,Natural,METIS} x {LDLT,LLT}. Null until the first successful factorize_by_*() call.
     struct CholSolver {
         SpMat P;
-        Eigen::SimplicialLLT<SpMat> llt;
+        std::unique_ptr<ordering_select::ISymmetricSolver<SpMat>> llt;
     };
     struct LdltSolver {
         SpMat P_hat;
-        Eigen::SimplicialLDLT<SpMat> ldlt;
+        std::unique_ptr<ordering_select::ISymmetricSolver<SpMat>> ldlt;
     };
     std::variant<std::monostate, CholSolver, LdltSolver> active_solver_;
 
