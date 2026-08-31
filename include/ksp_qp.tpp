@@ -6,6 +6,7 @@
 #include <chrono>
 #include <limits>
 #include "ssn.hpp"
+#include "ordering_select.hpp"
 
 template <typename T>
 void KSP_QP<T>::get_Q_info(const SpMat& Q) {
@@ -292,7 +293,6 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     using Triplet = Eigen::Triplet<T>;
 
     const int n = Q.rows();
-    const T eps = std::numeric_limits<T>::epsilon();
 
     // Q may arrive lower-triangular-only or full symmetric, but only look at the lower triangle.
     std::vector<Triplet> sym_trip;
@@ -336,25 +336,36 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     for (int k = 0; k < n; ++k)
         diag_idx[k] = static_cast<int>(&Q_reg.coeffRef(k, k) - Q_reg.valuePtr());
 
-    Eigen::SimplicialLDLT<SpMat> ldlt;
-    ldlt.analyzePattern(Q_reg); // sparsity pattern is fixed across retries below; analyze once
+    // CHOLMOD-like ordering selection: try each fill-reducing ordering Eigen can offer (AMD,
+    // Natural, and -- if built -- METIS's nested dissection, which is expected to matter most
+    // here since Q's sparsity is often a 2D/3D mesh adjacency graph) and pick whichever produces
+    // the least fill in L, since L becomes permanent structure in every downstream KKT/Schur
+    // factorization for the rest of the solve (see include/ordering_select.hpp).
+    auto order_result = ordering_select::try_orderings<SpMat, typename SpMat::StorageIndex>(Q_sym);
+#if SSN_ENABLE_TIMERS
+    fprintf(stderr, "[OrderSelect]");
+    for (const auto& c : order_result.candidates)
+        fprintf(stderr, " %s(nnzL=%lld,t=%.6f)", c.name.c_str(), c.nnz_l, c.analyze_seconds);
+    fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
+#endif
 
+    bool accepted = false, clamped = false;
     Vec D;
-    bool accepted = false;
-    for (int attempt = 0; attempt < kLdltMaxAttempts; ++attempt) {
-        ldlt.factorize(Q_reg);
-        if (ldlt.info() == Eigen::Success) {
-            D = ldlt.vectorD();
-            if (D.minCoeff() >= -delta_noise) {
-                accepted = true;
-                break;
-            }
-        }
-        // When either the factorization itself failed or a meaningfully negative pivot was found,
-        // escalate regularization and retry.
-        delta = (delta == T(0)) ? std::sqrt(eps) * Q_scale : delta * T(10);
-        for (int k = 0; k < n; ++k) Q_reg.valuePtr()[diag_idx[k]] = Q_diag(k) + delta;
+    using Idx = typename SpMat::StorageIndex;
+    SpMat L_result;
+    if (order_result.winner == "AMD") {
+        L_result = ordering_select::factorize_L_with_ordering<SpMat, Eigen::AMDOrdering<Idx>, T>(
+            Q_reg, diag_idx, Q_diag, Q_scale, delta_noise, kLdltMaxAttempts, delta, accepted, clamped, D);
+    } else if (order_result.winner == "Natural") {
+        L_result = ordering_select::factorize_L_with_ordering<SpMat, Eigen::NaturalOrdering<Idx>, T>(
+            Q_reg, diag_idx, Q_diag, Q_scale, delta_noise, kLdltMaxAttempts, delta, accepted, clamped, D);
     }
+#ifdef KSP_QP_HAVE_METIS
+    else if (order_result.winner == "METIS") {
+        L_result = ordering_select::factorize_L_with_ordering<SpMat, Eigen::MetisOrdering<Idx>, T>(
+            Q_reg, diag_idx, Q_diag, Q_scale, delta_noise, kLdltMaxAttempts, delta, accepted, clamped, D);
+    }
+#endif
 
     if (!accepted) {
         throw std::runtime_error(
@@ -363,12 +374,7 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
             "approximation.");
     }
 
-    const bool clamped = (D.minCoeff() < T(0));
-    Vec D_sqrt = D.cwiseMax(T(0)).cwiseSqrt();
-
-    auto P = ldlt.permutationP();
-    SpMat L_D = ldlt.matrixL(); // lower triangular from LDL^T
-    L = (P.transpose() * L_D) * D_sqrt.asDiagonal();
+    L = L_result;
 
     // Scrub any regularization that leaked into null-space rows of L.
     for (int outer = 0; outer < L.outerSize(); ++outer) {
