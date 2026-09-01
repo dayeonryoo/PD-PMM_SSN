@@ -13,11 +13,22 @@
 #include <vector>
 
 // CHOLMOD-like ordering selection: try each fill-reducing ordering Eigen can offer for a
-// symmetric sparse matrix (AMD, Natural, and -- if KSP_QP_HAVE_METIS -- METIS's nested
-// dissection), measure the resulting fill via analyzePattern() alone (cheap, near-linear;
-// no factorize() needed -- Eigen already knows L's exact symbolic nnz once analyzePattern()
-// returns), and report the winner by least fill. See include/ksp_qp.tpp's set_L_from_LLT for
-// the one call site currently using this.
+// symmetric sparse matrix (AMD, and -- if KSP_QP_HAVE_METIS -- METIS's nested dissection),
+// measure the resulting fill via analyzePattern() alone (cheap, near-linear; no factorize()
+// needed -- Eigen already knows L's exact symbolic nnz once analyzePattern() returns), and
+// report the winner by least fill. See include/ksp_qp.tpp's set_L_from_LLT and
+// include/schur_preconditioner.hpp for the call sites using this.
+//
+// NaturalOrdering (no reordering) is deliberately not a candidate here, not merely a bad choice
+// among others: on a genuinely indefinite input (e.g. schur_preconditioner.hpp's
+// P_hat = [-H_act, G_act^T; G_act, (1/mu)I]), Natural ordering processes variables in raw index
+// order, which for that matrix means eliminating the entire negative-diagonal -H_act block
+// before ever touching the positive (1/mu)I block -- a long run of same-signed pivots. Eigen's
+// SimplicialLDLT has no Bunch-Kaufman-style dynamic pivoting, so a degenerate pivot produced
+// along such a sequence isn't caught; it was observed in practice to segfault inside
+// factorize_preordered() at large scale (nc=8, 462k-row P_hat) despite Natural having reported
+// the *least* predicted fill of the three candidates tried at the time -- i.e. nnz(L) alone
+// can't detect this risk. Do not re-add it without also handling that.
 namespace ordering_select {
 
 struct Candidate {
@@ -51,26 +62,11 @@ Candidate probe(const std::string& name, const SpMat& A_sym) {
 
 // Trial-runs analyzePattern() with each available ordering on A_sym (a full, already-symmetric
 // sparse matrix -- not just the lower triangle), measuring wall time and resulting fill without
-// ever factorizing. Returns per-candidate stats and the name of the winner (least nnz_l among
-// AMD/METIS only -- see the note on Natural below).
-//
-// Natural is still probed and reported (useful as a "what if we did nothing" baseline) but is
-// deliberately never eligible to win: on a genuinely indefinite input (e.g.
-// schur_preconditioner.hpp's P_hat = [-H_act, G_act^T; G_act, (1/mu)I]), Natural ordering
-// processes variables in raw index order, which for that matrix means eliminating the entire
-// negative-diagonal -H_act block before ever touching the positive (1/mu)I block -- a long run
-// of same-signed pivots. Eigen's SimplicialLDLT has no Bunch-Kaufman-style dynamic pivoting, so
-// a degenerate pivot produced along such a sequence isn't caught; it was observed in practice to
-// segfault inside factorize_preordered() at large scale (nc=8, 462k-row P_hat) despite Natural
-// having reported the *least* predicted fill of the three candidates that run -- i.e. nnz(L)
-// alone can't detect this risk; only a fill-reducing ordering can be trusted to avoid it, which
-// is also the standard reason production sparse solvers default to AMD/METIS-class orderings
-// rather than raw/no ordering for indefinite systems, not just for fill quality.
+// ever factorizing. Returns per-candidate stats and the name of the winner (least nnz_l).
 template <typename SpMat, typename Index>
 Result try_orderings(const SpMat& A_sym) {
     Result result;
     result.candidates.push_back(probe<SpMat, Eigen::AMDOrdering<Index>>("AMD", A_sym));
-    result.candidates.push_back(probe<SpMat, Eigen::NaturalOrdering<Index>>("Natural", A_sym));
 #ifdef KSP_QP_HAVE_METIS
     // Eigen::MetisOrdering passes StorageIndex buffers straight to METIS_NodeND's idx_t*
     // parameters with no size check; METIS is built here with IDXTYPEWIDTH=32 (CMakeLists.txt)
@@ -81,11 +77,10 @@ Result try_orderings(const SpMat& A_sym) {
     result.candidates.push_back(probe<SpMat, Eigen::MetisOrdering<Index>>("METIS", A_sym));
 #endif
 
-    result.winner.clear();
-    long long best_nnz = -1;
+    result.winner = result.candidates.front().name;
+    long long best_nnz = result.candidates.front().nnz_l;
     for (const auto& c : result.candidates) {
-        if (c.name == "Natural") continue; // reported, but never eligible to win -- see above.
-        if (result.winner.empty() || c.nnz_l < best_nnz) { best_nnz = c.nnz_l; result.winner = c.name; }
+        if (c.nnz_l < best_nnz) { best_nnz = c.nnz_l; result.winner = c.name; }
     }
     return result;
 }
@@ -138,8 +133,8 @@ SpMat factorize_L_with_ordering(SpMat& Q_reg, const std::vector<int>& diag_idx,
 // that instead holds a solver as long-lived state (e.g. schur_preconditioner.hpp's Schur/KKT
 // preconditioner, factorized on nearly every SSN iteration but only re-analyzed on an
 // active-set change) needs to store "whichever ordering won" behind a stable type. Rather than
-// a variant over {AMD,Natural,METIS} x {LDLT,LLT} (6 concrete alternatives), wrap whichever one
-// is live behind this interface -- it covers exactly analyzePattern/factorize/info/solve, the
+// a variant over {AMD,METIS} x {LDLT,LLT} (4 concrete alternatives), wrap whichever one is
+// live behind this interface -- it covers exactly analyzePattern/factorize/info/solve, the
 // only methods such a call site needs (no vectorD/permutationP/matrixL, unlike
 // factorize_L_with_ordering above, which needs those to extract L).
 template <typename SpMat>
@@ -177,15 +172,13 @@ private:
     EigenSolver solver_;
 };
 
-// Constructs the wrapper for the named winner ("AMD"/"Natural"/"METIS", the same names
-// try_orderings() returns). IsLdlt selects SimplicialLDLT (true) vs SimplicialLLT (false).
+// Constructs the wrapper for the named winner ("AMD"/"METIS", the same names try_orderings()
+// returns). IsLdlt selects SimplicialLDLT (true) vs SimplicialLLT (false).
 template <typename SpMat, bool IsLdlt>
 std::unique_ptr<ISymmetricSolver<SpMat>> make_solver(const std::string& ordering_name) {
     using Idx = typename SpMat::StorageIndex;
     if (ordering_name == "AMD")
         return std::make_unique<SymmetricSolverImpl<SpMat, Eigen::AMDOrdering<Idx>, IsLdlt>>();
-    if (ordering_name == "Natural")
-        return std::make_unique<SymmetricSolverImpl<SpMat, Eigen::NaturalOrdering<Idx>, IsLdlt>>();
 #ifdef KSP_QP_HAVE_METIS
     if (ordering_name == "METIS")
         return std::make_unique<SymmetricSolverImpl<SpMat, Eigen::MetisOrdering<Idx>, IsLdlt>>();

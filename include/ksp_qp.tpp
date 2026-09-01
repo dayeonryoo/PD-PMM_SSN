@@ -336,11 +336,11 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     for (int k = 0; k < n; ++k)
         diag_idx[k] = static_cast<int>(&Q_reg.coeffRef(k, k) - Q_reg.valuePtr());
 
-    // CHOLMOD-like ordering selection: try each fill-reducing ordering Eigen can offer (AMD,
-    // Natural, and -- if built -- METIS's nested dissection, which is expected to matter most
-    // here since Q's sparsity is often a 2D/3D mesh adjacency graph) and pick whichever produces
-    // the least fill in L, since L becomes permanent structure in every downstream KKT/Schur
-    // factorization for the rest of the solve (see include/ordering_select.hpp).
+    // CHOLMOD-like ordering selection: try each fill-reducing ordering Eigen can offer (AMD, and
+    // -- if built -- METIS's nested dissection, which is expected to matter most here since Q's
+    // sparsity is often a 2D/3D mesh adjacency graph) and pick whichever produces the least fill
+    // in L, since L becomes permanent structure in every downstream KKT/Schur factorization for
+    // the rest of the solve (see include/ordering_select.hpp).
     auto order_result = ordering_select::try_orderings<SpMat, typename SpMat::StorageIndex>(Q_sym);
 #if SSN_ENABLE_TIMERS
     fprintf(stderr, "[OrderSelect]");
@@ -355,9 +355,6 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     SpMat L_result;
     if (order_result.winner == "AMD") {
         L_result = ordering_select::factorize_L_with_ordering<SpMat, Eigen::AMDOrdering<Idx>, T>(
-            Q_reg, diag_idx, Q_diag, Q_scale, delta_noise, kLdltMaxAttempts, delta, accepted, clamped, D);
-    } else if (order_result.winner == "Natural") {
-        L_result = ordering_select::factorize_L_with_ordering<SpMat, Eigen::NaturalOrdering<Idx>, T>(
             Q_reg, diag_idx, Q_diag, Q_scale, delta_noise, kLdltMaxAttempts, delta, accepted, clamped, D);
     }
 #ifdef KSP_QP_HAVE_METIS

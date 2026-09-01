@@ -438,6 +438,13 @@ private:
         }
         info_ = solver.info();
         fact_count_++;
+#if SSN_ENABLE_TIMERS
+        // Printed on every factorize() call (not just when the ordering is freshly (re)chosen
+        // in factorize_by_ldlt()/factorize_by_chol()), so a solve's full ordering timeline is
+        // visible even across iterations that just reuse the last decision.
+        fprintf(stderr, "[SchurFactorize] fact=%d ordering=%s is_ldlt=%d reselected=%d\n",
+                fact_count_, current_ordering_.c_str(), (int)is_ldlt, (int)structural_change);
+#endif
         mu_at_last_fact_       = mu_;
         rho_at_last_fact_      = rho_;
         use_ldlt_at_last_fact_ = is_ldlt;
@@ -525,7 +532,7 @@ private:
         // CHOLMOD-like ordering selection: on a fresh pattern (same trigger as the assembly
         // rebuild above, since numeric_dirty_ and pattern_dirty_ are set together on every
         // structural change -- see the flag-dependency doc block at the top of this class), try
-        // AMD/Natural/METIS on the freshly-assembled P_hat and (re)construct the solver with
+        // AMD/METIS on the freshly-assembled P_hat and (re)construct the solver with
         // whichever produces the least fill. Always reconstructing (rather than only on a
         // changed winner) is deliberate: a fresh empty solver is trivial next to the
         // analyzePattern()+factorize() that unconditionally follow in finish_factorization().
@@ -538,6 +545,7 @@ private:
             fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
 #endif
             sol.ldlt = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>(order_result.winner);
+            current_ordering_ = order_result.winner;
         }
 
         finish_factorization(*sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, structural_change, n_act);
@@ -629,6 +637,7 @@ private:
             fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
 #endif
             sol.llt = ordering_select::make_solver<SpMat, /*IsLdlt=*/false>(order_result.winner);
+            current_ordering_ = order_result.winner;
         }
 
         finish_factorization(*sol.llt, sol.P, s, /*is_ldlt=*/false, structural_change);
@@ -954,9 +963,9 @@ private:
     bool use_ldlt_at_last_fact_ = false;
 
     // ldlt/llt are type-erased (ordering_select::ISymmetricSolver) rather than concrete Eigen
-    // types so the winning ordering (AMD/Natural/METIS, chosen fresh on each pattern_dirty_
-    // rebuild -- see factorize_by_ldlt()/factorize_by_chol()) can vary without a variant over
-    // {AMD,Natural,METIS} x {LDLT,LLT}. Null until the first successful factorize_by_*() call.
+    // types so the winning ordering (AMD/METIS, chosen fresh on each pattern_dirty_ rebuild --
+    // see factorize_by_ldlt()/factorize_by_chol()) can vary without a variant over
+    // {AMD,METIS} x {LDLT,LLT}. Null until the first successful factorize_by_*() call.
     struct CholSolver {
         SpMat P;
         std::unique_ptr<ordering_select::ISymmetricSolver<SpMat>> llt;
@@ -966,6 +975,7 @@ private:
         std::unique_ptr<ordering_select::ISymmetricSolver<SpMat>> ldlt;
     };
     std::variant<std::monostate, CholSolver, LdltSolver> active_solver_;
+    std::string current_ordering_ = "AMD"; // set on each pattern_dirty_ ordering (re)selection below
 
     int n_act_ = 0;
     Eigen::ComputationInfo info_ = Eigen::Success;
