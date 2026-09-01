@@ -571,9 +571,19 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
 
     // Detect active-set changes; recompute on any single change.
     bool first_ssn_iter = (active_K.size() == 0);
+    int k_flips = first_ssn_iter ? -1 : static_cast<int>((active_K != new_active_K_).count());
+    int w_flips = first_ssn_iter ? -1 : static_cast<int>((active_W != new_active_W_).count());
+    if (at_pmm_boundary_) {
+        // First prepare_newton_system() call since update_ssn_system(): this is the PMM-boundary
+        // transition (previous PMM iteration's converged active set vs. the first evaluation
+        // under the new mu/rho/y1/z). See transition_k_flips/transition_w_flips.
+        transition_k_flips = k_flips;
+        transition_w_flips = w_flips;
+        at_pmm_boundary_ = false;
+    }
     ActiveSetDelta delta{
-        /*k_changed=*/first_ssn_iter || (active_K != new_active_K_).any(),
-        /*w_changed=*/first_ssn_iter || (active_W != new_active_W_).any(),
+        /*k_changed=*/first_ssn_iter || k_flips > 0,
+        /*w_changed=*/first_ssn_iter || w_flips > 0,
     };
 
     bool update_prec = delta.k_changed || delta.w_changed; // true means rebuilding prec is needed.

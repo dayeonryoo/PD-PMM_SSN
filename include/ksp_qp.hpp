@@ -129,6 +129,7 @@ public:
     T alpha = 0.95;
     double time_limit = 60.0; // in seconds
     int linesearch_fail = 0;
+    int freeze_streak_ = 0; // EXPERIMENTAL: consecutive mu/rho freezes so far; see enable_mu_rho_freeze.
 
     // Primal/dual infeasibility certificate tolerances.
     T eps_pinf = 1e-3 * tol;
@@ -140,7 +141,18 @@ public:
     T mu = 1e2;
     T rho = rho_limit;
     T ssn_tol = 1e-2;
-     
+
+    // EXPERIMENTAL (2026-08-28): when the PMM-boundary active-set transition (see
+    // SSN::transition_k_flips/transition_w_flips) has combined rank <= freeze_rank_threshold,
+    // skip the mu/rho growth step in update_PMM_parameters() for that iteration. This keeps
+    // rho == rho_at_last_fact_ so SchurPreconditioner's SMW gate stays open instead of being
+    // unconditionally rejected on rho drift, letting a low-rank SMW update stand in for a full
+    // refactorization at the PMM boundary. Default off; not wired to Problem/CLI.
+    bool enable_mu_rho_freeze  = true;
+    int  freeze_rank_threshold = 20; // well under SchurPreconditioner's kSmwRankThreshold=50
+    int  max_freeze_streak     = 3;  // safety cap: force a normal update after this many freezes in a row
+    int  freeze_count          = 0;  // diagnostic: total number of iterations the freeze actually triggered on
+
     // Outputs:
     TerminationStatus opt = TerminationStatus::NumericalError;
     Vec x, y1, y2, z;
@@ -254,7 +266,7 @@ public:
     ResVec compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx);
     T objective_value(const Vec& x_orig);
     void printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z);
-    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, typename SSN<T>::TerminationStatus ssn_opt, T ssn_res, int ssn_inner_iters);
+    void update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, typename SSN<T>::TerminationStatus ssn_opt, T ssn_res, int ssn_inner_iters, int transition_flips);
     bool primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec& cert_z);
     bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     void accept_ssn_iterate(const SSN<T>& NS);

@@ -837,7 +837,7 @@ TEST(UpdatePmmParameters, OptimalScalesMuRhoUpAndShrinksSsnTolByTenPercent) {
   new_res_norms << 1.0, 1.0, 1.0, 1.0;
 
   ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::Optimal,
-                            /*ssn_res=*/0.0, /*ssn_inner_iters=*/0);
+                            /*ssn_res=*/0.0, /*ssn_inner_iters=*/0, /*transition_flips=*/-1);
 
   EXPECT_DOUBLE_EQ(ns.mu, 20.0);
   EXPECT_DOUBLE_EQ(ns.rho, 40.0);
@@ -853,7 +853,7 @@ TEST(UpdatePmmParameters, MuAndRhoStayClampedAtTheirLimitsOnOptimal) {
   res_norms << 1.0, 1.0, 1.0, 1.0;
   new_res_norms << 1.0, 1.0, 1.0, 1.0;
 
-  ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::Optimal, 0.0, 0);
+  ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::Optimal, 0.0, 0, -1);
 
   EXPECT_DOUBLE_EQ(ns.mu, ns.mu_limit);
   EXPECT_DOUBLE_EQ(ns.rho, ns.rho_limit);
@@ -867,7 +867,7 @@ TEST(UpdatePmmParameters, SsnTolFloorsAtEpsLimitOnOptimal) {
   res_norms << 1.0, 1.0, 1.0, 1.0;
   new_res_norms << 1.0, 1.0, 1.0, 1.0;
 
-  ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::Optimal, 0.0, 0);
+  ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::Optimal, 0.0, 0, -1);
 
   EXPECT_DOUBLE_EQ(ns.ssn_tol, ns.eps_limit);
 }
@@ -880,7 +880,7 @@ TEST(UpdatePmmParameters, LineSearchFailedLoosensMuRhoAndGrowsSsnTol) {
   new_res_norms << 5.0, 0.1, 0.1, 0.1;  // worst_res = 5.0
 
   ns.update_PMM_parameters(res_norms, new_res_norms, SSN<double>::TerminationStatus::LineSearchFailed,
-                            /*ssn_res=*/0.0, 0);
+                            /*ssn_res=*/0.0, 0, /*transition_flips=*/-1);
 
   EXPECT_DOUBLE_EQ(ns.mu, 5.0);          // max(mu0=1, 0.5*10)
   EXPECT_DOUBLE_EQ(ns.rho, 10.0);        // max(rho0=1, 0.5*20)

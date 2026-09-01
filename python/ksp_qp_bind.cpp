@@ -114,13 +114,16 @@ Returns dict:
   krylov_iter       – total Krylov iterations
   fact              – total number of factorizations
   smw_count         – total number of SMW preconditioner applications
+  freeze_count      – EXPERIMENTAL: number of PMM iterations the mu/rho freeze policy triggered on
   pmm_tol_achieved  – tolerance achieved by PMM at termination
 -----------------------------------------------------------------------*/
 py::dict solve_from_sif(const std::string& filename,
                         double tol         = 1e-6,
                         long long max_iter = 1'000'000'000LL,
-                        double time_limit  = 600.0) {
-    int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count;
+                        double time_limit  = 600.0,
+                        bool enable_mu_rho_freeze = false,
+                        int freeze_rank_threshold = 20) {
+    int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count, freeze_count;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
     {
         py::gil_scoped_release release;
@@ -131,6 +134,8 @@ py::dict solve_from_sif(const std::string& filename,
         Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
                          PrintWhen::NEVER, PrintWhat::NONE);
         KSP_QP<T>  solver(prob);
+        solver.enable_mu_rho_freeze  = enable_mu_rho_freeze;  // EXPERIMENTAL, default off
+        solver.freeze_rank_threshold = freeze_rank_threshold; // EXPERIMENTAL
         Solution<T> sol = solver.solve();
         opt              = static_cast<int>(sol.opt);
         obj_val          = (double)sol.obj_val;
@@ -142,6 +147,7 @@ py::dict solve_from_sif(const std::string& filename,
         krylov_iter      = sol.krylov_iter;
         fact             = sol.fact;
         smw_count        = sol.smw_count;
+        freeze_count     = sol.freeze_count;
         pmm_tol_achieved = (double)sol.pmm_tol_achieved;
     }
 
@@ -156,6 +162,7 @@ py::dict solve_from_sif(const std::string& filename,
     out["krylov_iter"]      = krylov_iter;
     out["fact"]             = fact;
     out["smw_count"]        = smw_count;
+    out["freeze_count"]     = freeze_count;
     out["pmm_tol_achieved"] = pmm_tol_achieved;
     return out;
 }
@@ -219,16 +226,20 @@ Returns dict with the same keys as solve_from_sif.
 py::dict solve_from_data(const py::dict& pd_dict,
                          double tol         = 1e-6,
                          long long max_iter = 1'000'000'000LL,
-                         double time_limit  = 600.0) {
+                         double time_limit  = 600.0,
+                         bool enable_mu_rho_freeze = false,
+                         int freeze_rank_threshold = 20) {
     KSPQPdata<T> pd = dict_to_kspqp(pd_dict); // reads Python objects
 
-    int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count;
+    int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count, freeze_count;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
     {
         py::gil_scoped_release release;
         Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
                          PrintWhen::NEVER, PrintWhat::NONE);
         KSP_QP<T>  solver(prob);
+        solver.enable_mu_rho_freeze  = enable_mu_rho_freeze;  // EXPERIMENTAL, default off
+        solver.freeze_rank_threshold = freeze_rank_threshold; // EXPERIMENTAL
         Solution<T> sol = solver.solve();
         opt              = static_cast<int>(sol.opt);
         obj_val          = (double)sol.obj_val;
@@ -240,6 +251,7 @@ py::dict solve_from_data(const py::dict& pd_dict,
         krylov_iter      = sol.krylov_iter;
         fact             = sol.fact;
         smw_count        = sol.smw_count;
+        freeze_count     = sol.freeze_count;
         pmm_tol_achieved = (double)sol.pmm_tol_achieved;
     }
 
@@ -254,6 +266,7 @@ py::dict solve_from_data(const py::dict& pd_dict,
     out["krylov_iter"]      = krylov_iter;
     out["fact"]             = fact;
     out["smw_count"]        = smw_count;
+    out["freeze_count"]     = freeze_count;
     out["pmm_tol_achieved"] = pmm_tol_achieved;
     return out;
 }
@@ -369,13 +382,18 @@ The sparse matrices are in CSC format (data / indices / indptr / shape).)");
           py::arg("tol")        = 1e-6,
           py::arg("max_iter")   = 1'000'000'000LL,
           py::arg("time_limit") = 600.0,
+          py::arg("enable_mu_rho_freeze") = false,
+          py::arg("freeze_rank_threshold") = 20,
           R"(Parse a SIF/MPS file and solve it with the KSP-QP solver.
 
 Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter,
 krylov_iter, fact, smw_count, pmm_tol_achieved.
 status == 0  → optimal solution found
 status <  0  → infeasibility detected
-status >  0  → iteration / time limit reached)");
+status >  0  → iteration / time limit reached
+
+enable_mu_rho_freeze / freeze_rank_threshold: EXPERIMENTAL knobs (default off), see
+KSP_QP::enable_mu_rho_freeze in ksp_qp.hpp.)");
 
     m.def("generate_pde_l1l2_qp", &generate_pde_l1l2_qp,
           py::arg("choice"), py::arg("nc"), py::arg("alpha1"), py::arg("alpha2"),
@@ -422,8 +440,13 @@ directly to solve_from_data() and used with kspqp_to_qpalm().)");
           py::arg("tol")        = 1e-6,
           py::arg("max_iter")   = 1'000'000'000LL,
           py::arg("time_limit") = 600.0,
+          py::arg("enable_mu_rho_freeze") = false,
+          py::arg("freeze_rank_threshold") = 20,
           R"(Solve with KSP-QP using already-parsed problem data (dict from parse_sif).
 
 Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter,
-krylov_iter, fact, smw_count, pmm_tol_achieved.)");
+krylov_iter, fact, smw_count, pmm_tol_achieved.
+
+enable_mu_rho_freeze / freeze_rank_threshold: EXPERIMENTAL knobs (default off), see
+KSP_QP::enable_mu_rho_freeze in ksp_qp.hpp.)");
 }

@@ -152,6 +152,12 @@ public:
     int linesearch_fail = 0, krylov_fail = 0;
     bool krylov_converged = true;
 
+    // EXPERIMENTAL: rank of the active-set transition (K,W flips) between the previous PMM
+    // iteration's converged active set and the first Newton evaluation of this one, captured by
+    // the first prepare_newton_system() call after update_ssn_system(). -1 = not yet measured
+    // (first SSN solve of the whole problem, no prior active set to compare against).
+    int transition_k_flips = -1, transition_w_flips = -1;
+
 #if SSN_ENABLE_TIMERS
     // TIMER: wall-clock seconds per SSN-loop phase for the current SSN iteration in solve_ssn();
     // reset at the top of each iteration and printed to stderr at the end of that same iteration.
@@ -242,6 +248,11 @@ public:
     bool ldlt_pattern_dirty_ = true; // means K's dimension changed (n_active_W changed), requires analyzePattern.
     bool ldlt_numeric_dirty_ = true; // means K's values changed (H_diag or G rows swapped), requires factorize.
 
+    // EXPERIMENTAL: true iff the next prepare_newton_system() call is the first one since
+    // update_ssn_system() -- i.e. it measures the PMM-boundary active-set transition. See
+    // transition_k_flips/transition_w_flips above.
+    bool at_pmm_boundary_ = true;
+
     SSN(const int Q_info, const Vec& Q_diag, const SpMat& L,
         const SpMat& A, const SpMat& B, const SpMat& A_tr, const SpMat& B_tr,
         const Vec& c, const Vec& b,
@@ -302,6 +313,7 @@ public:
         A_tr_y1_ = A_tr * y1;        // y1 is fixed for the entire SSN run; cache A^T y1 once.
         linesearch_fail = 0;         // Reset line search failure count for this SSN iteration.
         cg.preconditioner().reset_smw_fail_streak(); // Reset SMW suppression.
+        at_pmm_boundary_ = true;     // Next prepare_newton_system() call measures the PMM-boundary transition.
     }
 
     template <typename Derived>

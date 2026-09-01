@@ -798,15 +798,28 @@ void KSP_QP<T>::printable_sol(const Vec& x, const Vec& y1, const Vec& y2, const 
 }
 
 template <typename T>
-void KSP_QP<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, typename SSN<T>::TerminationStatus ssn_opt, T ssn_res, int ssn_inner_iters) {
+void KSP_QP<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new_res_norms, typename SSN<T>::TerminationStatus ssn_opt, T ssn_res, int ssn_inner_iters, int transition_flips) {
     using SsnStatus = typename SSN<T>::TerminationStatus;
 
     T worst_res = res_norms.maxCoeff();
     T new_worst_res = new_res_norms.maxCoeff();
 
+    // EXPERIMENTAL: withhold the mu/rho growth step below when the PMM-boundary active-set
+    // transition was small-rank, to keep SchurPreconditioner's SMW gate open for the next
+    // iteration (see enable_mu_rho_freeze). Never applied to the LineSearchFailed recovery
+    // branch -- that shrinks mu/rho to recover from a failed Newton step, unrelated to SMW
+    // opportunism, and freezing it would work against robustness.
+    bool freeze = enable_mu_rho_freeze
+               && transition_flips >= 0
+               && transition_flips <= freeze_rank_threshold
+               && freeze_streak_ < max_freeze_streak;
+    if (freeze) { ++freeze_streak_; ++freeze_count; } else { freeze_streak_ = 0; }
+
     if (ssn_opt == SsnStatus::Optimal) {
-        mu = std::min(mu_limit, T(2) * mu);
-        rho = std::min(rho_limit, T(2) * rho);
+        if (!freeze) {
+            mu = std::min(mu_limit, T(2) * mu);
+            rho = std::min(rho_limit, T(2) * rho);
+        }
         ssn_tol = std::max(eps_limit, T(0.1) * ssn_tol);
 
     } else if (ssn_opt == SsnStatus::LineSearchFailed) {
@@ -815,8 +828,10 @@ void KSP_QP<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new
         ssn_tol = std::min({worst_res, T(1.1) * ssn_tol, T(1e-2)});
 
     } else if (new_worst_res > T(0.9) * worst_res) {
-        mu = std::min(mu_limit, T(1.1) * mu);
-        rho = std::min(rho_limit, T(1.1) * rho);
+        if (!freeze) {
+            mu = std::min(mu_limit, T(1.1) * mu);
+            rho = std::min(rho_limit, T(1.1) * rho);
+        }
     }
 }
 
@@ -992,6 +1007,8 @@ Solution<T> KSP_QP<T>::solve() {
     pmm_iter = 0;
     ssn_iter = 0;
     ssn_tol_achieved = T(0);
+    freeze_streak_ = 0;
+    freeze_count = 0;
 
     Vec delta_y1 = Vec::Zero(M);
     Vec delta_z = Vec::Zero(N);
@@ -1086,7 +1103,9 @@ Solution<T> KSP_QP<T>::solve() {
         }
 
         // Update PMM parameters based on SSN solve quality.
-        update_PMM_parameters(res_norms, new_res_norms, NS.opt, ssn_tol_achieved, NS.iter);
+        int transition_flips = (NS.transition_k_flips < 0 || NS.transition_w_flips < 0)
+                                ? -1 : (NS.transition_k_flips + NS.transition_w_flips);
+        update_PMM_parameters(res_norms, new_res_norms, NS.opt, ssn_tol_achieved, NS.iter, transition_flips);
         res_norms = new_res_norms; // for next iteration
 
         // Carry Ax, Bx forward.
@@ -1144,5 +1163,5 @@ Solution<T> KSP_QP<T>::solve() {
     krylov_fail = NS.krylov_fail;
     kkt_ldlt_used = NS.kkt_ldlt_used;
 
-    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, pmm_iter, ssn_iter, krylov_iter, fact, NS.smw_count, pmm_tol_achieved, ssn_tol_achieved, setup_time, solve_time, linesearch_fail, krylov_fail);
+    return Solution<T>(opt, x_sol, y1_sol, y2_sol, z_sol, obj_val, pmm_iter, ssn_iter, krylov_iter, fact, NS.smw_count, pmm_tol_achieved, ssn_tol_achieved, setup_time, solve_time, linesearch_fail, krylov_fail, freeze_count);
 }

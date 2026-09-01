@@ -66,16 +66,18 @@ public:
     double run_time;     // setup_time + solve_time
     int linesearch_fail; // Number of linesearch failures
     int krylov_fail;     // Number of Krylov failures
+    int freeze_count;    // EXPERIMENTAL: number of PMM iterations the mu/rho freeze policy triggered on; see KSP_QP::enable_mu_rho_freeze
 
     Solution(TerminationStatus opt, const Vec& x, const Vec& y1, const Vec& y2, const Vec& z,
              T obj_val, int pmm_iter, int ssn_iter, int krylov_iter, int fact, int smw_count,
              T pmm_tol_achieved, T ssn_tol_achieved,
-             double setup_time, double solve_time, int linesearch_fail, int krylov_fail)
+             double setup_time, double solve_time, int linesearch_fail, int krylov_fail,
+             int freeze_count = 0)
     : opt(opt), x(x), y1(y1), y2(y2), z(z), obj_val(obj_val),
       pmm_iter(pmm_iter), ssn_iter(ssn_iter), krylov_iter(krylov_iter), fact(fact), smw_count(smw_count),
       pmm_tol_achieved(pmm_tol_achieved), ssn_tol_achieved(ssn_tol_achieved),
       setup_time(setup_time), solve_time(solve_time), run_time(setup_time + solve_time),
-      linesearch_fail(linesearch_fail), krylov_fail(krylov_fail)
+      linesearch_fail(linesearch_fail), krylov_fail(krylov_fail), freeze_count(freeze_count)
     {}
 
     void print_summary() const {
@@ -115,6 +117,9 @@ public:
             std::cout << "Number of low-rank updates (smw_count): " << smw_count << std::endl;
             std::cout << "PMM tolerance achieved (pmm_tol_achieved): " << pmm_tol_achieved << std::endl;
             std::cout << "SSN tolerance achieved (ssn_tol_achieved): " << ssn_tol_achieved << std::endl;
+        }
+        if (freeze_count > 0) {
+            std::cout << "Number of mu/rho freeze iterations (freeze_count): " << freeze_count << std::endl;
         }
         std::cout << "Number of linesearch failures (linesearch_fail): " << linesearch_fail << std::endl;
         std::cout << "Number of Krylov failures (krylov_fail): " << krylov_fail << std::endl;
