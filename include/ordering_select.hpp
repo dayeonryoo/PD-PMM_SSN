@@ -2,7 +2,8 @@
 #include <Eigen/SparseCholesky>
 #include <Eigen/OrderingMethods>
 #ifdef KSP_QP_HAVE_METIS
-#include <iostream>
+#include <iostream>  // Eigen's MetisSupport.h uses std::cerr without including this itself
+#include <Eigen/MetisSupport>
 #endif
 #include <chrono>
 #include <cstdint>
@@ -65,8 +66,15 @@ Candidate probe(const std::string& name, const SpMat& A_sym) {
 // ever factorizing. Returns per-candidate stats and the name of the winner (least nnz_l).
 template <typename SpMat, typename Index>
 Result try_orderings(const SpMat& A_sym) {
+    // TEMPORARY (isolated AMD-vs-METIS runtime experiment, revert before committing): when set,
+    // skip probing the other ordering entirely so the forced one's own factorize/solve time is
+    // measured with zero trial overhead, isolating "is this ordering itself faster" from "is
+    // paying for the trial-and-compare worth it".
+    const char* forced = std::getenv("KSP_QP_FORCE_ORDERING");
+
     Result result;
-    result.candidates.push_back(probe<SpMat, Eigen::AMDOrdering<Index>>("AMD", A_sym));
+    if (!forced || std::string(forced) == "AMD")
+        result.candidates.push_back(probe<SpMat, Eigen::AMDOrdering<Index>>("AMD", A_sym));
 #ifdef KSP_QP_HAVE_METIS
     // Eigen::MetisOrdering passes StorageIndex buffers straight to METIS_NodeND's idx_t*
     // parameters with no size check; METIS is built here with IDXTYPEWIDTH=32 (CMakeLists.txt)
@@ -74,7 +82,8 @@ Result try_orderings(const SpMat& A_sym) {
     static_assert(sizeof(Index) == sizeof(std::int32_t),
                   "METIS was built with IDXTYPEWIDTH=32 (see CMakeLists.txt); Eigen's "
                   "StorageIndex must be 32-bit or MetisOrdering will silently corrupt memory.");
-    result.candidates.push_back(probe<SpMat, Eigen::MetisOrdering<Index>>("METIS", A_sym));
+    if (!forced || std::string(forced) == "METIS")
+        result.candidates.push_back(probe<SpMat, Eigen::MetisOrdering<Index>>("METIS", A_sym));
 #endif
 
     result.winner = result.candidates.front().name;

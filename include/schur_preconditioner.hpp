@@ -529,23 +529,36 @@ private:
             }
         }
 
-        // CHOLMOD-like ordering selection: on a fresh pattern (same trigger as the assembly
-        // rebuild above, since numeric_dirty_ and pattern_dirty_ are set together on every
-        // structural change -- see the flag-dependency doc block at the top of this class), try
-        // AMD/METIS on the freshly-assembled P_hat and (re)construct the solver with
-        // whichever produces the least fill. Always reconstructing (rather than only on a
-        // changed winner) is deliberate: a fresh empty solver is trivial next to the
-        // analyzePattern()+factorize() that unconditionally follow in finish_factorization().
+        // CHOLMOD-like ordering selection, trialed only for the first kOrderSelectTrialLimit
+        // pattern_dirty_ firings, then locked to the majority winner -- see the policy doc
+        // comment on ldlt_order_locked_ above. Always reconstructing the solver on a fresh
+        // pattern (rather than only on a changed winner) is deliberate even once locked: a fresh
+        // empty solver is trivial next to the analyzePattern()+factorize() that unconditionally
+        // follow in finish_factorization().
         if (pattern_dirty_) {
-            auto order_result = ordering_select::try_orderings<SpMat, typename SpMat::StorageIndex>(sol.P_hat);
+            if (!ldlt_order_locked_) {
+                auto order_result = ordering_select::try_orderings<SpMat, typename SpMat::StorageIndex>(sol.P_hat);
 #if SSN_ENABLE_TIMERS
-            fprintf(stderr, "[SchurOrderSelect]");
-            for (const auto& c : order_result.candidates)
-                fprintf(stderr, " %s(nnzL=%lld,t=%.6f)", c.name.c_str(), c.nnz_l, c.analyze_seconds);
-            fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
+                fprintf(stderr, "[SchurOrderSelect]");
+                for (const auto& c : order_result.candidates)
+                    fprintf(stderr, " %s(nnzL=%lld,t=%.6f)", c.name.c_str(), c.nnz_l, c.analyze_seconds);
+                fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
 #endif
-            sol.ldlt = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>(order_result.winner);
-            current_ordering_ = order_result.winner;
+                if (order_result.winner == "METIS") ++ldlt_order_votes_metis_;
+                else ++ldlt_order_votes_amd_;
+                ++ldlt_order_trials_;
+                current_ordering_ = order_result.winner;
+
+                if (ldlt_order_trials_ >= kOrderSelectTrialLimit) {
+                    ldlt_order_locked_ = true;
+                    current_ordering_ = (ldlt_order_votes_metis_ > ldlt_order_votes_amd_) ? "METIS" : "AMD";
+#if SSN_ENABLE_TIMERS
+                    fprintf(stderr, "[SchurOrderLock] LDLT branch locked to %s after %d trials (amd=%d, metis=%d)\n",
+                            current_ordering_.c_str(), ldlt_order_trials_, ldlt_order_votes_amd_, ldlt_order_votes_metis_);
+#endif
+                }
+            }
+            sol.ldlt = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>(current_ordering_);
         }
 
         finish_factorization(*sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, structural_change, n_act);
@@ -626,18 +639,14 @@ private:
             }
         }
 
-        // See the matching block in factorize_by_ldlt() for why this is gated on pattern_dirty_
-        // and always reconstructs.
+        // No ordering trial here, unlike factorize_by_ldlt(): measured across 5 Cholesky-branch
+        // problems (Maros-Meszaros + PDE-constrained), AMD won on runtime every time, including
+        // cases where METIS's nnz(L) fill count was strictly less -- see the policy doc comment
+        // on ldlt_order_locked_ above. Always reconstructs on a fresh pattern regardless (trivial
+        // next to the analyzePattern()+factorize() that follow in finish_factorization()).
         if (pattern_dirty_) {
-            auto order_result = ordering_select::try_orderings<SpMat, typename SpMat::StorageIndex>(sol.P);
-#if SSN_ENABLE_TIMERS
-            fprintf(stderr, "[SchurOrderSelect]");
-            for (const auto& c : order_result.candidates)
-                fprintf(stderr, " %s(nnzL=%lld,t=%.6f)", c.name.c_str(), c.nnz_l, c.analyze_seconds);
-            fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
-#endif
-            sol.llt = ordering_select::make_solver<SpMat, /*IsLdlt=*/false>(order_result.winner);
-            current_ordering_ = order_result.winner;
+            sol.llt = ordering_select::make_solver<SpMat, /*IsLdlt=*/false>("AMD");
+            current_ordering_ = "AMD";
         }
 
         finish_factorization(*sol.llt, sol.P, s, /*is_ldlt=*/false, structural_change);
@@ -976,6 +985,30 @@ private:
     };
     std::variant<std::monostate, CholSolver, LdltSolver> active_solver_;
     std::string current_ordering_ = "AMD"; // set on each pattern_dirty_ ordering (re)selection below
+
+    // ------ Ordering-selection policy (see factorize_by_ldlt()/factorize_by_chol()) ------
+    //
+    // Measured on Maros-Meszaros + PDE-constrained problems (2026-09-01): on the Cholesky branch
+    // AMD wins on runtime in every problem tested (5/5), including ones where METIS's nnz(L)
+    // fill count is strictly less -- METIS's nested-dissection fill reduction doesn't track
+    // Eigen's simplicial (non-supernodal) factorize cost there. So the Cholesky branch never
+    // trials METIS at all, unconditionally using AMD (see factorize_by_chol()).
+    //
+    // On the LDLT branch, METIS *can* be a large, sustained win (4-4.5x on PDE mesh problems:
+    // state/control nc7/nc8), but on generic (non-mesh) Maros-Meszaros LDLT problems AMD wins the
+    // fill contest almost every firing even at ~2M nnz(L) scale, and whichever ordering wins does
+    // so from its very first firing and stays stable -- no case observed where the winner flips
+    // partway through a solve. Given that, trialing both orderings on every pattern_dirty_ firing
+    // is pure waste once the winner is established: on high active-set-churn problems the summed
+    // trial cost was measured at 35-98% of total factorize time, and locking to the trial winner
+    // after just a few firings measured 23-77% faster than re-trialing forever. So the LDLT branch
+    // trials both orderings for the first kOrderSelectTrialLimit firings, then locks to whichever
+    // won the majority of those trials (ties favor AMD) for the rest of the solve.
+    static constexpr int kOrderSelectTrialLimit = 3;
+    int  ldlt_order_trials_      = 0;
+    int  ldlt_order_votes_amd_   = 0;
+    int  ldlt_order_votes_metis_ = 0;
+    bool ldlt_order_locked_      = false;
 
     int n_act_ = 0;
     Eigen::ComputationInfo info_ = Eigen::Success;
