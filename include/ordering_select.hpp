@@ -2,7 +2,7 @@
 #include <Eigen/SparseCholesky>
 #include <Eigen/OrderingMethods>
 #ifdef KSP_QP_HAVE_METIS
-#include <Eigen/MetisSupport>
+#include <iostream>
 #endif
 #include <chrono>
 #include <cstdint>
