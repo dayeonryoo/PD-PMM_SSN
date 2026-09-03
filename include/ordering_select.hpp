@@ -203,7 +203,6 @@ inline BfsStructuralProfile bfs_profile(const std::vector<std::vector<int>>& adj
 
     prof.v0 = v0;
     prof.v1 = v1;
-    prof.v2 = sweep2.farthest_vertex;
     prof.n_reached    = sweep2.reached;
     prof.eccentricity = static_cast<int>(sweep2.level_sizes.size()) - 1;
     prof.max_level_size = *std::max_element(sweep2.level_sizes.begin(), sweep2.level_sizes.end());
