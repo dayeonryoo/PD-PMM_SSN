@@ -36,7 +36,7 @@ struct SchurPrecScopedTimer {
 // Flag-dependency chain (SSN + SchurPreconditioner)
 // -------------------------------------------------------------------------------------------------
 // "PCG with SMW update and LDLT fallback" needs independent flag tracking at three layers, all
-// driven by the active sets -- K and W -- changes, computed once per SSN iteration in
+// driven by the active sets, K and W, changes, computed once per SSN iteration in
 // SSN::prepare_newton_system() as SSN::ActiveSetDelta{k_changed, w_changed}:
 //
 // Layer 1 -- SSN::prepare_newton_system()
@@ -87,7 +87,7 @@ struct SchurPrecScopedTimer {
 //                     orthogonal to the pattern/numeric split above -- see try_build_smw(). Its
 //                     capacitance-update math only recomputes H_diag-derived (rho-dependent) and
 //                     mu-dependent values for the classified delta (flipped active_K indices, or
-//                     added W rows); everywhere else -- every RETAINED row/column -- it implicitly
+//                     added W rows); everywhere else -- every retained row/column -- it implicitly
 //                     reuses P_old, snapshotted at the last full rebuild. A rho drift silently
 //                     invalidates P_old's retained active_K entries (H_diag(i) = Q_diag(i) + 1/rho);
 //                     a mu drift silently invalidates P_old's retained (1/mu)I diagonal (a uniform,
@@ -117,10 +117,7 @@ public:
     SchurPreconditioner(const SpMat& G, const SpMat& G_tr, const Vec& H_diag, const BoolArr& active_K, T mu)
         : G_(&G), G_tr_(&G_tr), H_diag_(&H_diag), active_K_(&active_K), mu_(mu) {}
 
-    // Sets the number of equality-constraint (A) rows once, from data already known when the
-    // owning SSN is constructed. Prefer this over relying on set_data()'s lazy inference below,
-    // which stays unset (-1) -- disabling SMW via smw_gate_open()'s MissingData check -- for as
-    // long as G.rows() == 0 (e.g. no equality rows and no active W rows yet).
+    // Sets the number of equality-constraint (A) rows once from data. 
     void set_num_equality_rows(int M) { M_rows_ = M; }
 
     void set_data(const SpMat& G, const SpMat& G_tr, const Vec& H_diag,
@@ -151,8 +148,6 @@ public:
 
         // M_rows_ = number of equality-constraint (A) rows = G.rows() - n_active_W; constant.
         // Fallback only: a no-op once set_num_equality_rows() has already pinned M_rows_ >= 0.
-        // Callers that never call it get this lazy inference instead, which stays unset (-1)
-        // for as long as G.rows() == 0 -- see set_num_equality_rows()'s doc comment.
         if (M_rows_ < 0 && static_cast<int>(G.rows()) > 0)
             M_rows_ = static_cast<int>(G.rows()) - static_cast<int>(active_W.count());
     }
@@ -213,19 +208,15 @@ public:
     enum class SmwRejectReason {
         None,                         // SMW was used, or no attempt has run yet.
         ForcedRebuild,                // Caller requested a full rebuild (force_full_rebuild()/arm(force_rebuild=true)).
-        Suppressed,                   // Fail-streak threshold reached; SMW temporarily disabled.
+        Suppressed,                   // Fail-streak threshold reached; SMW disabled.
         MissingData,                  // active_W/B_rm not supplied, or no equality rows tracked yet.
         FactorizationMethodChanged,   // use_ldlt_ differs from the method used at the last full factorization.
         NoSnapshot,                   // No prior full-rebuild snapshot to update from.
         RhoChangedSinceSnapshot,      // rho drifted since the snapshot; the low-rank update's implicit
-                                       // "H_diag unchanged outside the classified delta" assumption would
-                                       // be violated (H_diag's active_K entries depend on rho), so the
-                                       // capacitance math can't be trusted even for a nonzero-rank delta.
+                                      // "H_diag unchanged outside the classified delta" assumption would
+                                      // be violated, so the capacitance math can't be trusted.
         MuChangedSinceSnapshot,       // mu drifted since the snapshot. The (1/mu)I block spans every
-                                       // row of P/P_hat, not just the classified delta's added rows (the
-                                       // only ones the capacitance math actually recomputes with fresh
-                                       // mu) -- so unlike rho, this affects every RETAINED row too, and
-                                       // is a uniform (hence full-rank, not low-rank-correctable) shift.
+                                      // row of P/P_hat, so this is a full-rank shift.
         RankZeroOrExceedsThreshold,   // Active-set delta rank is 0 or exceeds the SMW update-size threshold.
         SingularCapacitance,          // Capacitance matrix was (near-)singular; fell back to full rebuild.
     };
@@ -420,9 +411,6 @@ private:
     }
 
     // Shared tail of factorize_by_ldlt/factorize_by_chol.
-    // structural_change: true iff active_K/active_W/G changed (not just mu/rho values) --
-    // must be captured by the caller before numeric_dirty_ is reset, since numeric_dirty_
-    // itself is what structural_change reports (chol resets it partway through its own body).
     template <typename FactorSolver>
     void finish_factorization(FactorSolver& solver, const SpMat& P, Eigen::Index s, bool is_ldlt,
                                bool structural_change, int n_act = -1) {
@@ -529,33 +517,42 @@ private:
             }
         }
 
-        // CHOLMOD-like ordering selection, trialed only for the first kOrderSelectTrialLimit
-        // pattern_dirty_ firings, then locked to the majority winner -- see the policy doc
-        // comment on ldlt_order_locked_ above. Always reconstructing the solver on a fresh
-        // pattern (rather than only on a changed winner) is deliberate even once locked: a fresh
-        // empty solver is trivial next to the analyzePattern()+factorize() that unconditionally
-        // follow in finish_factorization().
+        // Cheap ordering-selection cascade (see ordering_select.hpp), sampled only for the first
+        // kOrderSelectSampleLimit firings that actually run a real evaluation (Part 2/3 -- a
+        // Part-1 size-screen verdict is O(1) and free to keep re-happening forever), then locked
+        // to the majority winner.
         if (pattern_dirty_) {
             if (!ldlt_order_locked_) {
-                auto order_result = ordering_select::try_orderings<SpMat, typename SpMat::StorageIndex>(sol.P_hat);
+                auto decision = ordering_select::select_ordering<SpMat, typename SpMat::StorageIndex>(
+                    sol.P_hat, ldlt_order_cfg_);
 #if SSN_ENABLE_TIMERS
-                fprintf(stderr, "[SchurOrderSelect]");
-                for (const auto& c : order_result.candidates)
-                    fprintf(stderr, " %s(nnzL=%lld,t=%.6f)", c.name.c_str(), c.nnz_l, c.analyze_seconds);
-                fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
+                fprintf(stderr, "[SchurOrderSelect] screen=%s winner=%s", ordering_select::screen_name(decision.screen),
+                        decision.winner.c_str());
+                if (decision.screen != ordering_select::DecisionScreen::kSizeThreshold)
+                    fprintf(stderr, " lnz=%lld anz=%lld t=%.6f", decision.amd.nnz_l,
+                            decision.amd.anz, decision.amd.analyze_seconds);
+                if (decision.screen == ordering_select::DecisionScreen::kBfsStructural)
+                    fprintf(stderr, " ecc=%d maxlevel=%d maxfrac=%.3f slope=%.3f fit=%d dropped=%zu",
+                            decision.bfs.eccentricity, decision.bfs.max_level_size, decision.bfs.max_level_fraction,
+                            decision.bfs.growth_slope, static_cast<int>(decision.bfs.fit_status),
+                            decision.bfs.dropped_hub_vertices.size());
+                fprintf(stderr, "\n");
 #endif
-                if (order_result.winner == "METIS") ++ldlt_order_votes_metis_;
-                else ++ldlt_order_votes_amd_;
-                ++ldlt_order_trials_;
-                current_ordering_ = order_result.winner;
+                current_ordering_ = decision.winner;
 
-                if (ldlt_order_trials_ >= kOrderSelectTrialLimit) {
-                    ldlt_order_locked_ = true;
-                    current_ordering_ = (ldlt_order_votes_metis_ > ldlt_order_votes_amd_) ? "METIS" : "AMD";
+                if (decision.screen != ordering_select::DecisionScreen::kSizeThreshold) {
+                    if (decision.winner == "METIS") ++ldlt_order_votes_metis_;
+                    else ++ldlt_order_votes_amd_;
+                    ++ldlt_order_samples_;
+
+                    if (ldlt_order_samples_ >= kOrderSelectSampleLimit) {
+                        ldlt_order_locked_ = true;
+                        current_ordering_ = (ldlt_order_votes_metis_ > ldlt_order_votes_amd_) ? "METIS" : "AMD";
 #if SSN_ENABLE_TIMERS
-                    fprintf(stderr, "[SchurOrderLock] LDLT branch locked to %s after %d trials (amd=%d, metis=%d)\n",
-                            current_ordering_.c_str(), ldlt_order_trials_, ldlt_order_votes_amd_, ldlt_order_votes_metis_);
+                        fprintf(stderr, "[SchurOrderLock] LDLT branch locked to %s after %d real evaluations (amd=%d, metis=%d)\n",
+                                current_ordering_.c_str(), ldlt_order_samples_, ldlt_order_votes_amd_, ldlt_order_votes_metis_);
 #endif
+                    }
                 }
             }
             sol.ldlt = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>(current_ordering_);
@@ -582,25 +579,18 @@ private:
         auto& sol = std::get<CholSolver>(active_solver_);
 
         const bool rho_changed = (rho_ != rho_at_last_fact_);
-        // Captured before the branch below runs: numeric_dirty_ is reset to false partway
-        // through it. Deliberately NOT "numeric_dirty_ || rho_changed" -- a rho-only change
-        // still fully rebuilds sol.P (see the branch condition), but active_K/active_W/G are
-        // provably unchanged, so snapshot_state() doesn't need to re-copy them for that case.
+        // Captured before the branch below runs: numeric_dirty_ is reset to false partway through it.
         const bool structural_change = numeric_dirty_;
         {
             SCHUR_PREC_TIMER_BLOCK(assembly_time_);
             if (numeric_dirty_ || rho_changed) {
-                // Rebuild G E G^T. Needed on a pattern change (numeric_dirty_) or a rho-only
-                // change: E = 1/H_diag is nonlinear in rho on active_K entries, so unlike mu's
-                // separate additive (1/mu) I term below, it can't be diagonal-shifted.
+                // Rebuild G E G^T. Needed on a pattern change (numeric_dirty_) or a rho-only change.
                 assert(H_diag.minCoeff() > T(0));
                 E_diag_.resize(n);
                 for (Eigen::Index i = 0; i < n; ++i)
                     E_diag_(i) = active_K(i) ? T(1) / H_diag(i) : T(0);
 
-                // Scale G's columns by sqrt(E) directly (E >= 0, so sqrt is well-defined)
-                // instead of routing through a general SparseMatrix * DiagonalMatrix product:
-                // this is a plain O(nnz(G)) value scan over G's own storage.
+                // Scale G's columns by sqrt(E) directly (E >= 0, so sqrt is well-defined).
                 SpMat G_scaled = G;
                 for (Eigen::Index k = 0; k < G_scaled.outerSize(); ++k) {
                     const T scale = std::sqrt(E_diag_(k));
@@ -609,15 +599,11 @@ private:
                 }
                 G_scaled.prune(T(0)); // drop explicit zeros from inactive-K columns.
 
-                // P = G E G^T = G_scaled * G_scaled^T, but SimplicialLLT only ever reads the
-                // lower triangle: rankUpdate(., alpha=0) assigns that triangle directly instead
-                // of materializing the full symmetric product via a general sparse-sparse GEMM.
+                // P = G E G^T = G_scaled * G_scaled^T, but SimplicialLLT only ever reads the lower triangle.
                 sol.P.template selfadjointView<Eigen::Lower>().rankUpdate(G_scaled, T(0));
                 numeric_dirty_ = false;
 
-                // Add (1/mu) I as a sparse matrix addition so the diagonal stays structurally
-                // present -- coeffRef(i, i) would otherwise insert a fresh nonzero (an O(nnz)
-                // shift plus an uncompress) whenever row i of G is structurally empty.
+                // Add (1/mu) I as a sparse matrix addition.
                 SpMat mu_diag(s, s);
                 mu_diag.setIdentity();
                 mu_diag *= T(1) / mu_;
@@ -639,11 +625,8 @@ private:
             }
         }
 
-        // No ordering trial here, unlike factorize_by_ldlt(): measured across 5 Cholesky-branch
-        // problems (Maros-Meszaros + PDE-constrained), AMD won on runtime every time, including
-        // cases where METIS's nnz(L) fill count was strictly less -- see the policy doc comment
-        // on ldlt_order_locked_ above. Always reconstructs on a fresh pattern regardless (trivial
-        // next to the analyzePattern()+factorize() that follow in finish_factorization()).
+        // No ordering trial here, unlike factorize_by_ldlt(): AMD wins on runtime on the
+        // Cholesky branch even in cases where METIS's nnz(L) fill count is strictly less.
         if (pattern_dirty_) {
             sol.llt = ordering_select::make_solver<SpMat, /*IsLdlt=*/false>("AMD");
             current_ordering_ = "AMD";
@@ -694,30 +677,22 @@ private:
             return false;
         }
         // No usable snapshot to update from -- either none has ever been taken (has_snapshot_
-        // false), or record_smw_rebuild() wiped G_old_ after a fail-streak. A legitimately empty
-        // G_old_ (M=0, no active W rows) is NOT the same as a wiped snapshot, so only reject on
-        // an actual wipe, not merely because rows()==0.
+        // false), or record_smw_rebuild() wiped G_old_ after a fail-streak.
         if (!has_snapshot_ || (G_old_.rows() == 0 && snapshot_wiped_by_fail_streak_)) {
             smw_last_reject_reason_ = SmwRejectReason::NoSnapshot;
             return false;
         }
-        // The low-rank update only ever recomputes H_diag-derived values for the classified delta
-        // (flipped active_K indices); everywhere else it implicitly reuses P_old, which was
-        // factorized against the snapshot's rho. On active_K entries H_diag(i) = Q_diag(i) + 1/rho,
-        // so a rho drift since the snapshot silently invalidates that reuse -- even for a delta
-        // that doesn't touch active_K at all (e.g. a pure W-row add/delete). Reject unconditionally
-        // rather than trying to patch it in.
+        // The low-rank reuses P_old, which was factorized against the snapshot's rho.
+        // On active_K entries H_diag(i) = Q_diag(i) + 1/rho, so a rho drift invalidates that reuse,
+        // so reject the low-rank updates.
         if (rho_ != rho_old_) {
             smw_last_reject_reason_ = SmwRejectReason::RhoChangedSinceSnapshot;
             return false;
         }
-        // Same shape of problem for mu, but broader: the (1/mu)I block spans every row of
-        // P/P_hat, not just active_K entries. The capacitance math only recomputes it fresh for
-        // *added* W rows (block 3 in build_capacitance_setup()); every RETAINED row's (1/mu)
-        // entry is inherited unchanged from P_old via the Y_all_ = P_old^-1 [...] solves. A mu
-        // drift is therefore a uniform shift across all retained rows -- full-rank, not
-        // low-rank -- so the Woodbury correction cannot represent it at all, regardless of
-        // which (if any) indices the classified delta touches.
+        // The (1/mu)I block spans every row of P/P_hat, not just active_K entries.
+        // The capacitance math only recomputes it fresh for added W rows; every retained rows's
+        // (1/mu) entry is inherited unchanged from P_old via the Y_all_ = P_old^-1 [...] solves.
+        // A mu drift is therefore a full-rank shift, so reject the low-rank updates.
         if (mu_ != mu_old_) {
             smw_last_reject_reason_ = SmwRejectReason::MuChangedSinceSnapshot;
             return false;
@@ -919,13 +894,6 @@ private:
     }
 
     // Helper: snapshot last full-rebuild state for next SMW attempt.
-    // structural_change: true iff active_K/active_W/G changed (not just mu/rho values). If true,
-    // G_old_/active_K_old_/active_W_old_ are re-copied (G_old_'s deep copy is O(nnz(G))); if
-    // false, only H_diag_old_/mu_old_/rho_old_ are refreshed, since a mu/rho-only call provably
-    // left G/active_K/active_W unchanged. mu_old_/rho_old_ must always refresh here (not just on
-    // structural_change): the cheap diagonal-patch path in factorize_by_chol()/factorize_by_ldlt()
-    // also rewrites P_old's stored (1/mu)/(rho-dependent) diagonal without going through a full
-    // rebuild, so this is the only point that stays in sync with what's actually baked into it.
     void snapshot_state(bool structural_change) {
         if (structural_change) {
             G_old_        = *G_;
@@ -971,10 +939,8 @@ private:
     bool use_ldlt_ = false;
     bool use_ldlt_at_last_fact_ = false;
 
-    // ldlt/llt are type-erased (ordering_select::ISymmetricSolver) rather than concrete Eigen
-    // types so the winning ordering (AMD/METIS, chosen fresh on each pattern_dirty_ rebuild --
-    // see factorize_by_ldlt()/factorize_by_chol()) can vary without a variant over
-    // {AMD,METIS} x {LDLT,LLT}. Null until the first successful factorize_by_*() call.
+    // ldlt/llt are type-erased (ordering_select::ISymmetricSolver) rather than concrete Eigen types
+    // so the winning ordering (AMD/METIS, chosen fresh on each pattern_dirty_ rebuild) can vary.
     struct CholSolver {
         SpMat P;
         std::unique_ptr<ordering_select::ISymmetricSolver<SpMat>> llt;
@@ -988,27 +954,22 @@ private:
 
     // ------ Ordering-selection policy (see factorize_by_ldlt()/factorize_by_chol()) ------
     //
-    // Measured on Maros-Meszaros + PDE-constrained problems (2026-09-01): on the Cholesky branch
-    // AMD wins on runtime in every problem tested (5/5), including ones where METIS's nnz(L)
+    // Empirically, on the Cholesky branch AMD wins on runtime even in cases where METIS's nnz(L)
     // fill count is strictly less -- METIS's nested-dissection fill reduction doesn't track
     // Eigen's simplicial (non-supernodal) factorize cost there. So the Cholesky branch never
     // trials METIS at all, unconditionally using AMD (see factorize_by_chol()).
     //
-    // On the LDLT branch, METIS *can* be a large, sustained win (4-4.5x on PDE mesh problems:
-    // state/control nc7/nc8), but on generic (non-mesh) Maros-Meszaros LDLT problems AMD wins the
-    // fill contest almost every firing even at ~2M nnz(L) scale, and whichever ordering wins does
-    // so from its very first firing and stays stable -- no case observed where the winner flips
-    // partway through a solve. Given that, trialing both orderings on every pattern_dirty_ firing
-    // is pure waste once the winner is established: on high active-set-churn problems the summed
-    // trial cost was measured at 35-98% of total factorize time, and locking to the trial winner
-    // after just a few firings measured 23-77% faster than re-trialing forever. So the LDLT branch
-    // trials both orderings for the first kOrderSelectTrialLimit firings, then locks to whichever
-    // won the majority of those trials (ties favor AMD) for the rest of the solve.
-    static constexpr int kOrderSelectTrialLimit = 3;
-    int  ldlt_order_trials_      = 0;
+    // On the LDLT branch, ordering_select::select_ordering() is fired kOrderSelectSampleLimit times
+    // and selects the majority-winning ordering (ties favor AMD). Note that cascade's Part 1 (size screen)
+    // is O(1) so it's free to keep re-firing forever without being counted. Only Part 2 (AMD fill screen)
+    // and Part 3 (BFS structural screen) are counted as a sample.
+
+    static constexpr int kOrderSelectSampleLimit = 3;
+    int  ldlt_order_samples_     = 0;
     int  ldlt_order_votes_amd_   = 0;
     int  ldlt_order_votes_metis_ = 0;
     bool ldlt_order_locked_      = false;
+    ordering_select::OrderingSelectConfig ldlt_order_cfg_;
 
     int n_act_ = 0;
     Eigen::ComputationInfo info_ = Eigen::Success;

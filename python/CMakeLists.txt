@@ -44,6 +44,37 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(eigen)
 
 # ----------------------
+# METIS (nested-dissection ordering candidate for ordering_select.hpp) + its dependency GKlib.
+# Mirrors the top-level CMakeLists.txt setup so the Python extension gets the same ordering
+# candidates as the native build. See that file for rationale on the manual xinclude step.
+# ----------------------
+option(KSP_QP_BUILD_METIS "Fetch and build METIS from GitHub for a 3rd (nested-dissection) ordering candidate" ON)
+if (KSP_QP_BUILD_METIS)
+  FetchContent_Declare(
+    gklib
+    URL https://github.com/KarypisLab/GKlib/archive/3b7d61b9f885063c89901f3901fb4426f9cfb58f.zip
+  )
+  FetchContent_MakeAvailable(gklib)
+
+  set(GKLIB_PATH ${gklib_SOURCE_DIR} CACHE PATH "GKlib root for METIS's build" FORCE)
+
+  FetchContent_Declare(
+    metis
+    URL https://github.com/KarypisLab/METIS/archive/refs/tags/v5.2.1.zip
+  )
+  FetchContent_GetProperties(metis)
+  if (NOT metis_POPULATED)
+    FetchContent_Populate(metis)
+    file(MAKE_DIRECTORY ${metis_SOURCE_DIR}/build/xinclude)
+    file(READ ${metis_SOURCE_DIR}/include/metis.h _metis_header)
+    file(WRITE ${metis_SOURCE_DIR}/build/xinclude/metis.h
+      "#define IDXTYPEWIDTH 32\n#define REALTYPEWIDTH 32\n${_metis_header}")
+    file(COPY ${metis_SOURCE_DIR}/include/CMakeLists.txt DESTINATION ${metis_SOURCE_DIR}/build/xinclude)
+    add_subdirectory(${metis_SOURCE_DIR} ${metis_BINARY_DIR})
+  endif()
+endif()
+
+# ----------------------
 # Python extension module
 # ----------------------
 pybind11_add_module(ksp_qp_bind ksp_qp_bind.cpp)
@@ -59,6 +90,12 @@ target_link_libraries(ksp_qp_bind
   PRIVATE
     Eigen3::Eigen
 )
+
+if (KSP_QP_BUILD_METIS)
+  target_include_directories(ksp_qp_bind PRIVATE ${metis_SOURCE_DIR}/build/xinclude)
+  target_link_libraries(ksp_qp_bind PRIVATE metis GKlib::GKlib)
+  target_compile_definitions(ksp_qp_bind PRIVATE KSP_QP_HAVE_METIS)
+endif()
 
 # Output the .so next to this CMakeLists.txt so `import ksp_qp_bind` works
 # from the python/ directory without any installation step.

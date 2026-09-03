@@ -96,12 +96,9 @@ TABLE2_Y_UPPER = {1.0: 0.002, 1e-2: 0.175, 1e-4: 0.9, 1e-6: 1.0}
 
 # 2D convection-diffusion control, both state and control bounds
 TABLE3_NC    = [7, 8, 9, 10]
-# TABLE3_BETAS = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
-# TABLE3_Y_UPPER = {1e-1: 0.2, 1e-2: 0.5, 1e-3: 0.5, 1e-4: 0.75, 1e-5: 0.75}
-# TABLE3_U_BOUND = {1e-1: 0.75, 1e-2: 2.0, 1e-3: 3.0, 1e-4: 5.0, 1e-5: 6.0}
-TABLE3_BETAS = [1e-2, 1e-3, 1e-4]
-TABLE3_Y_UPPER = {1e-2: 0.5, 1e-3: 0.5, 1e-4: 0.75}
-TABLE3_U_BOUND = {1e-2: 2.0, 1e-3: 3.0, 1e-4: 5.0}
+TABLE3_BETAS = [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]
+TABLE3_Y_UPPER = {1e-1: 0.2, 1e-2: 0.5, 1e-3: 0.5, 1e-4: 0.75, 1e-5: 0.75}
+TABLE3_U_BOUND = {1e-1: 0.75, 1e-2: 2.0, 1e-3: 3.0, 1e-4: 5.0, 1e-5: 6.0}
 
 ALL_TABLES = ["poisson_control", "poisson_state", "convdiff_both"]
 

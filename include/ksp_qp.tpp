@@ -315,9 +315,9 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     Vec Q_diag = Q_sym.diagonal();
 
     // A genuinely PSD Q with Q_ii == 0 must have row/column i identically zero by Cauchy-Schwarz,
-    // i.e. these directions carry no real curvature.
-    // Detect them up front so L can be scrubbed back to exactly zero there after factorization,
-    // regardless of what delta ends up being needed elsewhere in Q.
+    // i.e. these directions carry no real curvature. Detect them up front so L can be scrubbed
+    // back to exactly zero there after factorization, regardless of what delta ends up being
+    // needed elsewhere in Q.
     std::vector<bool> is_null_row(n, false);
     for (int k = 0; k < n; ++k) {
         T col_abs_max = T(0);
@@ -336,17 +336,21 @@ void KSP_QP<T>::set_L_from_LLT(const SpMat& Q) {
     for (int k = 0; k < n; ++k)
         diag_idx[k] = static_cast<int>(&Q_reg.coeffRef(k, k) - Q_reg.valuePtr());
 
-    // CHOLMOD-like ordering selection: try each fill-reducing ordering Eigen can offer (AMD, and
-    // -- if built -- METIS's nested dissection, which is expected to matter most here since Q's
-    // sparsity is often a 2D/3D mesh adjacency graph) and pick whichever produces the least fill
-    // in L, since L becomes permanent structure in every downstream KKT/Schur factorization for
-    // the rest of the solve (see include/ordering_select.hpp).
-    auto order_result = ordering_select::try_orderings<SpMat, typename SpMat::StorageIndex>(Q_sym);
+    // Cheap ordering-selection cascade (see include/ordering_select.hpp)
+    // picking whichever ordering is predicted to produce the least fill in L.
+    auto order_result = ordering_select::select_ordering<SpMat, typename SpMat::StorageIndex>(Q_sym);
 #if SSN_ENABLE_TIMERS
-    fprintf(stderr, "[OrderSelect]");
-    for (const auto& c : order_result.candidates)
-        fprintf(stderr, " %s(nnzL=%lld,t=%.6f)", c.name.c_str(), c.nnz_l, c.analyze_seconds);
-    fprintf(stderr, " winner=%s\n", order_result.winner.c_str());
+    fprintf(stderr, "[OrderSelect] screen=%s winner=%s", ordering_select::screen_name(order_result.screen),
+            order_result.winner.c_str());
+    if (order_result.screen != ordering_select::DecisionScreen::kSizeThreshold)
+        fprintf(stderr, " lnz=%lld anz=%lld t=%.6f", order_result.amd.nnz_l,
+                order_result.amd.anz, order_result.amd.analyze_seconds);
+    if (order_result.screen == ordering_select::DecisionScreen::kBfsStructural)
+        fprintf(stderr, " ecc=%d maxlevel=%d maxfrac=%.3f slope=%.3f fit=%d dropped=%zu",
+                order_result.bfs.eccentricity, order_result.bfs.max_level_size, order_result.bfs.max_level_fraction,
+                order_result.bfs.growth_slope, static_cast<int>(order_result.bfs.fit_status),
+                order_result.bfs.dropped_hub_vertices.size());
+    fprintf(stderr, "\n");
 #endif
 
     bool accepted = false, clamped = false;

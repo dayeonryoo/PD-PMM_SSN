@@ -88,18 +88,18 @@ struct SchurPreconditionerTestPeer {
   static Prec::Mat& Y_all(Prec& p) { return p.Y_all_; }
   static Prec::Vec& r_pad(Prec& p) { return p.r_pad_; }
 
-  // Diagonal/active-index caches (schur_preconditioner.hpp:915,922-924).
+  // Diagonal/active-index caches.
   static std::vector<int>& diag_idx_chol(Prec& p)     { return p.diag_idx_chol_; }
   static std::vector<int>& ldlt_diag_top_idx(Prec& p) { return p.ldlt_diag_top_idx_; }
   static std::vector<int>& ldlt_diag_bot_idx(Prec& p) { return p.ldlt_diag_bot_idx_; }
   static std::vector<int>& ldlt_act_idx(Prec& p)      { return p.ldlt_act_idx_; }
   static int& n_act(Prec& p)                          { return p.n_act_; }
 
-  // Cached row counts (schur_preconditioner.hpp:877-878).
+  // Cached row counts.
   static int& M_rows(Prec& p)    { return p.M_rows_; }
   static int& s_current(Prec& p) { return p.s_current_; }
 
-  // SMW snapshot from the last full rebuild (schur_preconditioner.hpp:942-947).
+  // SMW snapshot from the last full rebuild.
   static Prec::SpMat&   G_old(Prec& p)        { return p.G_old_; }
   static Prec::Vec&     H_diag_old(Prec& p)   { return p.H_diag_old_; }
   static Prec::BoolArr& active_K_old(Prec& p) { return p.active_K_old_; }
@@ -107,11 +107,17 @@ struct SchurPreconditionerTestPeer {
   static Prec::Scalar&  mu_old(Prec& p)       { return p.mu_old_; }
   static Prec::Scalar&  rho_old(Prec& p)      { return p.rho_old_; }
 
-  // Live sparse storage the diagonal index caches above point into -- needed to ground-truth them
-  // against an independent address-offset computation rather than only inferring correctness from
-  // solve() results.
+  // Live sparse storage the diagonal index caches above point into.
   static Prec::SpMat& chol_P(Prec& p)     { return std::get<typename Prec::CholSolver>(p.active_solver_).P; }
   static Prec::SpMat& ldlt_P_hat(Prec& p) { return std::get<typename Prec::LdltSolver>(p.active_solver_).P_hat; }
+
+  // LDLT-branch ordering-selection lock state .
+  static bool& ldlt_order_locked(Prec& p)      { return p.ldlt_order_locked_; }
+  static int&  ldlt_order_samples(Prec& p)     { return p.ldlt_order_samples_; }
+  static int&  ldlt_order_votes_amd(Prec& p)   { return p.ldlt_order_votes_amd_; }
+  static int&  ldlt_order_votes_metis(Prec& p) { return p.ldlt_order_votes_metis_; }
+  static std::string& current_ordering(Prec& p) { return p.current_ordering_; }
+  static ordering_select::OrderingSelectConfig& ldlt_order_cfg(Prec& p) { return p.ldlt_order_cfg_; }
 };
 
 // NOTE: SchurPreconditioner::arm()/setData() store pointers to their arguments.
@@ -425,20 +431,8 @@ TEST(SmwBranch, RejectsSmwWhenRhoChangedSinceSnapshotEvenWithNonzeroRankDelta) {
 TEST(SmwBranch, RejectsSmwWhenMuChangedSinceSnapshotEvenWithNonzeroRankDelta) {
   // Companion to the rho version above: same single-K-flip delta, but mu changes instead (rho
   // fixed). Unlike rho, mu doesn't affect H_diag on active_K entries at all (H_diag's mu term
-  // is mu*(1-diag_P_K), which is exactly 0 there), so H_diag itself is unchanged here -- the bug
-  // is entirely in the (1/mu)I block's RETAINED-row entries. The sole row here (the equality
-  // row, index 0) is never deleted or added by this delta, so it's retained throughout, and the
-  // low-rank update never recomputes a retained row's (1/mu) entry (only added rows get that,
-  // in build_capacitance_setup()'s block 3) -- it would stay stuck at the snapshot's 1/mu if
-  // SMW were (incorrectly) allowed to proceed.
-  //
-  // prec_pattern_changed=true on the second arm() call (unlike the rho companion test, which
-  // sets it false): this test's point is that the mu_old_ gate must reject SMW at the *try_build_
-  // smw() attempt itself* -- build()'s Case 1 -- since a successful SMW there would return before
-  // ever reaching factorize_by_chol()'s numeric_dirty_/rho_changed-gated rebuild. Passing false
-  // here would only additionally exercise (and mask this test's point behind) the cheap mu-only
-  // diagonal-shift patch path, which is correct only when active_K genuinely didn't change --
-  // not representative of how a real K-flip is reported by the SSN caller.
+  // is mu*(1-diag_P_K), which is exactly 0 there), so H_diag itself is unchanged here but due to
+  // the (1/mu)I block, there is a full-rank shift.
   Fixture f;
   const Eigen::MatrixXd G_dense = f.StackG({false, false});  // s stays 1 throughout
   const SpMat G = DenseToSparse(G_dense);
@@ -965,11 +959,9 @@ TEST(FinishFactorization, ScratchBuffersResetCorrectlyAcrossProblemSizeChange) {
 
 // ===================== diagonal-patch index cache (diag_idx_chol_ / ldlt_diag_*_idx_ / ldlt_act_idx_) =====================
 //
-// These caches store flat storage-index offsets into sol.P/sol.P_hat's valuePtr() array (see
-// schur_preconditioner.hpp:919-924), used by the mu/rho-only patch paths to write via
-// valuePtr()[idx] (O(1)) instead of coeffRef(i,i) (O(log nnz)). A wrong index writes into the
-// WRONG matrix entry silently -- no crash, and a corrupted small entry can slip past solve()'s
-// tolerance check by luck -- so these are tested by comparing the cached offset directly against
+// These caches store flat storage-index offsets into sol.P/sol.P_hat's valuePtr() array,
+// used by the mu/rho-only patch paths to write via valuePtr()[idx] (O(1)) instead of coeffRef(i,i) 
+// (O(log nnz)). This index write is tested by comparing the cached offset directly against
 // an independently-computed &P.coeffRef(i,i) - P.valuePtr() ground truth, not just via solve().
 //
 // Fixture shape used throughout: active_K = {true, false, true} (n_act=2), active_W = {true, true}
@@ -1020,8 +1012,8 @@ TEST(DiagonalPatchIndexCache, CholDiagIdxSurvivesUnchangedAcrossConsecutiveMuOnl
 
   EXPECT_EQ(SchurPreconditionerTestPeer::diag_idx_chol(prec), diag_idx_before);
 
-  // If the cache pointed at the wrong entry, the patch would silently write to entry j instead of
-  // i, and this independent coeffRef(i,i) O(log nnz) lookup into the TRUE (i,i) slot would still
+  // If the cache pointed at the wrong entry, the patch would silently write to entry j instead of i,
+  // and this independent coeffRef(i,i) O(log nnz) lookup into the TRUE (i,i) slot would still
   // read the stale, un-patched value here.
   auto& P = SchurPreconditionerTestPeer::chol_P(prec);
   const Eigen::MatrixXd P2 = DenseSchurComplement(G_dense, f.H_diag, active_k, mu2);
@@ -1065,7 +1057,7 @@ TEST(DiagonalPatchIndexCache, CholDiagIdxRebuildsWithNewSizeAndAddressesAcrossPa
 }
 
 TEST(DiagonalPatchIndexCache, CholDiagIdxRebuildsOnRhoOnlyChangeDespiteLookingLikeAPatch) {
-  // Regression test for the chol/ldlt asymmetry documented at schur_preconditioner.hpp:73-81:
+  // Regression test for the chol/ldlt asymmetry:
   // unlike LDLT, a rho-only change on the Cholesky path is NOT a cheap patch -- E = 1/H_diag is
   // nonlinear in rho, so factorize_by_chol()'s guard is "numeric_dirty_ || rho_changed", fully
   // reassigning sol.P (a fresh object) and rebuilding diag_idx_chol_ from scratch. A test that
@@ -1573,11 +1565,11 @@ TEST(SmwSnapshotState, StructuralChangeRecopiesGAndActiveSetsOnPatternChangedFul
 }
 
 TEST(SmwSnapshotState, HDiagOldRefreshesOnLdltRhoOnlyPatchButActiveSetSnapshotDoesNot) {
-  // Load-bearing case documented at schur_preconditioner.hpp:848-854: snapshot_state()'s
-  // structural_change=false path skips re-copying G_old_/active_K_old_/active_W_old_ (provably
-  // unchanged on a mu/rho-only call) but always refreshes H_diag_old_/mu_old_/rho_old_, since the
-  // cheap diagonal-patch path also rewrites the live P_hat's (rho-dependent) diagonal without a
-  // full rebuild -- H_diag_old_ must track that or the next SMW capacitance solve would be wrong.
+  // Load-bearing case: snapshot_state()'s structural_change=false path skips re-copying
+  // G_old_/active_K_old_/active_W_old_ (provably unchanged on a mu/rho-only call)
+  // but always refreshes H_diag_old_/mu_old_/rho_old_, since the cheap diagonal-patch path
+  // also rewrites the live P_hat's (rho-dependent) diagonal without a full rebuild --
+  // H_diag_old_ must track that or the next SMW capacitance solve would be wrong.
   Fixture f;
   const std::vector<bool> active_k = {true, false, true};
   const Eigen::MatrixXd G_dense = f.StackG({true, true});
@@ -2210,10 +2202,9 @@ TEST(PublicApiEdgeCases, ReleaseIsSafeOnFreshObjectAndIdempotent) {
 
 // ===================== scratch-buffer leakage (state-poisoning) =====================
 // try_build_smw() reuses several private scratch buffers (smw_tmp_, smw_ldlt_padded_, Y_all_,
-// r_pad_) across calls via zero_resize(), which only re-zeroes a buffer when its *size*
-// changes. When two consecutive SMW updates have identical rank/shape (so every buffer is
-// reused at the same size), correctness depends entirely on the class's own logic overwriting
-// every entry that matters -- not on zero_resize() clearing anything. These tests deliberately
+// r_pad_) across calls via zero_resize(), which only re-zeroes a buffer when its size changes.
+// When two consecutive SMW updates have identical rank/shape, correctness depends entirely on 
+// the class's own logic overwriting every entry that matters. These tests deliberately
 // poison the buffers with NaN/Inf between two same-shape SMW calls (simulating reused/garbage
 // heap memory) and prove the second call's result is still correct.
 
@@ -2241,7 +2232,7 @@ struct LeakageFixture {
   }
 };
 
-// Y_all_ is resized (not zero-filled) then written column-by-column across its *entire* column
+// Y_all_ is resized (not zero-filled) then written column-by-column across its entire column
 // range every call, and r_pad_/smw_ldlt_padded_ are cleared via an unconditional setZero() (not
 // zero_resize()) every call -- so all three are expected to come out clean regardless of prior
 // content, even when zero_resize() itself would have no-opped on a same-size reuse.
@@ -2263,7 +2254,7 @@ void PoisonFullyOverwrittenBuffers(Prec& prec, bool use_ldlt) {
 
 // smw_tmp_ is different: zero_resize() no-ops on a same-size reuse, and compute_y_all() only
 // ever writes/clears the single (or few) entries it touches per basis vector -- every other
-// entry is assumed to already be zero, an invariant maintained purely by the *previous* call
+// entry is assumed to already be zero, an invariant maintained purely by the previous call
 // having correctly reset its own touched entries, not by any defensive clear on entry. Poisoning
 // the whole vector (as "reused garbage heap memory" would look) violates that assumption.
 void PoisonSmwTmpScratch(Prec& prec) {
@@ -2273,7 +2264,7 @@ void PoisonSmwTmpScratch(Prec& prec) {
   for (int i = 0; i < tmp.size(); ++i) tmp(i) = (i % 2 == 0) ? nan : inf;
 }
 
-// Ingredients for delta #2: same rank/shape as delta #1 (h=1, p=1), but deactivating the *other*
+// Ingredients for delta #2: same rank/shape as delta #1 (h=1, p=1), but deactivating the other
 // W row and flipping a *different* K column, still measured against the Epoch A snapshot (an
 // SMW-only update never calls snapshot_state()).
 struct LeakageDelta2 {
@@ -2369,18 +2360,6 @@ TEST(ScratchBufferLeakage, PoisonedBuffersFullyOverwrittenBeforeNextSmwCallLdlt)
   RunFullyOverwrittenBufferScenario(/*use_ldlt=*/true);
 }
 
-// Poisons smw_tmp_ too (all four buffers named in the audit, matching "reused/garbage heap
-// memory"). Finding: unlike the three buffers above, smw_tmp_ has no defensive re-zeroing on
-// entry to compute_y_all() -- it relies entirely on the *previous* call having restored its
-// touched entries to zero. compute_y_all() now asserts this invariant on entry (see
-// schur_preconditioner.hpp), so in a build with assertions enabled the violation aborts loudly
-// instead of falling through. This project's default CMakeLists.txt configure (CMAKE_BUILD_TYPE
-// defaults to Release, i.e. -DNDEBUG) compiles that assert out, in which case the corrupted
-// entries currently propagate into the capacitance matrix and (via NaN contaminating
-// FullPivLU's rank computation) get flagged as SingularCapacitance, so try_build_smw() safely
-// falls back to a full rebuild -- an accidental side effect of NaN/rank interaction, not a
-// designed safeguard. Either way, no corrupted state may reach the caller undetected, so this
-// test checks whichever of the two is actually compiled in.
 static void RunSmwTmpPoisoningScenario(bool use_ldlt) {
   LeakageFixture f;
   const RowMajorSpMat B_rm = f.B_rm();
@@ -2423,10 +2402,8 @@ TEST(ScratchBufferLeakage, PoisonedSmwTmpNeverLeaksIncorrectResultsLdlt) {
 }
 
 // ===================== snapshot desynchronization (rapid active-set oscillation) =====================
-// classify_active_set_delta() always diffs the *current* active_K/active_W against
-// active_K_old_/active_W_old_ (the last full-rebuild snapshot), never against the previous
-// SMW call's state. These tests rapidly flip active_K/active_W back and forth -- including
-// exact returns to the snapshot's own state -- to prove that classification never drifts.
+// classify_active_set_delta() always diffs the current active_K/active_W against
+// active_K_old_/active_W_old_ (the last full-rebuild snapshot).
 
 TEST(SnapshotDesync, RapidActiveSetOscillationNeverDriftsFromSnapshotClassification) {
   Fixture f;
@@ -2813,15 +2790,6 @@ TEST(NearSingularCapacitance, SubEpsilonRowPerturbationStillReadsAsSingular) {
   EXPECT_EQ(prec.fact_count(), 2);
   EXPECT_EQ(prec.smw_last_reject_reason(), Prec::SmwRejectReason::SingularCapacitance);
 
-  // The fallback full rebuild must still be correct, but not at the file's usual kTol=1e-9: with
-  // mu=1e10 driving the capacitance threshold check, P2 itself (what the fallback directly
-  // factorizes) is extremely ill-conditioned by construction (cond(P2) ~= 1.75e10, verified via
-  // its singular values -- its smallest one is ~1e-10, coming straight from the 1/mu
-  // regularization, independent of the row perturbation). Empirically the sparse-factorization
-  // solve agrees with the dense QR oracle to a relative error of ~2.3e-7, consistent with that
-  // conditioning amplifying ordinary double-precision rounding (~1e-16 * 1.75e10 ~= 1.75e-6,
-  // same order of magnitude) -- not a bug. 1e-4 is a real correctness bound (three orders of
-  // magnitude of headroom above the observed error) rather than a "doesn't crash" placeholder.
   Eigen::VectorXd b(3);
   b << 1.0, -1.0, 2.0;
   const Eigen::VectorXd got = prec.solve(b);
@@ -2832,11 +2800,7 @@ TEST(NearSingularCapacitance, SubEpsilonRowPerturbationStillReadsAsSingular) {
 TEST(NearSingularCapacitance, AboveThresholdRowPerturbationSucceedsViaSmw) {
   Eigen::MatrixXd A_row(1, 3);
   A_row << 1.0, 1.0, 1.0;
-  // Same non-parallel perturbation shape as the sub-epsilon test above. Because the capacitance
-  // matrix's determinant scales roughly as the square of this perturbation (the two W rows
-  // enter symmetrically), the effective crossover empirically sits between 1e-4 (still
-  // singular) and 1e-3 (full rank) here -- comfortably above the raw sqrt(eps) ~= 1.49e-8
-  // threshold, but nowhere near as far above it as that raw number alone would suggest.
+
   Eigen::MatrixXd B_rows(2, 3);
   B_rows << 1.0, 0.0,   0.0,
             1.0, 1e-3,  0.0;
@@ -2954,5 +2918,95 @@ TEST(RandomizedCholLdltConsistency, FiftyColumnRandomSystemCholeskyAndLdltAgree)
     const Eigen::VectorXd expected = P.colPivHouseholderQr().solve(b);
     EXPECT_TRUE(got_chol.isApprox(expected, 1e-7)) << "chol trial " << trial;
     EXPECT_TRUE(got_ldlt.isApprox(expected, 1e-7)) << "ldlt trial " << trial;
+  }
+}
+
+// ===================== LDLT ordering-selection lock (ordering_select.hpp cascade) =====================
+
+// With small_problem_threshold forced to 0, every pattern_dirty_ firing on this fixture's tiny
+// P_hat clears Part 1 (the size screen) and runs a real evaluation (Part 2: AMD fill screen).
+
+TEST(LdltOrderSelection, LocksAfterSampleLimitRealEvaluationsFromNonSizeScreenedFirings) {
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});  // s = 1, constant throughout
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  const BoolArr active_K_a = ToBoolArr({true, true, true});   // n_act = 3
+  const BoolArr active_K_b = ToBoolArr({true, false, true});  // n_act = 2 -- forces a pattern change
+
+  Prec prec;
+  SchurPreconditionerTestPeer::ldlt_order_cfg(prec).small_problem_threshold = 0;
+
+  prec.arm(G, G_tr, f.H_diag, active_K_a, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+  ASSERT_EQ(prec.info(), Eigen::Success);
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 1);
+  EXPECT_FALSE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
+
+  prec.arm(G, G_tr, f.H_diag, active_K_b, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
+  prec.compute(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 2);
+  EXPECT_FALSE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
+
+  prec.arm(G, G_tr, f.H_diag, active_K_a, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
+  prec.compute(0);
+  // kOrderSelectSampleLimit (3) real evaluations reached: locks now.
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 3);
+  EXPECT_TRUE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
+  EXPECT_EQ(SchurPreconditionerTestPeer::current_ordering(prec), "AMD"); // trivial P_hat: AMD wins every sample
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_votes_amd(prec), 3);
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_votes_metis(prec), 0);
+
+  // Further firings must not re-evaluate or over-count once locked.
+  prec.arm(G, G_tr, f.H_diag, active_K_b, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
+  prec.compute(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 3);
+  EXPECT_TRUE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
+  EXPECT_EQ(SchurPreconditionerTestPeer::current_ordering(prec), "AMD");
+
+  prec.arm(G, G_tr, f.H_diag, active_K_a, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
+           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
+  prec.compute(0);
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 3);
+  EXPECT_TRUE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
+}
+
+// With the production default small_problem_threshold, this fixture's tiny P_hat never clears
+// Part 1 -- confirms size-screened firings are free to repeat forever without ever advancing the
+// sample counter or engaging the lock.
+TEST(LdltOrderSelection, SizeScreenedFiringsNeverAdvanceSampleCounter) {
+  Fixture f;
+  const Eigen::MatrixXd G_dense = f.StackG({false, false});
+  const SpMat G = DenseToSparse(G_dense);
+  const SpMat G_tr = DenseToSparse(G_dense.transpose());
+  const BoolArr active_W = ToBoolArr({false, false});
+  const RowMajorSpMat B_rm = f.B_rm();
+
+  const BoolArr active_K_a = ToBoolArr({true, true, true});
+  const BoolArr active_K_b = ToBoolArr({true, false, true});
+
+  Prec prec; // default ldlt_order_cfg_: small_problem_threshold stays at the production default,
+             // far above this fixture's tiny P_hat.
+
+  prec.arm(G, G_tr, f.H_diag, active_K_a, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
+  prec.compute(0);
+  ASSERT_EQ(prec.info(), Eigen::Success);
+  EXPECT_EQ(SchurPreconditionerTestPeer::current_ordering(prec), "AMD");
+  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 0);
+  EXPECT_FALSE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
+
+  for (int i = 0; i < 5; ++i) {
+    prec.arm(G, G_tr, f.H_diag, (i % 2 == 0) ? active_K_b : active_K_a, active_W, B_rm, f.mu, f.rho,
+             /*rebuild=*/true, /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
+    prec.compute(0);
+    EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 0) << "iteration " << i;
+    EXPECT_FALSE(SchurPreconditionerTestPeer::ldlt_order_locked(prec)) << "iteration " << i;
+    EXPECT_EQ(SchurPreconditionerTestPeer::current_ordering(prec), "AMD") << "iteration " << i;
   }
 }
