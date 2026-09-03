@@ -343,6 +343,36 @@ TEST(SelectOrdering, OverriddenThresholdForcesScreen2OnSmallMatrix) {
   EXPECT_GE(decision.amd.nnz_l, 0);
 }
 
+// select_ordering()'s amd_solver_inout lets a caller probe Part 2 in place on its own solver
+// instead of an internal throwaway, so that -- when winner_was_probed() is true -- it can go on
+// using that exact solver directly. Guard against a regression that silently re-runs
+// analyzePattern() (which would still "work" numerically) by never calling analyzePattern() again
+// here: factorize()/solve() must succeed straight off the probed solver.
+TEST(SelectOrdering, AmdSolverInoutIsUsableDirectlyWithoutReanalyzing) {
+  const SpMat A = MakeTridiagonal(50);
+  ordering_select::OrderingSelectConfig cfg;
+  cfg.small_problem_threshold = 0; // force past Part 1 so Part 2 actually probes amd_solver_inout
+
+  auto amd_candidate = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>("AMD");
+  const auto decision =
+      ordering_select::select_ordering<SpMat, Idx>(A, cfg, amd_candidate.get());
+
+  ASSERT_EQ(decision.winner, "AMD");
+  ASSERT_TRUE(decision.winner_was_probed());
+
+  Eigen::VectorXd rhs = Eigen::VectorXd::LinSpaced(50, 1.0, 50.0);
+  amd_candidate->factorize(A); // no analyzePattern() call here -- select_ordering() already did it
+  ASSERT_EQ(amd_candidate->info(), Eigen::Success);
+  const Eigen::VectorXd x = amd_candidate->solve(rhs);
+
+  auto reference = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>("AMD");
+  reference->analyzePattern(A);
+  reference->factorize(A);
+  const Eigen::VectorXd x_ref = reference->solve(rhs);
+
+  EXPECT_TRUE(x.isApprox(x_ref, 1e-12));
+}
+
 #ifdef KSP_QP_HAVE_METIS
 TEST(SelectOrdering, ImpossibleAmdThresholdsForceBfsScreen) {
   const SpMat H = MakePathPlusHub(20);

@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 // Cheap ordering selection between AMD and (if KSP_QP_HAVE_METIS) METIS's nested dissection for
@@ -24,12 +25,6 @@
 
 namespace ordering_select {
 
-struct Candidate {
-    std::string name;
-    long long nnz_l;
-    double analyze_seconds;
-};
-
 // Exposes SimplicialLDLT's protected symbolic-factor pattern after analyzePattern() alone
 // (before factorize()) -- Eigen's public matrixL()/nonZeros() assert m_factorizationIsOk, but
 // the symbolic nnz is already final once analyzePattern() returns.
@@ -39,13 +34,66 @@ struct FillProbe : public Eigen::SimplicialLDLT<SpMat, Eigen::Lower, Ordering> {
     long long nnz_l() const { return static_cast<long long>(Base::m_matrix.nonZeros()); }
 };
 
-template <typename SpMat, typename Ordering>
-Candidate probe(const std::string& name, const SpMat& A_sym) {
-    FillProbe<SpMat, Ordering> probe;
-    const auto t0 = std::chrono::steady_clock::now();
-    probe.analyzePattern(A_sym);
-    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    return Candidate{name, probe.nnz_l(), t};
+// ------ Type-erased solver, for call sites that keep a solver alive across many calls ------
+//
+// This interface covers exactly analyzePattern/factorize/info/solve which are needed for
+// schur_preconditioner.hpp's Schur/KKT preconditioner.
+template <typename SpMat>
+class ISymmetricSolver {
+public:
+    using Scalar = typename SpMat::Scalar;
+    using Vec = Eigen::Matrix<Scalar, Eigen::Dynamic, 1>;
+    using Mat = Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic>;
+
+    virtual ~ISymmetricSolver() = default;
+    virtual void analyzePattern(const SpMat& P) = 0;
+    virtual void factorize(const SpMat& P) = 0;
+    virtual Eigen::ComputationInfo info() const = 0;
+    virtual Vec solve(const Vec& rhs) const = 0;
+    virtual Mat solve(const Mat& rhs) const = 0;
+    // Symbolic nnz(L) after analyzePattern() alone, for a solver that was built via the LDLT
+    // branch below (backed by FillProbe); -1 for the Cholesky (LLT) branch, which never needs it.
+    virtual long long nnz_l() const { return -1; }
+};
+
+template <typename SpMat, typename Ordering, bool IsLdlt>
+class SymmetricSolverImpl : public ISymmetricSolver<SpMat> {
+public:
+    using Base = ISymmetricSolver<SpMat>;
+    using Vec = typename Base::Vec;
+    using Mat = typename Base::Mat;
+    // When AMD wins, the caller can keep using this exact (already-analyzed) object
+    // instead of paying for a second analyzePattern() call.
+    using EigenSolver = std::conditional_t<IsLdlt,
+                                            FillProbe<SpMat, Ordering>,
+                                            Eigen::SimplicialLLT<SpMat, Eigen::Lower, Ordering>>;
+
+    void analyzePattern(const SpMat& P) override { solver_.analyzePattern(P); }
+    void factorize(const SpMat& P) override { solver_.factorize(P); }
+    Eigen::ComputationInfo info() const override { return solver_.info(); }
+    Vec solve(const Vec& rhs) const override { return solver_.solve(rhs); }
+    Mat solve(const Mat& rhs) const override { return solver_.solve(rhs); }
+    long long nnz_l() const override {
+        if constexpr (IsLdlt) return solver_.nnz_l();
+        else return -1;
+    }
+
+private:
+    EigenSolver solver_;
+};
+
+// Constructs the wrapper for the named winner ("AMD"/"METIS").
+// IsLdlt selects SimplicialLDLT (true) vs SimplicialLLT (false).
+template <typename SpMat, bool IsLdlt>
+std::unique_ptr<ISymmetricSolver<SpMat>> make_solver(const std::string& ordering_name) {
+    using Idx = typename SpMat::StorageIndex;
+    if (ordering_name == "AMD")
+        return std::make_unique<SymmetricSolverImpl<SpMat, Eigen::AMDOrdering<Idx>, IsLdlt>>();
+#ifdef KSP_QP_HAVE_METIS
+    if (ordering_name == "METIS")
+        return std::make_unique<SymmetricSolverImpl<SpMat, Eigen::MetisOrdering<Idx>, IsLdlt>>();
+#endif
+    throw std::logic_error("ordering_select::make_solver: unknown ordering name '" + ordering_name + "'");
 }
 
 // =================================================================================================
@@ -59,8 +107,8 @@ Candidate probe(const std::string& name, const SpMat& A_sym) {
 //   3. BFS structural screen (O(nnz)): diagnostic on A_sym's sparsity graph to decide if the
 //      graph is mesh-like (use nested dissection) or expander-like (use AMD). Drop the diagonal
 //      and a handful of high-degree hub vertices, find a pseudo-peripheral vertex via the
-//      double-sweep  BFS heuristic (George & Liu 1979), and read off that BFS's eccentricity 
-//      (widest level-set)  and the log-log growth slope of its cumulative ball size.
+//      double-sweep  BFS heuristic (George & Liu 1979), and read off that BFS's eccentricity
+//      (widest level-set) and the log-log growth slope of its cumulative ball size.
 // =================================================================================================
 
 // ------ Part 1: O(1) size screen ------
@@ -94,8 +142,22 @@ struct AmdProbeStats {
 // One real AMD analyzePattern() -- the only ordering ever actually probed by this cascade.
 template <typename SpMat, typename Index>
 AmdProbeStats probe_amd(const SpMat& A_sym) {
-    const Candidate c = probe<SpMat, Eigen::AMDOrdering<Index>>("AMD", A_sym);
-    return AmdProbeStats{c.nnz_l, lower_triangle_nnz(A_sym), c.analyze_seconds};
+    FillProbe<SpMat, Eigen::AMDOrdering<Index>> probe;
+    const auto t0 = std::chrono::steady_clock::now();
+    probe.analyzePattern(A_sym);
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    return AmdProbeStats{probe.nnz_l(), lower_triangle_nnz(A_sym), t};
+}
+
+// Run in place on a caller-owned `amd_solver` (already constructed, not yet analyzed).
+// Used by select_ordering() when a caller passes amd_solver_inout:
+// if AMD ends up winning, the caller can keep using amd_solver directly afterward.
+template <typename SpMat>
+AmdProbeStats probe_amd_inplace(ISymmetricSolver<SpMat>& amd_solver, const SpMat& A_sym) {
+    const auto t0 = std::chrono::steady_clock::now();
+    amd_solver.analyzePattern(A_sym);
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    return AmdProbeStats{amd_solver.nnz_l(), lower_triangle_nnz(A_sym), t};
 }
 
 inline constexpr long long kFillInputRatio = 5;
@@ -359,13 +421,21 @@ struct Decision {
     BfsStructuralProfile bfs;  // default-constructed iff screen != kBfsStructural
 
     // True iff `winner`'s own analyzePattern() was actually run by this cascade (Part 2's probe).
+    // When select_ordering() was called with amd_solver_inout, this also means amd_solver_inout is
+    // the analyzed solver for `winner` and can be reused as-is instead of re-analyzing.
     bool winner_was_probed() const {
         return winner == "AMD" && screen != DecisionScreen::kSizeThreshold;
     }
 };
 
+// `amd_solver_inout`, if non-null, must be freshly constructed (analyzePattern() not yet called).
+// Part 2's AMD probe then runs in place on it (via probe_amd_inplace()) instead of an internal
+// throwaway FillProbe, so a caller can check winner_was_probed() afterward and, if true, keep using
+// amd_solver_inout directly (see schur_preconditioner.hpp::factorize_by_ldlt()) rather than paying
+// for a second, redundant analyzePattern() call on the same pattern.
 template <typename SpMat, typename Index>
-Decision select_ordering(const SpMat& A_sym, const OrderingSelectConfig& cfg = OrderingSelectConfig()) {
+Decision select_ordering(const SpMat& A_sym, const OrderingSelectConfig& cfg = OrderingSelectConfig(),
+                          ISymmetricSolver<SpMat>* amd_solver_inout = nullptr) {
     Decision result;
 
     if (is_small_problem(A_sym, cfg.small_problem_threshold)) {
@@ -374,7 +444,8 @@ Decision select_ordering(const SpMat& A_sym, const OrderingSelectConfig& cfg = O
         return result;
     }
 
-    result.amd = probe_amd<SpMat, Index>(A_sym);
+    result.amd = amd_solver_inout ? probe_amd_inplace(*amd_solver_inout, A_sym)
+                                   : probe_amd<SpMat, Index>(A_sym);
     if (amd_is_good_enough(result.amd, cfg.fill_input_ratio)) {
         result.winner = "AMD";
         result.screen = DecisionScreen::kAmdFillRatio;
@@ -441,59 +512,6 @@ SpMat factorize_L_with_ordering(SpMat& Q_reg, const std::vector<int>& diag_idx,
     auto P = ldlt.permutationP();
     SpMat L_D = ldlt.matrixL();
     return (P.transpose() * L_D) * D_sqrt.asDiagonal();
-}
-
-// ------ Type-erased solver, for call sites that keep a solver alive across many calls ------
-//
-// This interface covers exactly analyzePattern/factorize/info/solve which are needed for
-// schur_preconditioner.hpp's Schur/KKT preconditioner.
-template <typename SpMat>
-class ISymmetricSolver {
-public:
-    using Scalar = typename SpMat::Scalar;
-    using Vec = Eigen::Matrix<Scalar, Eigen::Dynamic, 1>;
-    using Mat = Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic>;
-
-    virtual ~ISymmetricSolver() = default;
-    virtual void analyzePattern(const SpMat& P) = 0;
-    virtual void factorize(const SpMat& P) = 0;
-    virtual Eigen::ComputationInfo info() const = 0;
-    virtual Vec solve(const Vec& rhs) const = 0;
-    virtual Mat solve(const Mat& rhs) const = 0;
-};
-
-template <typename SpMat, typename Ordering, bool IsLdlt>
-class SymmetricSolverImpl : public ISymmetricSolver<SpMat> {
-public:
-    using Base = ISymmetricSolver<SpMat>;
-    using Vec = typename Base::Vec;
-    using Mat = typename Base::Mat;
-    using EigenSolver = std::conditional_t<IsLdlt,
-                                            Eigen::SimplicialLDLT<SpMat, Eigen::Lower, Ordering>,
-                                            Eigen::SimplicialLLT<SpMat, Eigen::Lower, Ordering>>;
-
-    void analyzePattern(const SpMat& P) override { solver_.analyzePattern(P); }
-    void factorize(const SpMat& P) override { solver_.factorize(P); }
-    Eigen::ComputationInfo info() const override { return solver_.info(); }
-    Vec solve(const Vec& rhs) const override { return solver_.solve(rhs); }
-    Mat solve(const Mat& rhs) const override { return solver_.solve(rhs); }
-
-private:
-    EigenSolver solver_;
-};
-
-// Constructs the wrapper for the named winner ("AMD"/"METIS").
-// IsLdlt selects SimplicialLDLT (true) vs SimplicialLLT (false).
-template <typename SpMat, bool IsLdlt>
-std::unique_ptr<ISymmetricSolver<SpMat>> make_solver(const std::string& ordering_name) {
-    using Idx = typename SpMat::StorageIndex;
-    if (ordering_name == "AMD")
-        return std::make_unique<SymmetricSolverImpl<SpMat, Eigen::AMDOrdering<Idx>, IsLdlt>>();
-#ifdef KSP_QP_HAVE_METIS
-    if (ordering_name == "METIS")
-        return std::make_unique<SymmetricSolverImpl<SpMat, Eigen::MetisOrdering<Idx>, IsLdlt>>();
-#endif
-    throw std::logic_error("ordering_select::make_solver: unknown ordering name '" + ordering_name + "'");
 }
 
 } // namespace ordering_select

@@ -413,10 +413,12 @@ private:
     // Shared tail of factorize_by_ldlt/factorize_by_chol.
     template <typename FactorSolver>
     void finish_factorization(FactorSolver& solver, const SpMat& P, Eigen::Index s, bool is_ldlt,
-                               bool structural_change, int n_act = -1) {
+                               bool structural_change, int n_act = -1, bool already_analyzed = false) {
         if (pattern_dirty_) {
-            SCHUR_PREC_TIMER_BLOCK(analyze_time_);
-            solver.analyzePattern(P);
+            if (!already_analyzed) {
+                SCHUR_PREC_TIMER_BLOCK(analyze_time_);
+                solver.analyzePattern(P);
+            }
             pattern_analyzed_ = true;
             pattern_dirty_ = false;
         }
@@ -521,10 +523,15 @@ private:
         // kOrderSelectSampleLimit firings that actually run a real evaluation (Part 2/3 -- a
         // Part-1 size-screen verdict is O(1) and free to keep re-happening forever), then locked
         // to the majority winner.
+        bool ldlt_reused_probe_analysis = false;
         if (pattern_dirty_) {
             if (!ldlt_order_locked_) {
+                // Build the AMD candidate up front so the cascade's Part-2 fill screen can probe
+                // it in place: if AMD wins, this exact (already analyzePattern()'d) solver becomes
+                // sol.ldlt directly below.
+                auto amd_candidate = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>("AMD");
                 auto decision = ordering_select::select_ordering<SpMat, typename SpMat::StorageIndex>(
-                    sol.P_hat, ldlt_order_cfg_);
+                    sol.P_hat, ldlt_order_cfg_, amd_candidate.get());
 #if SSN_ENABLE_TIMERS
                 fprintf(stderr, "[SchurOrderSelect] screen=%s winner=%s", ordering_select::screen_name(decision.screen),
                         decision.winner.c_str());
@@ -554,11 +561,22 @@ private:
 #endif
                     }
                 }
+
+                // decision.winner_was_probed() means Part 2 already ran AMD's analyzePattern() on
+                // this exact sol.P_hat via amd_candidate; only adopt it if AMD is also what this
+                // round actually ends up using (the majority-lock override above can still pick
+                // METIS on this firing even though this round's own probe favored AMD).
+                if (decision.winner_was_probed() && current_ordering_ == "AMD") {
+                    sol.ldlt = std::move(amd_candidate);
+                    ldlt_reused_probe_analysis = true;
+                }
             }
-            sol.ldlt = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>(current_ordering_);
+            if (!ldlt_reused_probe_analysis)
+                sol.ldlt = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>(current_ordering_);
         }
 
-        finish_factorization(*sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, structural_change, n_act);
+        finish_factorization(*sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, structural_change, n_act,
+                              /*already_analyzed=*/ldlt_reused_probe_analysis);
     }
 
     // Build P = G E G^T + (1/mu) I (or shift its mu diagonal), then factorize with Cholesky.
