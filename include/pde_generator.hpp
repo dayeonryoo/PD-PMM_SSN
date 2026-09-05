@@ -28,9 +28,25 @@ and its own IFISS citations.
 
 namespace pdegen {
 
+// Selects the spatial discretization used to build the PDE operator D_op
+// and mass matrix M in the QP generators below. FEM is the default; FD
+// uses a standard 5-point Laplacian stiffness with first-order upwind
+// convection on the same uniform GridQ1 node layout, so both share
+// Dirichlet BC handling (apply_dirichlet_bc / apply_dirichlet_bc_mass)
+// and only ever produce a lumped mass matrix.
+enum class Discretization { FEM, FD };
+
 template <typename T>
 static inline bool is_boundary_node(int i, int j, int n1d) {
     return (i == 0 || j == 0 || i == n1d - 1 || j == n1d - 1);
+}
+
+// Composite trapezoidal-rule weight along one axis: edge nodes get half the
+// interior weight so that the resulting tensor-product nodal mass sums
+// exactly to the domain area (used by the FD lumped mass below).
+template <typename T>
+static inline T fd_trapezoid_factor(int idx, int n1d) {
+    return (idx == 0 || idx == n1d - 1) ? T(0.5) : T(1);
 }
 
 /*-----------------------------------------------------------------------
@@ -262,6 +278,182 @@ FemQ1CdResult<T> assemble_femq1_cd(const GridQ1<T>& g,
 
     res.f_rhs = f_rhs;
     return res;
+}
+
+/*-----------------------------------------------------------------------
+FD diffusion assembly: standard 5-point Laplacian stiffness A_stiff and
+diagonal lumped mass M_lump (composite-trapezoidal area weight per node,
+so it sums exactly to the domain area, same invariant as the FEM lumped
+mass) on the same uniform GridQ1 node layout used by the FEM path.
+Boundary rows of A_stiff are left empty here since apply_dirichlet_bc
+fills them in (diagonal = 1) during the shared post-assembly BC step
+below.
+-----------------------------------------------------------------------*/
+template <typename T>
+struct FdDiffResult {
+    Eigen::SparseMatrix<T> A_stiff;
+    Eigen::SparseMatrix<T> M_lump;
+    Eigen::Matrix<T, Eigen::Dynamic, 1> f_rhs;
+};
+
+template <typename T>
+FdDiffResult<T> assemble_fd_diff(const GridQ1<T>& g) {
+    using Vec  = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using Trip = Eigen::Triplet<T>;
+
+    const T h      = g.x1d[1] - g.x1d[0];
+    const T inv_h2 = T(1) / (h * h);
+    const T area   = h * h;
+
+    std::vector<Trip> At, Mlt;
+    At.reserve(std::size_t(g.np) * 5);
+    Mlt.reserve(std::size_t(g.np));
+
+    for (int j = 0; j < g.n1d; ++j) {
+        for (int i = 0; i < g.n1d; ++i) {
+            const int p = GridQ1<T>::idx(i, j, g.n1d);
+            const T node_weight = area * fd_trapezoid_factor<T>(i, g.n1d) * fd_trapezoid_factor<T>(j, g.n1d);
+            Mlt.emplace_back(p, p, node_weight);
+
+            if (is_boundary_node<T>(i, j, g.n1d)) continue;
+
+            At.emplace_back(p, p, T(4) * inv_h2);
+            At.emplace_back(p, GridQ1<T>::idx(i - 1, j, g.n1d), -inv_h2);
+            At.emplace_back(p, GridQ1<T>::idx(i + 1, j, g.n1d), -inv_h2);
+            At.emplace_back(p, GridQ1<T>::idx(i, j - 1, g.n1d), -inv_h2);
+            At.emplace_back(p, GridQ1<T>::idx(i, j + 1, g.n1d), -inv_h2);
+        }
+    }
+
+    FdDiffResult<T> res;
+    res.A_stiff.resize(g.np, g.np);
+    res.M_lump.resize(g.np, g.np);
+    res.A_stiff.setFromTriplets(At.begin(), At.end());
+    res.M_lump.setFromTriplets(Mlt.begin(), Mlt.end());
+    res.A_stiff.makeCompressed();
+    res.M_lump.makeCompressed();
+    res.f_rhs = Vec::Zero(g.np);
+    return res;
+}
+
+/*-----------------------------------------------------------------------
+FD convection-diffusion assembly: adds a first-order upwind convection
+operator N_conv to the FD diffusion assembly above, wind sampled directly
+at each grid node. The resulting operator is D_op = eps * A_stiff + N_conv,
+matching the FEM composition in assemble_femq1_cd.
+-----------------------------------------------------------------------*/
+template <typename T>
+struct FdCdResult {
+    Eigen::SparseMatrix<T> A_stiff;
+    Eigen::SparseMatrix<T> N_conv;
+    Eigen::SparseMatrix<T> M_lump;
+    Eigen::Matrix<T, Eigen::Dynamic, 1> f_rhs;
+};
+
+template <typename T, typename WindFn = void (*)(T, T, T&, T&)>
+FdCdResult<T> assemble_fd_cd(const GridQ1<T>& g,
+                              WindFn wind = fem::velocity_field_w_circular<T>) {
+    using Vec  = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+    using Trip = Eigen::Triplet<T>;
+
+    const T h      = g.x1d[1] - g.x1d[0];
+    const T inv_h2 = T(1) / (h * h);
+    const T inv_h  = T(1) / h;
+    const T area   = h * h;
+
+    std::vector<Trip> At, Nt, Mlt;
+    At.reserve(std::size_t(g.np) * 5);
+    Nt.reserve(std::size_t(g.np) * 5);
+    Mlt.reserve(std::size_t(g.np));
+
+    for (int j = 0; j < g.n1d; ++j) {
+        for (int i = 0; i < g.n1d; ++i) {
+            const int p = GridQ1<T>::idx(i, j, g.n1d);
+            const T node_weight = area * fd_trapezoid_factor<T>(i, g.n1d) * fd_trapezoid_factor<T>(j, g.n1d);
+            Mlt.emplace_back(p, p, node_weight);
+
+            if (is_boundary_node<T>(i, j, g.n1d)) continue;
+
+            At.emplace_back(p, p, T(4) * inv_h2);
+            At.emplace_back(p, GridQ1<T>::idx(i - 1, j, g.n1d), -inv_h2);
+            At.emplace_back(p, GridQ1<T>::idx(i + 1, j, g.n1d), -inv_h2);
+            At.emplace_back(p, GridQ1<T>::idx(i, j - 1, g.n1d), -inv_h2);
+            At.emplace_back(p, GridQ1<T>::idx(i, j + 1, g.n1d), -inv_h2);
+
+            // Upwind: w * dy/dx |_i ~ wx_p*(y_i - y_{i-1})/h - wx_m*(y_{i+1} - y_i)/h,
+            // and likewise in y; so both neighbor coefficients carry a minus sign.
+            T wx, wy;
+            wind(g.x1d[i], g.x1d[j], wx, wy);
+            const T wx_p = std::max(wx, T(0)), wx_m = std::max(-wx, T(0));
+            const T wy_p = std::max(wy, T(0)), wy_m = std::max(-wy, T(0));
+
+            Nt.emplace_back(p, p, (wx_p + wx_m + wy_p + wy_m) * inv_h);
+            Nt.emplace_back(p, GridQ1<T>::idx(i - 1, j, g.n1d), -wx_p * inv_h);
+            Nt.emplace_back(p, GridQ1<T>::idx(i + 1, j, g.n1d), -wx_m * inv_h);
+            Nt.emplace_back(p, GridQ1<T>::idx(i, j - 1, g.n1d), -wy_p * inv_h);
+            Nt.emplace_back(p, GridQ1<T>::idx(i, j + 1, g.n1d), -wy_m * inv_h);
+        }
+    }
+
+    FdCdResult<T> res;
+    res.A_stiff.resize(g.np, g.np);
+    res.N_conv.resize(g.np, g.np);
+    res.M_lump.resize(g.np, g.np);
+    res.A_stiff.setFromTriplets(At.begin(), At.end());
+    res.N_conv.setFromTriplets(Nt.begin(), Nt.end());
+    res.M_lump.setFromTriplets(Mlt.begin(), Mlt.end());
+    res.A_stiff.makeCompressed();
+    res.N_conv.makeCompressed();
+    res.M_lump.makeCompressed();
+    res.f_rhs = Vec::Zero(g.np);
+    return res;
+}
+
+/*-----------------------------------------------------------------------
+Dispatches diffusion / convection-diffusion assembly to FEM or FD based
+on `disc`, so the QP generators below only branch once per operator. FD
+always uses its lumped mass (there is no FD analogue of the consistent
+Q1 mass matrix), so `lump_mass` only affects the FEM path.
+
+D_op feeds into the shared PDE constraint D_op*y - M*u = rhs (see
+make_problem_l2_from_mats / make_problem_l1l2_from_mats), which encodes
+the FEM weak form K*y = M*u. FD's strong-form Laplacian/convection
+assembly instead represents the pointwise equation D_op*y = u (no mass
+weighting on u), and FD's stiffness is O(1/h^2) rather than FEM's
+O(1) — so passing FD's raw D_op through the same M*u convention would
+silently divide the control's influence on the state by an extra O(h^2)
+per stage. To reuse the shared constraint assembly unchanged, the FD
+operator is mass-scaled here (M_lump * D_op_raw), which is algebraically
+equivalent to the strong-form equation (mass is diagonal/invertible) and
+also renormalizes FD's stiffness down to FEM's O(1) magnitude.
+-----------------------------------------------------------------------*/
+template <typename T>
+static void assemble_diff_by_discretization(const GridQ1<T>& g, Discretization disc, bool lump_mass,
+                                              Eigen::SparseMatrix<T>& D, Eigen::SparseMatrix<T>& M) {
+    if (disc == Discretization::FD) {
+        auto asm_res = assemble_fd_diff<T>(g);
+        D = asm_res.M_lump * asm_res.A_stiff;
+        M = asm_res.M_lump;
+    } else {
+        auto asm_res = assemble_femq1_diff<T>(g);
+        D = asm_res.A_stiff;
+        M = lump_mass ? asm_res.M_lump : asm_res.M_cons;
+    }
+}
+
+template <typename T, typename WindFn = void (*)(T, T, T&, T&)>
+static void assemble_cd_by_discretization(const GridQ1<T>& g, Discretization disc, bool lump_mass, T eps,
+                                           WindFn wind,
+                                           Eigen::SparseMatrix<T>& D, Eigen::SparseMatrix<T>& M) {
+    if (disc == Discretization::FD) {
+        auto asm_res = assemble_fd_cd<T>(g, wind);
+        D = asm_res.M_lump * (eps * asm_res.A_stiff + asm_res.N_conv);
+        M = asm_res.M_lump;
+    } else {
+        auto asm_res = assemble_femq1_cd<T>(g, wind);
+        D = eps * asm_res.A_stiff + asm_res.N_conv;
+        M = lump_mass ? asm_res.M_lump : asm_res.M_cons;
+    }
 }
 
 /*-----------------------------------------------------------------------
@@ -633,7 +825,8 @@ KSPQPdata<T> make_poisson_l2_control(
     T y_upper =  std::numeric_limits<T>::infinity(),
     T u_lower = -std::numeric_limits<T>::infinity(),
     T u_upper =  std::numeric_limits<T>::infinity(),
-    bool lump_mass = false)
+    bool lump_mass = false,
+    Discretization disc = Discretization::FEM)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -648,9 +841,8 @@ KSPQPdata<T> make_poisson_l2_control(
             yhat(p) = std::exp(T(-64) * (dx * dx + dy * dy));
         }
 
-    auto asm_res = assemble_femq1_diff<T>(g);
-    Eigen::SparseMatrix<T> D = asm_res.A_stiff;
-    Eigen::SparseMatrix<T> M = lump_mass ? asm_res.M_lump : asm_res.M_cons;
+    Eigen::SparseMatrix<T> D, M;
+    assemble_diff_by_discretization<T>(g, disc, lump_mass, D, M);
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
@@ -674,7 +866,8 @@ KSPQPdata<T> make_poisson_l2_state_control(
     T y_upper =  std::numeric_limits<T>::infinity(),
     T u_lower = -std::numeric_limits<T>::infinity(),
     T u_upper =  std::numeric_limits<T>::infinity(),
-    bool lump_mass = false)
+    bool lump_mass = false,
+    Discretization disc = Discretization::FEM)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -687,9 +880,8 @@ KSPQPdata<T> make_poisson_l2_state_control(
             yhat(p) = std::sin(T(M_PI) * g.x1d[i]) * std::sin(T(M_PI) * g.x1d[j]);
         }
 
-    auto asm_res = assemble_femq1_diff<T>(g);
-    Eigen::SparseMatrix<T> D = asm_res.A_stiff;
-    Eigen::SparseMatrix<T> M = lump_mass ? asm_res.M_lump : asm_res.M_cons;
+    Eigen::SparseMatrix<T> D, M;
+    assemble_diff_by_discretization<T>(g, disc, lump_mass, D, M);
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
@@ -717,7 +909,8 @@ KSPQPdata<T> make_convdiff_l2_control(
     T u_lower = -std::numeric_limits<T>::infinity(),
     T u_upper =  std::numeric_limits<T>::infinity(),
     T eps = T(0.01),
-    bool lump_mass = false)
+    bool lump_mass = false,
+    Discretization disc = Discretization::FEM)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -732,9 +925,8 @@ KSPQPdata<T> make_convdiff_l2_control(
             yhat(p) = std::exp(T(-64) * (dx * dx + dy * dy));
         }
 
-    auto asm_res = assemble_femq1_cd<T>(g, fem::velocity_field_w_constant<T>);
-    Eigen::SparseMatrix<T> D = eps * asm_res.A_stiff + asm_res.N_conv;
-    Eigen::SparseMatrix<T> M = lump_mass ? asm_res.M_lump : asm_res.M_cons;
+    Eigen::SparseMatrix<T> D, M;
+    assemble_cd_by_discretization<T>(g, disc, lump_mass, eps, fem::velocity_field_w_constant<T>, D, M);
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
@@ -759,7 +951,8 @@ KSPQPdata<T> make_poisson_l1l2_control(
     T u_lower = T(-2), T u_upper = T(1.5),
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
-    bool lump_mass = false)
+    bool lump_mass = false,
+    Discretization disc = Discretization::FEM)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -772,9 +965,8 @@ KSPQPdata<T> make_poisson_l1l2_control(
             yhat(p) = std::sin(T(M_PI) * g.x1d[i]) * std::sin(T(M_PI) * g.x1d[j]);
         }
 
-    auto asm_res = assemble_femq1_diff<T>(g);
-    Eigen::SparseMatrix<T> D = asm_res.A_stiff;
-    Eigen::SparseMatrix<T> M = lump_mass ? asm_res.M_lump : asm_res.M_cons;
+    Eigen::SparseMatrix<T> D, M;
+    assemble_diff_by_discretization<T>(g, disc, lump_mass, D, M);
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);
@@ -800,7 +992,8 @@ KSPQPdata<T> make_convdiff_l1l2_control(
     T u_lower = T(-2), T u_upper = T(1.5), T eps = T(0.02),
     T y_lower = -std::numeric_limits<T>::infinity(),
     T y_upper =  std::numeric_limits<T>::infinity(),
-    bool lump_mass = false)
+    bool lump_mass = false,
+    Discretization disc = Discretization::FEM)
 {
     using Vec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 
@@ -815,9 +1008,8 @@ KSPQPdata<T> make_convdiff_l1l2_control(
             yhat(p) = std::exp(T(-64) * (dx * dx + dy * dy));
         }
 
-    auto asm_res = assemble_femq1_cd<T>(g);
-    Eigen::SparseMatrix<T> D = eps * asm_res.A_stiff + asm_res.N_conv;
-    Eigen::SparseMatrix<T> M = lump_mass ? asm_res.M_lump : asm_res.M_cons;
+    Eigen::SparseMatrix<T> D, M;
+    assemble_cd_by_discretization<T>(g, disc, lump_mass, eps, fem::velocity_field_w_circular<T>, D, M);
     Vec rhs = Vec::Zero(g.np);
 
     const std::vector<int> bc_nodes = fem_boundary_nodes<T>(g);

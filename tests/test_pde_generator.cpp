@@ -168,6 +168,66 @@ TEST(AssembleFemq1Cd, ConvectionRowsSumToZero) {
   for (int i = 0; i < row_sums.size(); ++i) EXPECT_NEAR(row_sums(i), 0.0, kLoose);
 }
 
+// ===================== assemble_fd_diff / assemble_fd_cd =====================
+
+TEST(AssembleFdDiff, InteriorStencilMatchesFivePointLaplacianOnSmallGrid) {
+  GridQ1<double> g(1);  // n1d = 3, h = 0.5
+  const auto res = assemble_fd_diff<double>(g);
+  const double h = g.x1d[1] - g.x1d[0];
+  const double inv_h2 = 1.0 / (h * h);
+  const int p = GridQ1<double>::idx(1, 1, g.n1d);  // sole interior node
+
+  EXPECT_NEAR(res.A_stiff.coeff(p, p), 4.0 * inv_h2, kTight);
+  EXPECT_NEAR(res.A_stiff.coeff(p, GridQ1<double>::idx(0, 1, g.n1d)), -inv_h2, kTight);
+  EXPECT_NEAR(res.A_stiff.coeff(p, GridQ1<double>::idx(2, 1, g.n1d)), -inv_h2, kTight);
+  EXPECT_NEAR(res.A_stiff.coeff(p, GridQ1<double>::idx(1, 0, g.n1d)), -inv_h2, kTight);
+  EXPECT_NEAR(res.A_stiff.coeff(p, GridQ1<double>::idx(1, 2, g.n1d)), -inv_h2, kTight);
+  EXPECT_NEAR(res.M_lump.coeff(p, p), h * h, kTight);
+
+  // Boundary rows are left empty; apply_dirichlet_bc fills them in later.
+  for (int bp : fem_boundary_nodes<double>(g))
+    for (int j = 0; j < g.np; ++j) EXPECT_NEAR(res.A_stiff.coeff(bp, j), 0.0, kTight);
+
+  EXPECT_EQ(res.f_rhs.size(), g.np);
+  EXPECT_DOUBLE_EQ(res.f_rhs.norm(), 0.0);
+}
+
+TEST(AssembleFdDiff, MassDiagonalUsesTrapezoidalWeightsAndSumsToDomainArea) {
+  GridQ1<double> g(2);  // 4x4 elements, n1d = 5
+  const auto res = assemble_fd_diff<double>(g);
+  const double h = g.x1d[1] - g.x1d[0];
+
+  // Interior node: full weight h^2.
+  const int interior = GridQ1<double>::idx(2, 2, g.n1d);
+  EXPECT_NEAR(res.M_lump.coeff(interior, interior), h * h, kTight);
+  // Edge (non-corner) boundary node: half weight.
+  const int edge = GridQ1<double>::idx(2, 0, g.n1d);
+  EXPECT_NEAR(res.M_lump.coeff(edge, edge), 0.5 * h * h, kTight);
+  // Corner node: quarter weight.
+  const int corner = GridQ1<double>::idx(0, 0, g.n1d);
+  EXPECT_NEAR(res.M_lump.coeff(corner, corner), 0.25 * h * h, kTight);
+
+  EXPECT_NEAR(res.M_lump.sum(), 1.0, kLoose);  // unit square area (trapezoidal rule is exact here)
+}
+
+TEST(AssembleFdCd, DiffusionAndMassBlocksMatchAssembleFdDiff) {
+  GridQ1<double> g(1);
+  const auto diff_res = assemble_fd_diff<double>(g);
+  const auto cd_res = assemble_fd_cd<double>(g);
+  EXPECT_TRUE(cd_res.A_stiff.isApprox(diff_res.A_stiff, kTight));
+  EXPECT_TRUE(cd_res.M_lump.isApprox(diff_res.M_lump, kTight));
+}
+
+TEST(AssembleFdCd, ConvectionRowsSumToZero) {
+  // Telescoping upwind stencil: row sum = (wx_p+wx_m+wy_p+wy_m) - wx_p - wx_m - wy_p - wy_m = 0
+  // at every interior node, for any wind field.
+  GridQ1<double> g(2);
+  const auto res = assemble_fd_cd<double>(g);  // default circular wind
+  Eigen::VectorXd ones = Eigen::VectorXd::Ones(res.N_conv.cols());
+  Eigen::VectorXd row_sums = res.N_conv * ones;
+  for (int i = 0; i < row_sums.size(); ++i) EXPECT_NEAR(row_sums(i), 0.0, kLoose);
+}
+
 // ===================== apply_dirichlet_bc / apply_dirichlet_bc_mass =====================
 
 TEST(ApplyDirichletBc, FoldsBoundaryColumnIntoRhsAndSetsIdentityRow) {
@@ -554,4 +614,90 @@ TEST(MakeConvdiffL1l2Control, DimensionsAndZeroBoundaryValues) {
   EXPECT_EQ(pb.l, 9);
   ExpectBoundaryRowsAreIdentity(pb, g, bc_nodes);
   for (int p : bc_nodes) EXPECT_NEAR(pb.b(p), 0.0, kTight);
+}
+
+// ===================== Discretization::FD dispatch (default stays FEM) =====================
+
+namespace {
+constexpr double kInf = std::numeric_limits<double>::infinity();
+}  // namespace
+
+TEST(MakePoissonL2Control, FdMatchesShapeAndBcOfFemButUsesADifferentOperator) {
+  GridQ1<double> g(1);
+  const auto bc_nodes = fem_boundary_nodes<double>(g);
+  auto pb_fem = make_poisson_l2_control<double>(1, 4.0);
+  auto pb_fd = make_poisson_l2_control<double>(1, 4.0, -kInf, kInf, -kInf, kInf, false,
+                                                Discretization::FD);
+
+  EXPECT_EQ(pb_fd.n, pb_fem.n);
+  EXPECT_EQ(pb_fd.m, pb_fem.m);
+  EXPECT_EQ(pb_fd.l, pb_fem.l);
+  EXPECT_FALSE(pb_fd.A.isApprox(pb_fem.A, kTight));
+  ExpectBoundaryRowsAreIdentity(pb_fd, g, bc_nodes);
+  for (int p : bc_nodes) EXPECT_NEAR(pb_fd.b(p), 0.0, kTight);
+}
+
+TEST(MakePoissonL2StateControl, FdBoundaryValuesStillMatchYhat) {
+  GridQ1<double> g(1);
+  const auto bc_nodes = fem_boundary_nodes<double>(g);
+  auto pb_fd = make_poisson_l2_state_control<double>(1, 4.0, -kInf, kInf, -kInf, kInf, false,
+                                                      Discretization::FD);
+  for (int p : bc_nodes) {
+    const int i = p % g.n1d, j = p / g.n1d;
+    const double expected = std::sin(M_PI * g.x1d[i]) * std::sin(M_PI * g.x1d[j]);
+    EXPECT_NEAR(pb_fd.b(p), expected, kTight);
+  }
+}
+
+TEST(MakeConvdiffL2Control, FdMatchesShapeAndBcOfFemButUsesADifferentOperator) {
+  GridQ1<double> g(1);
+  const auto bc_nodes = fem_boundary_nodes<double>(g);
+  auto pb_fem = make_convdiff_l2_control<double>(1, 4.0);
+  auto pb_fd = make_convdiff_l2_control<double>(1, 4.0, -kInf, kInf, -kInf, kInf, 0.01, false,
+                                                 Discretization::FD);
+
+  EXPECT_EQ(pb_fd.n, pb_fem.n);
+  EXPECT_EQ(pb_fd.m, pb_fem.m);
+  EXPECT_FALSE(pb_fd.A.isApprox(pb_fem.A, kTight));
+  ExpectBoundaryRowsAreIdentity(pb_fd, g, bc_nodes);
+  for (int p : bc_nodes) EXPECT_NEAR(pb_fd.b(p), 0.0, kTight);
+}
+
+TEST(MakePoissonL1l2Control, FdMatchesShapeAndBcOfFemButUsesADifferentOperator) {
+  GridQ1<double> g(1);
+  const auto bc_nodes = fem_boundary_nodes<double>(g);
+  auto pb_fem = make_poisson_l1l2_control<double>(1, 2.0, 3.0);
+  auto pb_fd = make_poisson_l1l2_control<double>(1, 2.0, 3.0, -2.0, 1.5, -kInf, kInf, false,
+                                                  Discretization::FD);
+
+  EXPECT_EQ(pb_fd.n, pb_fem.n);
+  EXPECT_EQ(pb_fd.m, pb_fem.m);
+  EXPECT_EQ(pb_fd.l, pb_fem.l);
+  EXPECT_FALSE(pb_fd.A.isApprox(pb_fem.A, kTight));
+  ExpectBoundaryRowsAreIdentity(pb_fd, g, bc_nodes);
+  for (int p : bc_nodes) EXPECT_NEAR(pb_fd.b(p), 1.0, kTight);
+}
+
+TEST(MakeConvdiffL1l2Control, FdMatchesShapeAndBcOfFemButUsesADifferentOperator) {
+  GridQ1<double> g(1);
+  const auto bc_nodes = fem_boundary_nodes<double>(g);
+  auto pb_fem = make_convdiff_l1l2_control<double>(1, 2.0, 3.0);
+  auto pb_fd = make_convdiff_l1l2_control<double>(1, 2.0, 3.0, -2.0, 1.5, 0.02, -kInf, kInf, false,
+                                                   Discretization::FD);
+
+  EXPECT_EQ(pb_fd.n, pb_fem.n);
+  EXPECT_EQ(pb_fd.m, pb_fem.m);
+  EXPECT_EQ(pb_fd.l, pb_fem.l);
+  EXPECT_FALSE(pb_fd.A.isApprox(pb_fem.A, kTight));
+  ExpectBoundaryRowsAreIdentity(pb_fd, g, bc_nodes);
+  for (int p : bc_nodes) EXPECT_NEAR(pb_fd.b(p), 0.0, kTight);
+}
+
+TEST(MakePoissonL2Control, FdIgnoresLumpMassFlagAndAlwaysUsesLumpedMass) {
+  auto pb_fd_lumped = make_poisson_l2_control<double>(1, 4.0, -kInf, kInf, -kInf, kInf, true,
+                                                       Discretization::FD);
+  auto pb_fd_consistent = make_poisson_l2_control<double>(1, 4.0, -kInf, kInf, -kInf, kInf, false,
+                                                           Discretization::FD);
+  EXPECT_TRUE(pb_fd_lumped.Q.isApprox(pb_fd_consistent.Q, kTight));
+  EXPECT_TRUE(pb_fd_lumped.A.isApprox(pb_fd_consistent.A, kTight));
 }

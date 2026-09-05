@@ -87,3 +87,68 @@ TEST(KktResidual, ConvDiffL1L2ControlSatisfiesKkt) {
   // Exercises the l > 0 / Bx-complementarity residual branch with a non-symmetric A.
   SolveAndCheckKkt(make_convdiff_l1l2_control<double>(2, 1e-2, 1e-2));
 }
+
+// ===================== Discretization::FD =====================
+// Mirrors the FEM cases above but with the FD discretization. FD's PDE
+// operator is mass-scaled in assemble_diff_by_discretization /
+// assemble_cd_by_discretization specifically so these solve to the same
+// KKT residual tolerance as the FEM path -- see PoissonL2ControlFdIsNotDegenerate
+// below for the regression this guards against.
+
+TEST(KktResidual, PoissonL2ControlFdSatisfiesKkt) {
+  const double inf = std::numeric_limits<double>::infinity();
+  SolveAndCheckKkt(make_poisson_l2_control<double>(2, 1e-2, -inf, inf, -inf, inf, false,
+                                                    Discretization::FD));
+}
+
+TEST(KktResidual, PoissonL2StateControlFdSatisfiesKkt) {
+  const double inf = std::numeric_limits<double>::infinity();
+  SolveAndCheckKkt(make_poisson_l2_state_control<double>(2, 1.0, -0.1, 0.002, -inf, inf, false,
+                                                          Discretization::FD));
+}
+
+TEST(KktResidual, ConvDiffL2ControlFdSatisfiesKkt) {
+  SolveAndCheckKkt(make_convdiff_l2_control<double>(2, 0.1, 0.0, 0.2, -0.75, 0.75, 0.01, false,
+                                                     Discretization::FD));
+}
+
+TEST(KktResidual, PoissonL1L2ControlFdSatisfiesKkt) {
+  const double inf = std::numeric_limits<double>::infinity();
+  SolveAndCheckKkt(make_poisson_l1l2_control<double>(2, 1e-2, 1e-2, -2.0, 1.5, -inf, inf, false,
+                                                       Discretization::FD));
+}
+
+TEST(KktResidual, ConvDiffL1L2ControlFdSatisfiesKkt) {
+  const double inf = std::numeric_limits<double>::infinity();
+  SolveAndCheckKkt(make_convdiff_l1l2_control<double>(2, 1e-2, 1e-2, -2.0, 1.5, 0.02, -inf, inf,
+                                                        false, Discretization::FD));
+}
+
+// Regression test for the bug this FD-scaling fix addresses: with a raw
+// (unscaled) FD stiffness matrix in the D_op*y = M*u constraint, FD's
+// O(1/h^2) operator combined with the O(h^2) mass on the control made the
+// state's response to control collapse as O(h^4), so the trivial x=0
+// solution was (numerically) KKT-optimal for a control-constrained,
+// weakly-regularized tracking problem -- i.e. the solver would "converge"
+// in a single iteration to a degenerate, physically wrong answer. Assert
+// the control actually engages (uses a meaningful fraction of its box)
+// instead of collapsing to its lower bound everywhere.
+TEST(KktResidual, PoissonL2ControlFdIsNotDegenerate) {
+  const double inf = std::numeric_limits<double>::infinity();
+  const double u_upper = 300.0;
+  auto pb = make_poisson_l2_control<double>(/*nc=*/5, /*beta=*/1e-6, -inf, inf, 0.0, u_upper,
+                                             false, Discretization::FD);
+  Problem<double> prob(pb, kSolverTol, /*max_iter=*/3000, /*time_limit=*/60.0,
+                        PrintWhen::NEVER, PrintWhat::NONE);
+  KSP_QP<double> solver(prob);
+  ASSERT_FALSE(solver.setup_failed);
+  Solution<double> sol = solver.solve();
+  ASSERT_EQ(sol.opt, TerminationStatus::Optimal);
+  ExpectFullQpKktResidualSmall(prob, sol);
+
+  const int np = pb.n / 2;
+  const double u_max = sol.x.segment(np, np).maxCoeff();
+  // The degenerate bug produced u_max on the order of 1e-9 to 1e-10; a
+  // correctly-scaled solve uses a large fraction of the [0, 300] box.
+  EXPECT_GT(u_max, 1.0) << "control collapsed near zero -- FD state/control coupling regressed";
+}

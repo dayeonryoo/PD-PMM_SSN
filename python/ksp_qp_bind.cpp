@@ -2,6 +2,9 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
+#include <algorithm>
+#include <cctype>
+
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
@@ -284,6 +287,18 @@ static py::dict kspqp_to_dict(const KSPQPdata<T>& pd) {
 }
 
 /*-----------------------------------------------------------------------
+Helper: "fem"/"fd" (case-insensitive) → pdegen::Discretization
+-----------------------------------------------------------------------*/
+static pdegen::Discretization parse_discretization(const std::string& s) {
+    std::string lower = s;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                    [](unsigned char c) { return std::tolower(c); });
+    if (lower == "fem") return pdegen::Discretization::FEM;
+    if (lower == "fd")  return pdegen::Discretization::FD;
+    throw std::invalid_argument("discretization must be 'fem' or 'fd'");
+}
+
+/*-----------------------------------------------------------------------
 Generate L1/L2-regularised PDE-constrained QPs from (Gondzio, Pougkakiotis & Pearson 2022).
 
 choice  = "poisson"  or  "convdiff"
@@ -296,18 +311,20 @@ py::dict generate_pde_l1l2_qp(const std::string& choice,
                               int nc, double alpha1, double alpha2,
                               double y_lower = -std::numeric_limits<double>::infinity(),
                               double y_upper =  std::numeric_limits<double>::infinity(),
-                              bool lumped_mass = false) {
+                              bool lumped_mass = false,
+                              const std::string& discretization = "fem") {
     if (choice != "poisson" && choice != "convdiff")
         throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
+    const pdegen::Discretization disc = parse_discretization(discretization);
 
     KSPQPdata<T> pd;
     {
         py::gil_scoped_release release;
         pd = (choice == "poisson")
                ? pdegen::make_poisson_l1l2_control<T>(nc, (T)alpha1, (T)alpha2, T(-2), T(1.5),
-                                                       (T)y_lower, (T)y_upper, lumped_mass)
+                                                       (T)y_lower, (T)y_upper, lumped_mass, disc)
                : pdegen::make_convdiff_l1l2_control<T>(nc, (T)alpha1, (T)alpha2, T(-2), T(1.5), T(0.02),
-                                                        (T)y_lower, (T)y_upper, lumped_mass);
+                                                        (T)y_lower, (T)y_upper, lumped_mass, disc);
     }
     return kspqp_to_dict(pd);
 }
@@ -329,23 +346,25 @@ py::dict generate_pde_l2_qp(const std::string& choice,
                                      double u_lower = -std::numeric_limits<double>::infinity(),
                                      double u_upper =  std::numeric_limits<double>::infinity(),
                                      double eps = 0.01,
-                                     bool lumped_mass = false) {
+                                     bool lumped_mass = false,
+                                     const std::string& discretization = "fem") {
     if (choice != "poisson" && choice != "poisson_state" && choice != "convdiff")
         throw std::invalid_argument(
             "choice must be one of 'poisson', 'poisson_state', 'convdiff'");
+    const pdegen::Discretization disc = parse_discretization(discretization);
 
     KSPQPdata<T> pd;
     {
         py::gil_scoped_release release;
         if (choice == "poisson") {
             pd = pdegen::make_poisson_l2_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                    (T)u_lower, (T)u_upper, lumped_mass);
+                                                    (T)u_lower, (T)u_upper, lumped_mass, disc);
         } else if (choice == "poisson_state") {
             pd = pdegen::make_poisson_l2_state_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                        (T)u_lower, (T)u_upper, lumped_mass);
+                                                        (T)u_lower, (T)u_upper, lumped_mass, disc);
         } else { // convdiff
             pd = pdegen::make_convdiff_l2_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                    (T)u_lower, (T)u_upper, (T)eps, lumped_mass);
+                                                    (T)u_lower, (T)u_upper, (T)eps, lumped_mass, disc);
         }
     }
     return kspqp_to_dict(pd);
@@ -382,6 +401,7 @@ status >  0  → iteration / time limit reached)");
           py::arg("y_lower") = -std::numeric_limits<double>::infinity(),
           py::arg("y_upper") =  std::numeric_limits<double>::infinity(),
           py::arg("lumped_mass") = false,
+          py::arg("discretization") = "fem",
           R"(Generate a L1/L2-regularized PDE-constrained QP via split control variables.
 
 choice = 'poisson'  or  'convdiff'
@@ -391,7 +411,10 @@ alpha2 = L2 regularisation weight (0 is valid)
 y_lower/y_upper = state bounds (default ±inf, i.e. control-constrained only;
                   pass finite bounds for a state- or jointly-constrained problem)
 lumped_mass = if True, use the lumped (diagonal) mass matrix instead of the
-              consistent Q1 mass matrix.
+              consistent Q1 mass matrix. Ignored (always lumped) when
+              discretization='fd'.
+discretization = 'fem' (default, Q1 finite elements) or 'fd' (5-point
+              finite-difference stencil with first-order upwind convection).
 
 Returns the same dict format as parse_sif(), so the result can be passed
 directly to solve_from_data() and used with kspqp_to_qpalm().)");
@@ -404,6 +427,7 @@ directly to solve_from_data() and used with kspqp_to_qpalm().)");
           py::arg("u_upper") =  std::numeric_limits<double>::infinity(),
           py::arg("eps") = 0.01,
           py::arg("lumped_mass") = false,
+          py::arg("discretization") = "fem",
           R"(Generate a L2-regularized PDE-constrained QP.
 
 choice = 'poisson' (control-constrained)  or  'poisson_state' (state-constrained)  or  'convdiff' (control- and state-constrained)
@@ -412,7 +436,10 @@ beta   = L2 regularisation weight
 y_lower/y_upper/u_lower/u_upper = box bounds on state/control (default ±inf)
 eps = diffusion coefficient, 'convdiff' only.
 lumped_mass = if True, use the lumped (diagonal) mass matrix instead of the
-              consistent Q1 mass matrix.
+              consistent Q1 mass matrix. Ignored (always lumped) when
+              discretization='fd'.
+discretization = 'fem' (default, Q1 finite elements) or 'fd' (5-point
+              finite-difference stencil with first-order upwind convection).
 
 Returns the same dict format as parse_sif(), so the result can be passed
 directly to solve_from_data() and used with kspqp_to_qpalm().)");
