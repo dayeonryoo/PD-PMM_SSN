@@ -1,0 +1,323 @@
+"""
+Build linear Model Predictive Control (MPC) QPs in KSPQPdata dict form (same
+format as ksp_qp_bind.parse_sif()), for benchmark_mpc.py.
+
+MPC is a native smooth QP: pure quadratic tracking cost, linear dynamics
+equality constraints, simple box bounds on states/inputs. The constraint 
+matrix is genuinely sparse -- each dynamics row only couples one timestep's
+variables to the next (block-bidiagonal/banded).
+
+Model
+-----
+Continuous-time dynamics x' = Ac x + Bc u, discretized via zero-order hold
+at sample time Ts to x_{k+1} = A x_k + B u_k. At every control step, given
+the current state xbar, MPC solves:
+
+    min_{x_0..x_N, u_0..u_{N-1}}
+        sum_{k=0}^{N-1} [(x_k-x_ref)'Q(x_k-x_ref) + (u_k-u_ref)'R(u_k-u_ref)]
+        + (x_N-x_ref)'P(x_N-x_ref)
+    s.t.  x_0 = xbar
+          x_{k+1} = A x_k + B u_k,  k=0..N-1
+          x_min <= x_k <= x_max,     k=1..N
+          u_min <= u_k <= u_max,     k=0..N-1
+
+P is the exact discrete-algebraic-Riccati-equation (DARE) solution for
+(A,B,Q,R) -- this isn't just a common tuning choice, it's what makes the
+LQR ground-truth check in validate_mpc_generator.py exact for any N>=1
+(not just asymptotically), since it makes P a fixed point of the backward
+Riccati recursion.
+
+Variable stacking:
+    z = [x_0; u_0; x_1; u_1; ...; x_{N-1}; u_{N-1}; x_N],
+    n_z = (N+1)*n_x + N*n_u.
+Mapping to KSP-QP's min c'x + 0.5x'Qx s.t. Ax=b, lw<=Bx<=uw, lx<=x<=ux:
+  - Q_ksp = blkdiag(2Q, 2R, ..., 2Q, 2R, 2P) (the factor of 2 reconciles the
+    tracking cost's 1*(x-xref)'Q(x-xref) with KSP-QP's 0.5*x'Q_ksp*x)
+  - c: per-block linear terms from expanding the quadratic around
+    x_ref/u_ref; obj_const absorbs the constant terms left over.
+  - A, b: block-bidiagonal equality matrix (x_0=xbar row-block, then N
+    dynamics row-blocks each touching only x_k, u_k, x_{k+1}) -- assembled
+    via sparse triplets, never densified.
+  - lx, ux: direct box bounds (no B/lw/uw needed at all in the base
+    version -- l=0). The x_0 block is always +-inf (never a finite box
+    bound), since it's already pinned by the equality row.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import scipy.sparse as sp
+import scipy.linalg as la
+import scipy.signal as sig
+
+INF = np.inf
+
+
+# ---------------------------------------------------------------------------
+# KSPQPdata dict assembly
+# ---------------------------------------------------------------------------
+
+def _sparse_to_ksp(M: sp.spmatrix, key: str) -> dict:
+    M = M.tocsc()
+    M.sort_indices()
+    return {
+        f"{key}_data":    M.data.astype(np.float64),
+        f"{key}_indices": M.indices.astype(np.int32),
+        f"{key}_indptr":  M.indptr.astype(np.int32),
+        f"{key}_shape":   M.shape,
+    }
+
+
+def _assemble(Q: sp.spmatrix, A: sp.spmatrix, B: sp.spmatrix,
+              c: np.ndarray,  b: np.ndarray,
+              lx: np.ndarray, ux: np.ndarray,
+              lw: np.ndarray, uw: np.ndarray, obj_const: float = 0.0) -> dict:
+    n_z = Q.shape[0]
+    out: dict = {"n": n_z, "m": int(A.shape[0]), "l": int(B.shape[0]), "obj_const": float(obj_const)}
+    out.update(_sparse_to_ksp(Q, "Q"))
+    out.update(_sparse_to_ksp(A, "A"))
+    out.update(_sparse_to_ksp(B, "B"))
+    out["c"]  = c.astype(np.float64)
+    out["b"]  = b.astype(np.float64)
+    out["lx"] = lx.astype(np.float64)
+    out["ux"] = ux.astype(np.float64)
+    out["lw"] = lw.astype(np.float64)
+    out["uw"] = uw.astype(np.float64)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# System definitions
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MpcSystem:
+    name: str
+    Ac: np.ndarray
+    Bc: np.ndarray
+    Ts: float
+    Q: np.ndarray
+    R: np.ndarray
+    x_min: np.ndarray
+    x_max: np.ndarray
+    u_min: np.ndarray
+    u_max: np.ndarray
+    xbar0: np.ndarray
+    n_x: int
+    n_u: int
+
+
+def discretize(Ac: np.ndarray, Bc: np.ndarray, Ts: float) -> tuple[np.ndarray, np.ndarray]:
+    """Zero-order-hold discretization: x_{k+1} = Ad x_k + Bd u_k."""
+    n_x = Ac.shape[0]
+    Ad, Bd, _, _, _ = sig.cont2discrete((Ac, Bc, np.eye(n_x), np.zeros((n_x, Bc.shape[1]))),
+                                        Ts, method="zoh")
+    return Ad, Bd
+
+
+def terminal_cost(Ad: np.ndarray, Bd: np.ndarray, Q: np.ndarray, R: np.ndarray) -> np.ndarray:
+    """Exact discrete-algebraic-Riccati-equation solution for (Ad,Bd,Q,R)."""
+    return la.solve_discrete_are(Ad, Bd, Q, R)
+
+
+def lqr_gain(Ad: np.ndarray, Bd: np.ndarray, P: np.ndarray, R: np.ndarray) -> np.ndarray:
+    """Infinite-horizon LQR gain K such that u* = -K @ xbar (validation only)."""
+    return np.linalg.solve(R + Bd.T @ P @ Bd, Bd.T @ P @ Ad)
+
+
+def double_integrator_system() -> MpcSystem:
+    Ac = np.array([[0., 1.], [0., 0.]])
+    Bc = np.array([[0.], [1.]])
+    return MpcSystem(
+        name="double_integrator", Ac=Ac, Bc=Bc, Ts=0.1,
+        Q=np.diag([10., 1.]), R=np.array([[0.1]]),
+        x_min=np.array([-5., -2.]), x_max=np.array([5., 2.]),
+        u_min=np.array([-1.]), u_max=np.array([1.]),
+        xbar0=np.array([-4.5, 1.8]), n_x=2, n_u=1,
+    )
+
+
+def cartpole_system() -> MpcSystem:
+    # Barto/Sutton/Anderson (1983) cart-pole parameters (also OpenAI Gym CartPole's physics).
+    M, m, l, g = 1.0, 0.1, 0.5, 9.8
+    Ac = np.array([
+        [0., 1., 0., 0.],
+        [0., 0., -m * g / M, 0.],
+        [0., 0., 0., 1.],
+        [0., 0., (M + m) * g / (M * l), 0.],
+    ])
+    Bc = np.array([[0.], [1. / M], [0.], [-1. / (M * l)]])
+    x_min = np.array([-2.4, -3., -0.2, -3.])
+    return MpcSystem(
+        name="cartpole", Ac=Ac, Bc=Bc, Ts=0.02,
+        Q=np.diag([1., 1., 50., 1.]), R=np.array([[0.1]]),
+        x_min=x_min, x_max=-x_min,
+        u_min=np.array([-10.]), u_max=np.array([10.]),
+        xbar0=np.array([0., 0., 0.15, 0.]), n_x=4, n_u=1,
+    )
+
+
+def dc_motor_system() -> MpcSystem:
+    # Standard MathWorks "Control Tutorials" DC-motor position-control parameters.
+    J, b, K, R_, L = 0.01, 0.1, 0.01, 1.0, 0.5
+    Ac = np.array([
+        [0., 1., 0.],
+        [0., -b / J, K / J],
+        [0., -K / L, -R_ / L],
+    ])
+    Bc = np.array([[0.], [0.], [1. / L]])
+    x_min = np.array([-1.0, -30., -4.])
+    return MpcSystem(
+        name="dc_motor", Ac=Ac, Bc=Bc, Ts=0.02,
+        Q=np.diag([50., 1., 0.1]), R=np.array([[0.01]]),
+        x_min=x_min, x_max=-x_min,
+        u_min=np.array([-12.]), u_max=np.array([12.]),
+        xbar0=np.array([0.9, 0., 0.]), n_x=3, n_u=1,
+    )
+
+
+def platoon_system(M: int) -> MpcSystem:
+    """Chain of M coupled double integrators (vehicle platoon), in velocity-
+    deviation coordinates relative to a constant-speed lead vehicle (v_0=0
+    identically -- standard simplifying assumption in the platooning-MPC
+    literature, e.g. Ploeg et al. 2014, Zheng et al. 2016). State per
+    vehicle i is (d_i, v_i) [spacing-error deviation, velocity deviation];
+    d_i' = v_{i-1} - v_i, v_i' = u_i.
+    """
+    n_x, n_u = 2 * M, M
+    Ac = np.zeros((n_x, n_x))
+    Bc = np.zeros((n_x, n_u))
+    for i in range(M):
+        d_idx, v_idx = 2 * i, 2 * i + 1
+        Ac[d_idx, v_idx] = -1.0
+        if i > 0:
+            Ac[d_idx, 2 * (i - 1) + 1] = 1.0
+        Bc[v_idx, i] = 1.0
+
+    Q = np.zeros((n_x, n_x))
+    for i in range(M):
+        Q[2 * i, 2 * i] = 10.
+        Q[2 * i + 1, 2 * i + 1] = 1.
+    R = 0.1 * np.eye(M)
+
+    x_min = np.tile([-2., -5.], M)
+    u_min = np.full(M, -2.)
+    xbar0 = np.zeros(n_x)
+    # Vehicle 1 perturbed (rest at steady state). Note d_1' = -v_1 (v_0=0
+    # identically), so d_1 and v_1 can't both start near their bounds with
+    # the same sign -- a large positive v_1 drives d_1 further negative
+    # faster than the actuator (bounded by u_min/u_max) can correct, which
+    # is infeasible for any horizon/discretization (verified: (-1.8, 4.5)
+    # is infeasible at every N in the sweep; (-1.0, 2.0) is feasible across
+    # the full N in {10,20,50} and M in {1,5,20,50} test matrix).
+    xbar0[0], xbar0[1] = -1.0, 2.0
+
+    return MpcSystem(
+        name=f"platoon_M{M}", Ac=Ac, Bc=Bc, Ts=0.1,
+        Q=Q, R=R, x_min=x_min, x_max=-x_min, u_min=u_min, u_max=-u_min,
+        xbar0=xbar0, n_x=n_x, n_u=n_u,
+    )
+
+
+SYSTEM_BUILDERS = {
+    "double_integrator": lambda **kw: double_integrator_system(),
+    "cartpole":          lambda **kw: cartpole_system(),
+    "dcmotor":           lambda **kw: dc_motor_system(),
+    "platoon":           lambda M=5, **kw: platoon_system(M),
+}
+
+
+# ---------------------------------------------------------------------------
+# Sparse QP assembly
+# ---------------------------------------------------------------------------
+
+def _build_dynamics(Ad: np.ndarray, Bd: np.ndarray, xbar: np.ndarray,
+                    N: int, n_x: int, n_u: int):
+    """Block-bidiagonal equality matrix: x_0=xbar, then x_{k+1}=Ad x_k+Bd u_k."""
+    stage = n_x + n_u
+    n_z = (N + 1) * n_x + N * n_u
+    col_x = lambda k: k * stage
+    col_u = lambda k: k * stage + n_x
+    m = (N + 1) * n_x
+
+    rows: list[int] = []
+    cols: list[int] = []
+    vals: list[float] = []
+    for i in range(n_x):
+        rows.append(i); cols.append(col_x(0) + i); vals.append(1.0)
+    b = np.zeros(m)
+    b[:n_x] = xbar
+
+    Ad_coo, Bd_coo = sp.coo_matrix(Ad), sp.coo_matrix(Bd)
+    for k in range(N):
+        row0 = (k + 1) * n_x
+        for r, c, v in zip(Ad_coo.row, Ad_coo.col, Ad_coo.data):
+            rows.append(row0 + r); cols.append(col_x(k) + c); vals.append(-v)
+        for r, c, v in zip(Bd_coo.row, Bd_coo.col, Bd_coo.data):
+            rows.append(row0 + r); cols.append(col_u(k) + c); vals.append(-v)
+        for i in range(n_x):
+            rows.append(row0 + i); cols.append(col_x(k + 1) + i); vals.append(1.0)
+
+    A = sp.coo_matrix((vals, (rows, cols)), shape=(m, n_z)).tocsc()
+    return A, b, n_z, col_x, col_u
+
+
+def _build_cost(Q: np.ndarray, R: np.ndarray, P: np.ndarray, N: int,
+                n_x: int, n_u: int, n_z: int, col_x, col_u,
+                x_ref: np.ndarray, u_ref: np.ndarray):
+    blocks = []
+    for _ in range(N):
+        blocks.append(2 * Q)
+        blocks.append(2 * R)
+    blocks.append(2 * P)
+    Q_ksp = sp.block_diag(blocks, format="csc")
+
+    c = np.zeros(n_z)
+    for k in range(N):
+        c[col_x(k):col_x(k) + n_x] = -2 * Q @ x_ref
+        c[col_u(k):col_u(k) + n_u] = -2 * R @ u_ref
+    c[col_x(N):col_x(N) + n_x] = -2 * P @ x_ref
+
+    obj_const = N * (x_ref @ Q @ x_ref + u_ref @ R @ u_ref) + x_ref @ P @ x_ref
+    return Q_ksp, c, float(obj_const)
+
+
+def generate_mpc_qp(system: MpcSystem, N: int, xbar: np.ndarray,
+                    x_ref: np.ndarray | None = None,
+                    u_ref: np.ndarray | None = None) -> dict:
+    """Build the horizon-N MPC QP for the given system at state xbar."""
+    n_x, n_u = system.n_x, system.n_u
+    if x_ref is None:
+        x_ref = np.zeros(n_x)
+    if u_ref is None:
+        u_ref = np.zeros(n_u)
+
+    Ad, Bd = discretize(system.Ac, system.Bc, system.Ts)
+    P = terminal_cost(Ad, Bd, system.Q, system.R)
+
+    A, b, n_z, col_x, col_u = _build_dynamics(Ad, Bd, xbar, N, n_x, n_u)
+    Q_ksp, c, obj_const = _build_cost(system.Q, system.R, P, N, n_x, n_u, n_z,
+                                       col_x, col_u, x_ref, u_ref)
+
+    lx = np.full(n_z, -INF)
+    ux = np.full(n_z, INF)
+    for k in range(1, N + 1):
+        lx[col_x(k):col_x(k) + n_x] = system.x_min
+        ux[col_x(k):col_x(k) + n_x] = system.x_max
+    for k in range(0, N):
+        lx[col_u(k):col_u(k) + n_u] = system.u_min
+        ux[col_u(k):col_u(k) + n_u] = system.u_max
+
+    B = sp.csc_matrix((0, n_z))
+    lw = np.zeros(0)
+    uw = np.zeros(0)
+
+    return _assemble(Q_ksp, A, B, c, b, lx, ux, lw, uw, obj_const)
+
+
+def step_dynamics(system: MpcSystem, x: np.ndarray, u0: np.ndarray) -> np.ndarray:
+    """Advance the true (discretized) system state by one control step."""
+    Ad, Bd = discretize(system.Ac, system.Bc, system.Ts)
+    return Ad @ x + Bd @ u0

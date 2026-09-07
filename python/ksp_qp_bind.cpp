@@ -118,6 +118,7 @@ Returns dict:
   fact              – total number of factorizations
   smw_count         – total number of SMW preconditioner applications
   pmm_tol_achieved  – tolerance achieved by PMM at termination
+  x                 – primal solution vector (original, unscaled units)
 -----------------------------------------------------------------------*/
 py::dict solve_from_sif(const std::string& filename,
                         double tol         = 1e-6,
@@ -125,6 +126,7 @@ py::dict solve_from_sif(const std::string& filename,
                         double time_limit  = 600.0) {
     int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
+    Vec x_sol;
     {
         py::gil_scoped_release release;
         MpsFormatParser<T>   parser;
@@ -146,6 +148,7 @@ py::dict solve_from_sif(const std::string& filename,
         fact             = sol.fact;
         smw_count        = sol.smw_count;
         pmm_tol_achieved = (double)sol.pmm_tol_achieved;
+        x_sol            = sol.x;
     }
 
     py::dict out;
@@ -160,6 +163,7 @@ py::dict solve_from_sif(const std::string& filename,
     out["fact"]             = fact;
     out["smw_count"]        = smw_count;
     out["pmm_tol_achieved"] = pmm_tol_achieved;
+    out["x"]                = eigen_vec_to_array(x_sol);
     return out;
 }
 
@@ -227,6 +231,7 @@ py::dict solve_from_data(const py::dict& pd_dict,
 
     int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
+    Vec x_sol;
     {
         py::gil_scoped_release release;
         Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
@@ -244,6 +249,7 @@ py::dict solve_from_data(const py::dict& pd_dict,
         fact             = sol.fact;
         smw_count        = sol.smw_count;
         pmm_tol_achieved = (double)sol.pmm_tol_achieved;
+        x_sol            = sol.x;
     }
 
     py::dict out;
@@ -258,6 +264,7 @@ py::dict solve_from_data(const py::dict& pd_dict,
     out["fact"]             = fact;
     out["smw_count"]        = smw_count;
     out["pmm_tol_achieved"] = pmm_tol_achieved;
+    out["x"]                = eigen_vec_to_array(x_sol);
     return out;
 }
 
