@@ -73,9 +73,10 @@ __pycache__/
 .env
 
 ############################################
-# Personal experiment results (not for upload)
+# Personal experiment data and results (not for upload)
 ############################################
 results/
+data/
 
 ############################################
 # LaTeX / notes (if you keep derivations)
