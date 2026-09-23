@@ -127,7 +127,7 @@ public:
     T mu_limit = 1e7;
     T rho_limit = 1e7;
     T alpha = 0.95;
-    double time_limit = 60.0; // in seconds
+    double time_limit = 600.0; // in seconds
     int linesearch_fail = 0;
 
     // Primal/dual infeasibility certificate tolerances.

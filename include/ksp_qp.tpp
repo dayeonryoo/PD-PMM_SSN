@@ -819,7 +819,7 @@ void KSP_QP<T>::update_PMM_parameters(const ResVec& res_norms, const ResVec& new
     } else if (ssn_opt == SsnStatus::LineSearchFailed) {
         mu = std::max(mu0, T(0.5) * mu);
         rho = std::max(rho0, T(0.5) * rho);
-        ssn_tol = std::min({worst_res, T(1.1) * ssn_tol, T(1e-2)});
+        ssn_tol = std::min({new_worst_res, T(1.1) * ssn_tol, T(1e-2)});
 
     } else if (new_worst_res > T(0.9) * worst_res) {
         mu = std::min(mu_limit, T(1.1) * mu);

@@ -757,7 +757,7 @@ private:
         q_ = static_cast<int>(added_new_rows_.size());
         const int rank = h_ + p_ + q_;
         smw_last_rank_ = rank;
-        if (rank == 0 || rank > kSmwRankThreshold) {
+        if (rank == 0 || rank >= kSmwRankThreshold) {
             smw_last_reject_reason_ = SmwRejectReason::RankZeroOrExceedsThreshold;
             return false;
         }
