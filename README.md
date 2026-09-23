@@ -60,14 +60,13 @@ cmake --build . --config Release
 > ship a prebuilt release binary. In those cases, switch `-march=native` to a portable baseline
 > (e.g. `-march=x86-64-v2`) first.
 
-This produces four executables inside `build/`:
+This produces three executables inside `build/`:
 
 | Executable | Source | Description |
 |---|---|---|
 | `ksp_qp_netlib` | `src/netlib.cpp` | Runs the solver on Netlib LPs (`.mps`) |
 | `ksp_qp_maros_meszaros` | `src/maros_meszaros.cpp` | Runs the solver on Maros-Meszaros QPs (`.SIF`) |
 | `ksp_qp_pde` | `src/pde.cpp` | Runs the solver on a PDE-constrained QP built by `pde_generator.hpp` |
-| `mps_parser` | `src/reading_mps.cpp` | Standalone MPS/SIF file parser demo |
 
 `ksp_qp_netlib`, `ksp_qp_maros_meszaros`, and `ksp_qp_pde` each take `--name`, `--tol`,
 `--max-iter`, and `--time-limit` flags. `--name` picks a single problem to solve, or `all` to
@@ -310,8 +309,8 @@ to point at your clone from elsewhere. No editing or rebuilding is needed just t
 Solves `<root>/<PROBLEM>.mps` (default: `data/netlib/AFIRO.mps`), printing the solution summary.
 Pass `--name all` to sweep every Netlib LP with a known reference objective value (the same
 `name -> obj_val` map used historically), checking each result against it and appending a row
-to `<root>/results/netlib_all.csv` (override with `--out`). There is no Python/QPALM/OSQP
-comparison script for Netlib LPs; this driver is the only way to benchmark them.
+to `<root>/results/netlib_all.csv` (override with `--out`). For a QPALM/OSQP comparison with
+performance profiles, use `python/benchmark_netlib.py` instead (see below).
 
 Two infeasibility-detection alternates are also included, commented out at the bottom of the
 file (sweep the Netlib-infeasible set, or solve one infeasible LP by name) — these predate
@@ -358,7 +357,7 @@ those still requires a rebuild.
 
 ## Running the benchmarks
 
-All three Python benchmark scripts compare **KSP-QP vs QPALM vs OSQP** and live in `python/`.
+All four Python benchmark scripts compare **KSP-QP vs QPALM vs OSQP** and live in `python/`.
 Build the Python binding first (see "Building" above), then `pip install qpalm osqp numpy scipy
 matplotlib pandas`.
 
@@ -381,15 +380,26 @@ performance profiles (`results/performance_profile_mm*.pdf/.png`, by time and by
 --cooldown 0           seconds to sleep between problems (avoids CPU throttling)
 ```
 
+### Netlib LP benchmark
+
+```bash
+cd python
+python3 benchmark_netlib.py
+```
+
+Runs the full Netlib LP test set. Writes `results/comparison_netlib.csv` plus Dolan-Moré
+performance profiles (`results/performance_profile_netlib*.pdf/.png`). Same flags as
+`benchmark_mm.py`.
+
 ### PDE-constrained QP benchmarks (L1/L2-regularized)
 
 ```bash
 cd python
-python3 benchmark_pde.py
+python3 benchmark_l1l2pde.py
 ```
 
 Produces four sweep tables (`poisson_vary_n`, `poisson_vary_a2`, `convdiff_vary_n`,
-`convdiff_vary_a2`), written to `results/<table>.csv`.
+`convdiff_vary_a2`), written to `results/l1l2_<table>.csv`.
 
 ```
 --root DIR             override project root (default: parent of script)
@@ -406,12 +416,12 @@ Produces four sweep tables (`poisson_vary_n`, `poisson_vary_a2`, `convdiff_vary_
 
 ```bash
 cd python
-python3 benchmark_smooth_pde.py
+python3 benchmark_l2pde.py
 ```
 
 Produces three tables — `poisson_control`, `poisson_state`, `convdiff_both` — written to
-`results/smooth_<table>.csv`. Same `--root`, `--tol`, `--time-limit`, `--table`, `--nc`,
-`--solver`, `--cooldown`, `--out` flags as `benchmark_pde.py` (defaults: `tol=1e-9`,
+`results/l2_<table>.csv`. Same `--root`, `--tol`, `--time-limit`, `--table`, `--nc`,
+`--solver`, `--cooldown`, `--out` flags as `benchmark_l1l2pde.py` (defaults: `tol=1e-9`,
 `nc = 7 8 9 10`).
 
 ---
@@ -498,20 +508,21 @@ KSP-QP/
 │   ├── ksp_qp_types.hpp       # ParsedModel/KSPQPdata data structures
 │   ├── schur_operator.hpp    # Schur complement linear operator
 │   ├── schur_preconditioner.hpp
-│   ├── pde_generator.hpp     # Builds PDE-constrained QPs (Q1 FEM) for pde.cpp
+│   ├── pde_generator.hpp     # Builds PDE-constrained QPs (Q1 FEM / FD) for pde.cpp
+│   ├── fem_q1.hpp            # Q1 finite-element reference-element assembly
 │   ├── printing.hpp         # PrintWhen/PrintWhat runtime printing
 │   └── record_result.hpp
 ├── src/
 │   ├── netlib.cpp           # Netlib LP benchmark runner
 │   ├── maros_meszaros.cpp   # Maros-Meszaros QP benchmark runner
-│   ├── pde.cpp              # PDE-constrained problem runner
-│   └── reading_mps.cpp       # MPS parser demo
+│   └── pde.cpp              # PDE-constrained problem runner
 ├── python/
 │   ├── ksp_qp_bind.cpp          # pybind11 bindings
 │   ├── benchmark_common.py       # shared QPALM/OSQP conversion + runner helpers
 │   ├── benchmark_mm.py           # Maros-Meszaros benchmark vs QPALM/OSQP
-│   ├── benchmark_pde.py          # L1/L2 PDE-constrained benchmark vs QPALM/OSQP
-│   ├── benchmark_smooth_pde.py   # L2 PDE-constrained benchmark vs QPALM/OSQP
+│   ├── benchmark_netlib.py       # Netlib LP benchmark vs QPALM/OSQP
+│   ├── benchmark_l1l2pde.py      # L1/L2 PDE-constrained benchmark vs QPALM/OSQP
+│   ├── benchmark_l2pde.py        # L2 PDE-constrained benchmark vs QPALM/OSQP
 │   └── CMakeLists.txt            # Python binding build config
 ├── data/
 │   ├── netlib/              # Netlib LP instances (.mps)

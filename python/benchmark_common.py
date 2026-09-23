@@ -1,5 +1,6 @@
 """
-Shared helpers for benchmark_*.py scripts (benchmark_mm.py, benchmark_pde.py, benchmark_smooth_pde.py):
+Shared helpers for benchmark_*.py scripts (benchmark_mm.py, benchmark_netlib.py,
+benchmark_l1l2pde.py, benchmark_l2pde.py):
 
   - QPALM / OSQP imports (with install hints) and status constants
   - KSPQPdata -> QPALM/OSQP conversion and solver wrappers

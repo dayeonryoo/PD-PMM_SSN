@@ -1,7 +1,7 @@
 include(GoogleTest)
 
 # One binary per header under test, mirroring include/. Keeps failures
-# localized (a broken PDEgenerator test can't stop FemQ1 tests from running)
+# localized (a broken pde_generator test can't stop fem_q1 tests from running)
 # and keeps individual binaries fast to rebuild while iterating.
 function(ksp_qp_add_test name)
   add_executable(${name} ${name}.cpp)
@@ -15,7 +15,6 @@ ksp_qp_add_test(test_mps_format_parser)
 ksp_qp_add_test(test_problem)
 ksp_qp_add_test(test_solution)
 ksp_qp_add_test(test_printing)
-ksp_qp_add_test(test_ordering_select)
 ksp_qp_add_test(test_schur_operator)
 ksp_qp_add_test(test_schur_preconditioner)
 ksp_qp_add_test(test_ssn)

@@ -9,8 +9,8 @@
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
+#include <memory>
 #include <variant>
-#include "ordering_select.hpp"
 
 // Timer master switch; 0 (off) by default; set via -DSSN_ENABLE_TIMERS=1.
 #ifndef SSN_ENABLE_TIMERS
@@ -325,10 +325,7 @@ private:
             ldlt_rhs_.tail(s) = b;
             direct_result_ = std::get<LdltSolver>(active_solver_).ldlt->solve(ldlt_rhs_).tail(s);
         } else {
-            // Vec(b): the ISymmetricSolver interface overloads solve() on concrete Vec/Mat
-            // (not a generic MatrixBase<Rhs>, which would be ambiguous between the two), so a
-            // template-typed b needs an explicit concrete conversion here.
-            direct_result_ = std::get<CholSolver>(active_solver_).llt->solve(Vec(b));
+            direct_result_ = std::get<CholSolver>(active_solver_).llt->solve(b);
         }
         return direct_result_;
     }
@@ -413,9 +410,9 @@ private:
     // Shared tail of factorize_by_ldlt/factorize_by_chol.
     template <typename FactorSolver>
     void finish_factorization(FactorSolver& solver, const SpMat& P, Eigen::Index s, bool is_ldlt,
-                               bool structural_change, int n_act = -1, bool already_analyzed = false) {
+                               bool structural_change, int n_act = -1) {
         if (pattern_dirty_) {
-            if (!already_analyzed) {
+            {
                 SCHUR_PREC_TIMER_BLOCK(analyze_time_);
                 solver.analyzePattern(P);
             }
@@ -429,11 +426,8 @@ private:
         info_ = solver.info();
         fact_count_++;
 #if SSN_ENABLE_TIMERS
-        // Printed on every factorize() call (not just when the ordering is freshly (re)chosen
-        // in factorize_by_ldlt()/factorize_by_chol()), so a solve's full ordering timeline is
-        // visible even across iterations that just reuse the last decision.
-        fprintf(stderr, "[SchurFactorize] fact=%d ordering=%s is_ldlt=%d reselected=%d\n",
-                fact_count_, current_ordering_.c_str(), (int)is_ldlt, (int)structural_change);
+        fprintf(stderr, "[SchurFactorize] fact=%d is_ldlt=%d reselected=%d\n",
+                fact_count_, (int)is_ldlt, (int)structural_change);
 #endif
         mu_at_last_fact_       = mu_;
         rho_at_last_fact_      = rho_;
@@ -519,64 +513,9 @@ private:
             }
         }
 
-        // Cheap ordering-selection cascade (see ordering_select.hpp), sampled only for the first
-        // kOrderSelectSampleLimit firings that actually run a real evaluation (Part 2/3 -- a
-        // Part-1 size-screen verdict is O(1) and free to keep re-happening forever), then locked
-        // to the majority winner.
-        bool ldlt_reused_probe_analysis = false;
-        if (pattern_dirty_) {
-            if (!ldlt_order_locked_) {
-                // Build the AMD candidate up front so the cascade's Part-2 fill screen can probe
-                // it in place: if AMD wins, this exact (already analyzePattern()'d) solver becomes
-                // sol.ldlt directly below.
-                auto amd_candidate = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>("AMD");
-                auto decision = ordering_select::select_ordering<SpMat, typename SpMat::StorageIndex>(
-                    sol.P_hat, ldlt_order_cfg_, amd_candidate.get());
-#if SSN_ENABLE_TIMERS
-                fprintf(stderr, "[SchurOrderSelect] screen=%s winner=%s", ordering_select::screen_name(decision.screen),
-                        decision.winner.c_str());
-                if (decision.screen != ordering_select::DecisionScreen::kSizeThreshold)
-                    fprintf(stderr, " lnz=%lld anz=%lld t=%.6f", decision.amd.nnz_l,
-                            decision.amd.anz, decision.amd.analyze_seconds);
-                if (decision.screen == ordering_select::DecisionScreen::kBfsStructural)
-                    fprintf(stderr, " ecc=%d maxlevel=%d maxfrac=%.3f slope=%.3f fit=%d dropped=%zu",
-                            decision.bfs.eccentricity, decision.bfs.max_level_size, decision.bfs.max_level_fraction,
-                            decision.bfs.growth_slope, static_cast<int>(decision.bfs.fit_status),
-                            decision.bfs.dropped_hub_vertices.size());
-                fprintf(stderr, "\n");
-#endif
-                current_ordering_ = decision.winner;
+        if (pattern_dirty_) sol.ldlt = std::make_unique<LdltType>();
 
-                if (decision.screen != ordering_select::DecisionScreen::kSizeThreshold) {
-                    if (decision.winner == "METIS") ++ldlt_order_votes_metis_;
-                    else ++ldlt_order_votes_amd_;
-                    ++ldlt_order_samples_;
-
-                    if (ldlt_order_samples_ >= kOrderSelectSampleLimit) {
-                        ldlt_order_locked_ = true;
-                        current_ordering_ = (ldlt_order_votes_metis_ > ldlt_order_votes_amd_) ? "METIS" : "AMD";
-#if SSN_ENABLE_TIMERS
-                        fprintf(stderr, "[SchurOrderLock] LDLT branch locked to %s after %d real evaluations (amd=%d, metis=%d)\n",
-                                current_ordering_.c_str(), ldlt_order_samples_, ldlt_order_votes_amd_, ldlt_order_votes_metis_);
-#endif
-                    }
-                }
-
-                // decision.winner_was_probed() means Part 2 already ran AMD's analyzePattern() on
-                // this exact sol.P_hat via amd_candidate; only adopt it if AMD is also what this
-                // round actually ends up using (the majority-lock override above can still pick
-                // METIS on this firing even though this round's own probe favored AMD).
-                if (decision.winner_was_probed() && current_ordering_ == "AMD") {
-                    sol.ldlt = std::move(amd_candidate);
-                    ldlt_reused_probe_analysis = true;
-                }
-            }
-            if (!ldlt_reused_probe_analysis)
-                sol.ldlt = ordering_select::make_solver<SpMat, /*IsLdlt=*/true>(current_ordering_);
-        }
-
-        finish_factorization(*sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, structural_change, n_act,
-                              /*already_analyzed=*/ldlt_reused_probe_analysis);
+        finish_factorization(*sol.ldlt, sol.P_hat, s, /*is_ldlt=*/true, structural_change, n_act);
     }
 
     // Build P = G E G^T + (1/mu) I (or shift its mu diagonal), then factorize with Cholesky.
@@ -643,12 +582,7 @@ private:
             }
         }
 
-        // No ordering trial here, unlike factorize_by_ldlt(): AMD wins on runtime on the
-        // Cholesky branch even in cases where METIS's nnz(L) fill count is strictly less.
-        if (pattern_dirty_) {
-            sol.llt = ordering_select::make_solver<SpMat, /*IsLdlt=*/false>("AMD");
-            current_ordering_ = "AMD";
-        }
+        if (pattern_dirty_) sol.llt = std::make_unique<LltType>();
 
         finish_factorization(*sol.llt, sol.P, s, /*is_ldlt=*/false, structural_change);
     }
@@ -757,7 +691,7 @@ private:
         q_ = static_cast<int>(added_new_rows_.size());
         const int rank = h_ + p_ + q_;
         smw_last_rank_ = rank;
-        if (rank == 0 || rank >= kSmwRankThreshold) {
+        if (rank == 0 || rank > kSmwRankThreshold) {
             smw_last_reject_reason_ = SmwRejectReason::RankZeroOrExceedsThreshold;
             return false;
         }
@@ -957,37 +891,19 @@ private:
     bool use_ldlt_ = false;
     bool use_ldlt_at_last_fact_ = false;
 
-    // ldlt/llt are type-erased (ordering_select::ISymmetricSolver) rather than concrete Eigen types
-    // so the winning ordering (AMD/METIS, chosen fresh on each pattern_dirty_ rebuild) can vary.
+    // Held by pointer, not by value: a pattern rebuild needs a solver with no stale symbolic
+    // state, and Eigen's solvers are not copy-assignable, so the handle is simply reseated.
+    using LltType  = Eigen::SimplicialLLT<SpMat>;  // both default to Eigen::AMDOrdering<StorageIndex>
+    using LdltType = Eigen::SimplicialLDLT<SpMat>;
     struct CholSolver {
         SpMat P;
-        std::unique_ptr<ordering_select::ISymmetricSolver<SpMat>> llt;
+        std::unique_ptr<LltType> llt;
     };
     struct LdltSolver {
         SpMat P_hat;
-        std::unique_ptr<ordering_select::ISymmetricSolver<SpMat>> ldlt;
+        std::unique_ptr<LdltType> ldlt;
     };
     std::variant<std::monostate, CholSolver, LdltSolver> active_solver_;
-    std::string current_ordering_ = "AMD"; // set on each pattern_dirty_ ordering (re)selection below
-
-    // ------ Ordering-selection policy (see factorize_by_ldlt()/factorize_by_chol()) ------
-    //
-    // Empirically, on the Cholesky branch AMD wins on runtime even in cases where METIS's nnz(L)
-    // fill count is strictly less -- METIS's nested-dissection fill reduction doesn't track
-    // Eigen's simplicial (non-supernodal) factorize cost there. So the Cholesky branch never
-    // trials METIS at all, unconditionally using AMD (see factorize_by_chol()).
-    //
-    // On the LDLT branch, ordering_select::select_ordering() is fired kOrderSelectSampleLimit times
-    // and selects the majority-winning ordering (ties favor AMD). Note that cascade's Part 1 (size screen)
-    // is O(1) so it's free to keep re-firing forever without being counted. Only Part 2 (AMD fill screen)
-    // and Part 3 (BFS structural screen) are counted as a sample.
-
-    static constexpr int kOrderSelectSampleLimit = 3;
-    int  ldlt_order_samples_     = 0;
-    int  ldlt_order_votes_amd_   = 0;
-    int  ldlt_order_votes_metis_ = 0;
-    bool ldlt_order_locked_      = false;
-    ordering_select::OrderingSelectConfig ldlt_order_cfg_;
 
     int n_act_ = 0;
     Eigen::ComputationInfo info_ = Eigen::Success;

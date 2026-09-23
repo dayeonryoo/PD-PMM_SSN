@@ -119,23 +119,9 @@ public:
     const SpMat& A_tr, B_tr;
     Vec H_diag, H_diag_inv;
     T H_diag_mu_ = T(0), H_diag_rho_ = T(0); // (mu, rho) H_diag was last built with; see prepare_newton_system().
-    // Diagnostic-only continuation experiment: a uniform, per-PMM-iteration-decaying value
-    // added to every H_diag entry (both Q_info branches), on top of the real Q_diag/mu/rho
-    // terms. Local to H_diag's construction only -- deliberately NOT folded into the shared
-    // Q_diag member, so it never touches compute_grad_Lagrangian(), the exact line search's
-    // curvature terms, or KSP_QP's outer residual/termination computation. Default 0 makes
-    // this exactly a no-op, matching prior behavior. Set once per PMM iteration via
-    // update_ssn_system(); H_diag_eps_ tracks the last value it was built with, mirroring
-    // H_diag_mu_/H_diag_rho_, so a changing eps forces a rebuild like a changing mu/rho does.
-    T q_diag_eps = T(0), H_diag_eps_ = T(0);
 
     BoolArr active_W, active_K;
     int n_active_W, n_inactive_W;
-    // Active-set flip counts from the most recent prepare_newton_system() call; -1 on the
-    // very first SSN iteration (no previous active set to compare against). Diagnostic-only,
-    // consumed via IterationRecord for investigating active-set churn (see project notes on
-    // active-set flip diagnostics).
-    int last_flip_K_ = -1, last_flip_W_ = -1;
     SpMat B_inactive_W, G, G_tr;
 
     RowMajorSpMat B_rm;              // Row-major B for rebuilding G.
@@ -301,7 +287,7 @@ public:
 
     void update_ssn_system(const Vec& x, const Vec& y1, const Vec& y2, const Vec& z,
                            const Vec& delta_y1, const Vec& delta_z,
-                           T mu, T rho, T alpha, int ssn_iter, T q_diag_eps = T(0)) {
+                           T mu, T rho, T alpha, int ssn_iter) {
         this->x = x;
         this->y1 = y1;
         this->y2 = y2;
@@ -310,7 +296,6 @@ public:
         this->rho = rho;
         this->alpha = alpha;
         this->ssn_iter = ssn_iter;
-        this->q_diag_eps = q_diag_eps;
         this->delta_y1 = delta_y1;
         this->delta_z = delta_z;
 

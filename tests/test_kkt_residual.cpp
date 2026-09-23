@@ -8,7 +8,7 @@ namespace {
 using Vec = Eigen::Matrix<double, Eigen::Dynamic, 1>;
 using SpMat = Eigen::SparseMatrix<double>;
 
-constexpr double kSolverTol = 1e-6; // passed to the solver
+constexpr double kSolverTol = 1e-7; // passed to the solver
 constexpr double kKktTol    = 1e-6; // residual margine tolerance
 
 // Independently re-derives the four KKT residual blocks of the QP

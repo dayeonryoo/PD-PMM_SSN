@@ -110,14 +110,6 @@ struct SchurPreconditionerTestPeer {
   // Live sparse storage the diagonal index caches above point into.
   static Prec::SpMat& chol_P(Prec& p)     { return std::get<typename Prec::CholSolver>(p.active_solver_).P; }
   static Prec::SpMat& ldlt_P_hat(Prec& p) { return std::get<typename Prec::LdltSolver>(p.active_solver_).P_hat; }
-
-  // LDLT-branch ordering-selection lock state .
-  static bool& ldlt_order_locked(Prec& p)      { return p.ldlt_order_locked_; }
-  static int&  ldlt_order_samples(Prec& p)     { return p.ldlt_order_samples_; }
-  static int&  ldlt_order_votes_amd(Prec& p)   { return p.ldlt_order_votes_amd_; }
-  static int&  ldlt_order_votes_metis(Prec& p) { return p.ldlt_order_votes_metis_; }
-  static std::string& current_ordering(Prec& p) { return p.current_ordering_; }
-  static ordering_select::OrderingSelectConfig& ldlt_order_cfg(Prec& p) { return p.ldlt_order_cfg_; }
 };
 
 // NOTE: SchurPreconditioner::arm()/setData() store pointers to their arguments.
@@ -2918,95 +2910,5 @@ TEST(RandomizedCholLdltConsistency, FiftyColumnRandomSystemCholeskyAndLdltAgree)
     const Eigen::VectorXd expected = P.colPivHouseholderQr().solve(b);
     EXPECT_TRUE(got_chol.isApprox(expected, 1e-7)) << "chol trial " << trial;
     EXPECT_TRUE(got_ldlt.isApprox(expected, 1e-7)) << "ldlt trial " << trial;
-  }
-}
-
-// ===================== LDLT ordering-selection lock (ordering_select.hpp cascade) =====================
-
-// With small_problem_threshold forced to 0, every pattern_dirty_ firing on this fixture's tiny
-// P_hat clears Part 1 (the size screen) and runs a real evaluation (Part 2: AMD fill screen).
-
-TEST(LdltOrderSelection, LocksAfterSampleLimitRealEvaluationsFromNonSizeScreenedFirings) {
-  Fixture f;
-  const Eigen::MatrixXd G_dense = f.StackG({false, false});  // s = 1, constant throughout
-  const SpMat G = DenseToSparse(G_dense);
-  const SpMat G_tr = DenseToSparse(G_dense.transpose());
-  const BoolArr active_W = ToBoolArr({false, false});
-  const RowMajorSpMat B_rm = f.B_rm();
-
-  const BoolArr active_K_a = ToBoolArr({true, true, true});   // n_act = 3
-  const BoolArr active_K_b = ToBoolArr({true, false, true});  // n_act = 2 -- forces a pattern change
-
-  Prec prec;
-  SchurPreconditionerTestPeer::ldlt_order_cfg(prec).small_problem_threshold = 0;
-
-  prec.arm(G, G_tr, f.H_diag, active_K_a, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
-  prec.compute(0);
-  ASSERT_EQ(prec.info(), Eigen::Success);
-  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 1);
-  EXPECT_FALSE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
-
-  prec.arm(G, G_tr, f.H_diag, active_K_b, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
-           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
-  prec.compute(0);
-  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 2);
-  EXPECT_FALSE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
-
-  prec.arm(G, G_tr, f.H_diag, active_K_a, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
-           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
-  prec.compute(0);
-  // kOrderSelectSampleLimit (3) real evaluations reached: locks now.
-  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 3);
-  EXPECT_TRUE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
-  EXPECT_EQ(SchurPreconditionerTestPeer::current_ordering(prec), "AMD"); // trivial P_hat: AMD wins every sample
-  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_votes_amd(prec), 3);
-  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_votes_metis(prec), 0);
-
-  // Further firings must not re-evaluate or over-count once locked.
-  prec.arm(G, G_tr, f.H_diag, active_K_b, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
-           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
-  prec.compute(0);
-  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 3);
-  EXPECT_TRUE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
-  EXPECT_EQ(SchurPreconditionerTestPeer::current_ordering(prec), "AMD");
-
-  prec.arm(G, G_tr, f.H_diag, active_K_a, active_W, B_rm, f.mu, f.rho, /*rebuild=*/true,
-           /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
-  prec.compute(0);
-  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 3);
-  EXPECT_TRUE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
-}
-
-// With the production default small_problem_threshold, this fixture's tiny P_hat never clears
-// Part 1 -- confirms size-screened firings are free to repeat forever without ever advancing the
-// sample counter or engaging the lock.
-TEST(LdltOrderSelection, SizeScreenedFiringsNeverAdvanceSampleCounter) {
-  Fixture f;
-  const Eigen::MatrixXd G_dense = f.StackG({false, false});
-  const SpMat G = DenseToSparse(G_dense);
-  const SpMat G_tr = DenseToSparse(G_dense.transpose());
-  const BoolArr active_W = ToBoolArr({false, false});
-  const RowMajorSpMat B_rm = f.B_rm();
-
-  const BoolArr active_K_a = ToBoolArr({true, true, true});
-  const BoolArr active_K_b = ToBoolArr({true, false, true});
-
-  Prec prec; // default ldlt_order_cfg_: small_problem_threshold stays at the production default,
-             // far above this fixture's tiny P_hat.
-
-  prec.arm(G, G_tr, f.H_diag, active_K_a, active_W, B_rm, f.mu, f.rho, true, true, /*use_ldlt=*/true);
-  prec.compute(0);
-  ASSERT_EQ(prec.info(), Eigen::Success);
-  EXPECT_EQ(SchurPreconditionerTestPeer::current_ordering(prec), "AMD");
-  EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 0);
-  EXPECT_FALSE(SchurPreconditionerTestPeer::ldlt_order_locked(prec));
-
-  for (int i = 0; i < 5; ++i) {
-    prec.arm(G, G_tr, f.H_diag, (i % 2 == 0) ? active_K_b : active_K_a, active_W, B_rm, f.mu, f.rho,
-             /*rebuild=*/true, /*prec_pattern_changed=*/true, /*use_ldlt=*/true, /*force_rebuild=*/true);
-    prec.compute(0);
-    EXPECT_EQ(SchurPreconditionerTestPeer::ldlt_order_samples(prec), 0) << "iteration " << i;
-    EXPECT_FALSE(SchurPreconditionerTestPeer::ldlt_order_locked(prec)) << "iteration " << i;
-    EXPECT_EQ(SchurPreconditionerTestPeer::current_ordering(prec), "AMD") << "iteration " << i;
   }
 }
