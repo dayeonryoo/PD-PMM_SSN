@@ -23,7 +23,7 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 // ==================== Solving Netlib LPs ====================
-/*
+
 int main(int argc, char** argv) {
     if (cli::has_flag(argc, argv, "--help") || cli::has_flag(argc, argv, "-h")) {
         std::cout <<
@@ -239,9 +239,9 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-*/
-// ==================== Netlib infeasible problems ====================
 
+// ==================== Netlib infeasible problems ====================
+/*
 int main(int argc, char** argv) {
     if (cli::has_flag(argc, argv, "--help") || cli::has_flag(argc, argv, "-h")) {
         std::cout <<
@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
         }
     }
 }
-
+*/
 
 // ==================== A single Netlib infeasible problem ====================
 /*

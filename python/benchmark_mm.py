@@ -47,10 +47,6 @@ import multiprocessing as mp
 from pathlib import Path
 
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")        # non-interactive backend; remove if running interactively
-import matplotlib.pyplot as plt
-import pandas as pd
 
 # ---------------------------------------------------------------------------
 # Locate and import the pybind11 extension
@@ -77,6 +73,9 @@ from benchmark_common import (
     OSQP_SOLVED,
     _write_csv,
     _load_existing_rows,
+    plot_performance_profile,
+    plot_performance_profile_iters,
+    plot_performance_profile_inner_iters,
 )
 
 # ---------------------------------------------------------------------------
@@ -222,217 +221,6 @@ QPS = {
     "YAO":       1.9770426e+02,
     "ZECEVIC2": -4.1250000e+00,
 }
-
-# ---------------------------------------------------------------------------
-# Performance profile (Dolan-Moré)
-# ---------------------------------------------------------------------------
-
-def compute_performance_profile(times: np.ndarray, tau_vals: np.ndarray) -> np.ndarray:
-    """
-    Parameters
-    ----------
-    times : (n_problems, n_solvers) float array - np.inf when unsolved
-    tau_vals : sorted 1-D array of τ values
-
-    Returns
-    -------
-    profiles : (n_solvers, len(tau_vals)) array - ρ_s(τ) values in [0, 1]
-    """
-    n_p, n_s = times.shape
-    best     = times.min(axis=1, keepdims=True)           # (n_p, 1)
-    # Problems where every solver failed are excluded from the denominator.
-    active   = np.isfinite(best).ravel()
-    n_active = int(active.sum())
-    if n_active == 0:
-        return np.zeros((n_s, len(tau_vals)))
-
-    ratios = np.full_like(times, np.inf)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ratios[active] = times[active] / best[active]      # (n_active, n_s)
-    # best == 0 (e.g. a solver reports 0 iterations on a trivial problem):
-    # other 0-cost solvers tie for best (ratio 1), the rest stay at inf.
-    ratios[np.isnan(ratios)] = 1.0
-
-    profiles = np.zeros((n_s, len(tau_vals)))
-    for s in range(n_s):
-        r_s = ratios[:, s]
-        for j, tau in enumerate(tau_vals):
-            profiles[s, j] = float(np.sum(r_s[active] <= tau)) / n_active
-    return profiles
-
-
-def _fmt_tol(tol: float) -> str:
-    exp = int(round(np.log10(tol)))
-    return rf"$10^{{{exp}}}$"
-
-def _fmt_limit(time_limit: float) -> str:
-    if time_limit % 60 == 0:
-        return f"{int(time_limit // 60)} min"
-    return f"{time_limit:g} s"
-
-def plot_performance_profile(csv_path: Path, out_prefix: Path,
-                             tol: float = 1e-6, time_limit: float = 600.0,
-                             solvers: set | None = None) -> None:
-    if solvers is None:
-        solvers = {"ksp-qp", "qpalm", "osqp"}
-    _meta = [
-        ("ksp-qp", "ssn_solved",   "ssn_time",   "KSP-QP", "#1f77b4", "-"),
-        ("qpalm",   "qpalm_solved", "qpalm_time", "QPALM",   "#ff7f0e", "--"),
-        ("osqp",    "osqp_solved",  "osqp_time",  "OSQP",    "#2ca02c", "-."),
-    ]
-    df = pd.read_csv(csv_path)
-    n_total = len(df)
-
-    active = [(k, sc, tc, lbl, col, ls) for k, sc, tc, lbl, col, ls in _meta if k in solvers]
-
-    times_list, plot_entries = [], []
-    for k, solved_col, time_col, label, color, ls in active:
-        t = np.where(df[solved_col].fillna(0).astype(bool), df[time_col].fillna(np.inf), np.inf)
-        times_list.append(t)
-        plot_entries.append((f"{label} ({int(np.isfinite(t).sum())}/{n_total} solved)", color, ls))
-
-    times    = np.stack(times_list, axis=1)
-    tau_vals = np.logspace(0, 3, 2000)
-    profiles = compute_performance_profile(times, tau_vals)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for s, (label, color, ls) in enumerate(plot_entries):
-        ax.semilogx(tau_vals, profiles[s], label=label,
-                    color=color, linewidth=2, linestyle=ls)
-
-    ax.set_xlabel(r"Performance ratio $\tau$", fontsize=13)
-    ax.set_ylabel(r"Fraction of problems $\rho_s(\tau)$", fontsize=13)
-    ax.set_title(
-        "Performance profile — Maros-Meszaros QPs\n"
-        f"(solve time,  tol = {_fmt_tol(tol)},  limit = {_fmt_limit(time_limit)})",
-        fontsize=12,
-    )
-    ax.set_xlim([1.0, tau_vals[-1]])
-    ax.set_ylim([0.0, 1.05])
-    ax.legend(fontsize=12)
-    ax.grid(True, which="both", alpha=0.3)
-    plt.tight_layout()
-
-    for ext in ("pdf", "png"):
-        p = out_prefix.with_suffix(f".{ext}")
-        fig.savefig(p, dpi=150)
-        print(f"Saved: {p}")
-    plt.close(fig)
-
-
-def plot_performance_profile_iters(csv_path: Path, out_prefix: Path,
-                                   tol: float = 1e-6, time_limit: float = 600.0,
-                                   solvers: set | None = None) -> None:
-    """Dolan-Moré performance profile using iteration counts as the metric.
-
-    KSP-QP uses pmm_iter (total PMM iterations).
-    QPALM and OSQP use their native iteration counters.
-    """
-    if solvers is None:
-        solvers = {"ksp-qp", "qpalm", "osqp"}
-    _meta = [
-        ("ksp-qp", "ssn_solved",   "pmm_iter",   "KSP-QP", "#1f77b4", "-"),
-        ("qpalm",   "qpalm_solved", "qpalm_iter", "QPALM",   "#ff7f0e", "--"),
-        ("osqp",    "osqp_solved",  "osqp_iter",  "OSQP",    "#2ca02c", "-."),
-    ]
-    df = pd.read_csv(csv_path)
-    n_total = len(df)
-
-    active = [(k, sc, ic, lbl, col, ls) for k, sc, ic, lbl, col, ls in _meta if k in solvers]
-
-    iters_list, plot_entries = [], []
-    for k, solved_col, iter_col, label, color, ls in active:
-        it = np.where(df[solved_col].fillna(0).astype(bool), df[iter_col].fillna(np.inf), np.inf)
-        iters_list.append(it)
-        plot_entries.append((f"{label} ({int(np.isfinite(it).sum())}/{n_total} solved)", color, ls))
-
-    iters    = np.stack(iters_list, axis=1)
-    tau_vals = np.logspace(0, 4, 2000)
-    profiles = compute_performance_profile(iters, tau_vals)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for s, (label, color, ls) in enumerate(plot_entries):
-        ax.semilogx(tau_vals, profiles[s], label=label,
-                    color=color, linewidth=2, linestyle=ls)
-
-    ax.set_xlabel(r"Performance ratio $\tau$", fontsize=13)
-    ax.set_ylabel(r"Fraction of problems $\rho_s(\tau)$", fontsize=13)
-    ax.set_title(
-        "Performance profile — Maros-Meszaros QPs\n"
-        f"(iterations,  tol = {_fmt_tol(tol)},  limit = {_fmt_limit(time_limit)})",
-        fontsize=12,
-    )
-    ax.set_xlim([1.0, tau_vals[-1]])
-    ax.set_ylim([0.0, 1.05])
-    ax.legend(fontsize=12)
-    ax.grid(True, which="both", alpha=0.3)
-    plt.tight_layout()
-
-    for ext in ("pdf", "png"):
-        p = out_prefix.with_suffix(f".{ext}")
-        fig.savefig(p, dpi=150)
-        print(f"Saved: {p}")
-    plt.close(fig)
-
-
-def plot_performance_profile_inner_iters(csv_path: Path, out_prefix: Path,
-                                         tol: float = 1e-6, time_limit: float = 600.0,
-                                         solvers: set | None = None) -> None:
-    """Dolan-Moré performance profile using inner iteration counts.
-
-    KSP-QP uses ssn_iter (total SSN Newton iterations).
-    QPALM uses qpalm_inner_iter (total inner QPALM iterations).
-    OSQP is excluded (no meaningful inner iterations).
-    """
-    if solvers is None:
-        solvers = {"ksp-qp", "qpalm"}
-    solvers = solvers & {"ksp-qp", "qpalm"}   # inner iters only defined for these two
-    if not solvers:
-        return
-
-    _meta = [
-        ("ksp-qp", "ssn_solved",   "ssn_iter",         "KSP-QP", "#1f77b4", "-"),
-        ("qpalm",   "qpalm_solved", "qpalm_inner_iter", "QPALM",   "#ff7f0e", "--"),
-    ]
-    df = pd.read_csv(csv_path)
-    n_total = len(df)
-
-    active = [(k, sc, ic, lbl, col, ls) for k, sc, ic, lbl, col, ls in _meta if k in solvers]
-
-    iters_list, plot_entries = [], []
-    for k, solved_col, iter_col, label, color, ls in active:
-        it = np.where(df[solved_col].fillna(0).astype(bool), df[iter_col].fillna(np.inf), np.inf)
-        iters_list.append(it)
-        plot_entries.append((f"{label} ({int(np.isfinite(it).sum())}/{n_total} solved)", color, ls))
-
-    iters    = np.stack(iters_list, axis=1)
-    tau_vals = np.logspace(0, 4, 2000)
-    profiles = compute_performance_profile(iters, tau_vals)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for s, (label, color, ls) in enumerate(plot_entries):
-        ax.semilogx(tau_vals, profiles[s], label=label,
-                    color=color, linewidth=2, linestyle=ls)
-
-    ax.set_xlabel(r"Performance ratio $\tau$", fontsize=13)
-    ax.set_ylabel(r"Fraction of problems $\rho_s(\tau)$", fontsize=13)
-    ax.set_title(
-        "Performance profile — Maros-Meszaros QPs\n"
-        f"(inner iterations,  tol = {_fmt_tol(tol)},  limit = {_fmt_limit(time_limit)})",
-        fontsize=12,
-    )
-    ax.set_xlim([1.0, tau_vals[-1]])
-    ax.set_ylim([0.0, 1.05])
-    ax.legend(fontsize=12)
-    ax.grid(True, which="both", alpha=0.3)
-    plt.tight_layout()
-
-    for ext in ("pdf", "png"):
-        p = out_prefix.with_suffix(f".{ext}")
-        fig.savefig(p, dpi=150)
-        print(f"Saved: {p}")
-    plt.close(fig)
-
 
 # ---------------------------------------------------------------------------
 # Subprocess worker functions (each spawned in a fresh process for clean RSS)
@@ -624,14 +412,15 @@ def main() -> None:
     print(f"\nResults written to: {csv_path}")
 
     # ---- Performance profiles -------------------------------------------
+    label = "Maros-Meszaros QPs"
     out_prefix = result_dir / f"{prefix}performance_profile_mm"
-    plot_performance_profile(csv_path, out_prefix, tol=tol, time_limit=time_limit, solvers=solvers)
+    plot_performance_profile(csv_path, out_prefix, label, tol=tol, time_limit=time_limit, solvers=solvers)
 
     out_prefix_iters = result_dir / f"{prefix}performance_profile_mm_iters"
-    plot_performance_profile_iters(csv_path, out_prefix_iters, tol=tol, time_limit=time_limit, solvers=solvers)
+    plot_performance_profile_iters(csv_path, out_prefix_iters, label, tol=tol, time_limit=time_limit, solvers=solvers)
 
     out_prefix_inner = result_dir / f"{prefix}performance_profile_mm_inner_iters"
-    plot_performance_profile_inner_iters(csv_path, out_prefix_inner, tol=tol, time_limit=time_limit, solvers=solvers)
+    plot_performance_profile_inner_iters(csv_path, out_prefix_inner, label, tol=tol, time_limit=time_limit, solvers=solvers)
 
 
 if __name__ == "__main__":

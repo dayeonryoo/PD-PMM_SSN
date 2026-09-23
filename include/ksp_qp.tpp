@@ -1023,6 +1023,12 @@ Solution<T> KSP_QP<T>::solve() {
     NS.time_limit_exceeded_ = [this, solving_start]() {
         return time_diff_s(solving_start, now_()) > time_limit;
     };
+    // Route SSN's per-inner-iteration reports through KSP_QP's own (overridable) report_
+    // hook too, so a caller that overrides report_ (e.g. for active-set flip diagnostics)
+    // sees both the per-PMM-iteration and per-SSN-inner-iteration records through one path.
+    // Neutral by default: report_'s default body just calls print() with this->when/what,
+    // same values NS was constructed with.
+    NS.report_ = report_;
 
     // Print header.
     print_header(when, what);
@@ -1043,7 +1049,8 @@ Solution<T> KSP_QP<T>::solve() {
         // Call semismooth Newton method.
         x_old_scratch_  = x;
         y2_old_scratch_ = y2;
-        NS.update_ssn_system(x, y1, y2, z, delta_y1, delta_z, mu, rho, alpha, ssn_iter);
+        T q_diag_eps_k = q_diag_eps0 * std::pow(q_diag_eps_decay, T(pmm_iter));
+        NS.update_ssn_system(x, y1, y2, z, delta_y1, delta_z, mu, rho, alpha, ssn_iter, q_diag_eps_k);
         NS.solve_ssn(ssn_tol);
 
         ssn_iter += NS.iter;
@@ -1084,7 +1091,9 @@ Solution<T> KSP_QP<T>::solve() {
 
         // Report current iteration info.
         report_(IterationRecord<T>{pmm_iter, ssn_iter, NS.krylov_iter, NS.fact, obj_val, new_res_norms,
-                                    ssn_tol_achieved, mu, rho, ssn_tol, linesearch_fail, NS.krylov_fail});
+                                    ssn_tol_achieved, mu, rho, ssn_tol, linesearch_fail, NS.krylov_fail,
+                                    /*show_pmm_iter=*/true, -1, -1, NS.n_active_W, -1,
+                                    static_cast<int>(NS.opt)});
 
         // Check termination criterion.
         if (pmm_tol_achieved < tol) {

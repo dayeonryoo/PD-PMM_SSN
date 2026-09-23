@@ -575,6 +575,9 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
         /*k_changed=*/first_ssn_iter || (active_K != new_active_K_).any(),
         /*w_changed=*/first_ssn_iter || (active_W != new_active_W_).any(),
     };
+    // Diagnostic-only flip counts (see last_flip_K_/last_flip_W_ declaration).
+    last_flip_K_ = first_ssn_iter ? -1 : static_cast<int>((active_K != new_active_K_).count());
+    last_flip_W_ = first_ssn_iter ? -1 : static_cast<int>((active_W != new_active_W_).count());
 
     bool update_prec = delta.k_changed || delta.w_changed; // true means rebuilding prec is needed.
     bool prec_pattern_changed = delta.k_changed || delta.w_changed; // true means analyzePattern() is needed.
@@ -583,24 +586,27 @@ typename SSN<T>::PrepResult SSN<T>::prepare_newton_system() {
     if (delta.w_changed) ldlt_pattern_dirty_ = true;
     if (delta.k_changed || delta.w_changed) ldlt_numeric_dirty_ = true; 
 
-    // Recompute H if active_K changed, or mu/rho drifted since H_diag was last built.
-    bool recompute_H = delta.k_changed || (mu != H_diag_mu_) || (rho != H_diag_rho_);
+    // Recompute H if active_K changed, mu/rho drifted, or q_diag_eps (continuation
+    // experiment) changed since H_diag was last built.
+    bool recompute_H = delta.k_changed || (mu != H_diag_mu_) || (rho != H_diag_rho_)
+                      || (q_diag_eps != H_diag_eps_);
     if (recompute_H) {
         SSN_TIMER_BLOCK(timer_prep);
         if (delta.k_changed) {
             active_K = new_active_K_;
         }
 
-        // H = Q + mu(I_N - P_K) + I_N / rho
+        // H = Q + mu(I_N - P_K) + I_N / rho [+ q_diag_eps, diagnostic-only]
         if (Q_info == 0) {
-            H_diag = mu * (T(1) - active_K.cast<T>()) + T(1)/rho;
+            H_diag = mu * (T(1) - active_K.cast<T>()) + T(1)/rho + q_diag_eps;
         } else {
-            H_diag = Q_diag.array() + mu * (T(1) - active_K.cast<T>()) +  T(1)/rho;
+            H_diag = Q_diag.array() + mu * (T(1) - active_K.cast<T>()) +  T(1)/rho + q_diag_eps;
         }
         H_diag = H_diag.cwiseMax(eps_zero); // safeguard for non-positive diagonal entries
         H_diag_inv = H_diag.cwiseInverse();
         H_diag_mu_  = mu;
         H_diag_rho_ = rho;
+        H_diag_eps_ = q_diag_eps;
     }
 
     // If active_W changed, recompute G.
@@ -831,7 +837,9 @@ void SSN<T>::solve_ssn(const T ssn_tol) {
         if (what == PrintWhat::SSN) {
             report_(IterationRecord<T>{0, ssn_iter + _iter, krylov_iter, fact,
                                         T(0), Vec(), tol_achieved, mu, rho, ssn_tol,
-                                        linesearch_fail, krylov_fail, /*show_pmm_iter=*/false});
+                                        linesearch_fail, krylov_fail, /*show_pmm_iter=*/false,
+                                        last_flip_K_, last_flip_W_, n_active_W,
+                                        static_cast<int>(active_K.count()), -1});
         }
 
 #if SSN_ENABLE_TIMERS

@@ -35,6 +35,13 @@ struct IterationRecord {
     T ssn_res, mu, rho, eps;
     int linesearch_fail, krylov_fail;
     bool show_pmm_iter = true;
+    // Active-set diagnostics (see prepare_newton_system()/ActiveSetDelta). -1 means
+    // "not applicable" -- n_flip_K/n_flip_W/n_active_W are only meaningful on records
+    // produced from inside the SSN inner loop (this file's per-inner-iteration report_
+    // call), and ssn_opt (a cast SSN<T>::TerminationStatus) only on the per-PMM-iteration
+    // record built once a full solve_ssn() call returns.
+    int n_flip_K = -1, n_flip_W = -1, n_active_W = -1, n_active_K = -1;
+    int ssn_opt = -1;
 };
 
 inline void print_header(PrintWhen when, PrintWhat what) {

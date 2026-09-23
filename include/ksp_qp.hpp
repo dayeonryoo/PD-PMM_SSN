@@ -138,8 +138,15 @@ public:
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e2;
-    T rho = rho_limit;
+    T rho = 1e2;
     T ssn_tol = 1e-2;
+
+    // Diagnostic-only continuation experiment (see SSN::q_diag_eps): a uniform value added
+    // to every H_diag entry, decaying geometrically over PMM iterations as
+    // q_diag_eps0 * q_diag_eps_decay^pmm_iter. Defaults (0, 1) make this exactly a no-op --
+    // matches prior behavior exactly unless explicitly set.
+    T q_diag_eps0 = T(0);
+    T q_diag_eps_decay = T(1);
      
     // Outputs:
     TerminationStatus opt = TerminationStatus::NumericalError;

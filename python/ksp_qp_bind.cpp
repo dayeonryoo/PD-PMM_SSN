@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
+#include <string>
 
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
@@ -226,7 +228,11 @@ Returns dict with the same keys as solve_from_sif.
 py::dict solve_from_data(const py::dict& pd_dict,
                          double tol         = 1e-6,
                          long long max_iter = 1'000'000'000LL,
-                         double time_limit  = 600.0) {
+                         double time_limit  = 600.0,
+                         std::string trace_path = "",
+                         double q_diag_eps0 = 0.0,
+                         double q_diag_eps_decay = 1.0,
+                         double rho_init = -1.0) {
     KSPQPdata<T> pd = dict_to_kspqp(pd_dict); // reads Python objects
 
     int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count;
@@ -234,10 +240,39 @@ py::dict solve_from_data(const py::dict& pd_dict,
     Vec x_sol;
     {
         py::gil_scoped_release release;
+        // trace_path is diagnostic-only: when set, writes a per-PMM-iteration and
+        // per-SSN-inner-iteration CSV trace (active-set flip counts, ssn_opt, mu/rho)
+        // to that file. Default "" preserves prior silent behavior exactly.
+        bool trace = !trace_path.empty();
         Problem<T>  prob(pd, (T)tol, (int)max_iter, time_limit,
-                         PrintWhen::NEVER, PrintWhat::NONE);
+                         trace ? PrintWhen::ALWAYS : PrintWhen::NEVER,
+                         trace ? PrintWhat::SSN    : PrintWhat::NONE);
         KSP_QP<T>  solver(prob);
+        // Diagnostic-only continuation experiment (see SSN::q_diag_eps / KSP_QP::q_diag_eps0).
+        // Defaults (0, 1) are a no-op, matching prior behavior exactly.
+        solver.q_diag_eps0       = (T)q_diag_eps0;
+        solver.q_diag_eps_decay  = (T)q_diag_eps_decay;
+        // Diagnostic-only: override rho's initial value (default rho_limit, i.e. pinned at
+        // its ceiling from PMM iteration 0). rho does not appear in the outer termination
+        // check (compute_residual_unscaled_inf_norms/primal_infeas/dual_infeas) or in
+        // objective_value(), only in update_PMM_parameters()'s own schedule and inside SSN's
+        // H_diag/gradient -- so this cannot corrupt what "converged" means, only the search
+        // dynamics used to get there. Sentinel -1 (default) leaves rho at its usual rho_limit
+        // start, matching prior behavior exactly.
+        if (rho_init > 0.0) solver.rho = (T)rho_init;
+        std::ofstream trace_file;
+        if (trace) {
+            trace_file.open(trace_path);
+            trace_file << "pmm_iter,ssn_iter,n_flip_K,n_flip_W,n_active_W,n_active_K,ssn_opt,mu,rho,ssn_res\n";
+            solver.report_ = [&trace_file](const IterationRecord<T>& r) {
+                trace_file << r.pmm_iter << "," << r.ssn_iter << ","
+                          << r.n_flip_K << "," << r.n_flip_W << "," << r.n_active_W << ","
+                          << r.n_active_K << ","
+                          << r.ssn_opt << "," << r.mu << "," << r.rho << "," << r.ssn_res << "\n";
+            };
+        }
         Solution<T> sol = solver.solve();
+        if (trace) trace_file.close();
         opt              = static_cast<int>(sol.opt);
         obj_val          = (double)sol.obj_val;
         setup_time       = sol.setup_time;
@@ -456,8 +491,33 @@ directly to solve_from_data() and used with kspqp_to_qpalm().)");
           py::arg("tol")        = 1e-6,
           py::arg("max_iter")   = 1'000'000'000LL,
           py::arg("time_limit") = 600.0,
+          py::arg("trace_path") = "",
+          py::arg("q_diag_eps0") = 0.0,
+          py::arg("q_diag_eps_decay") = 1.0,
+          py::arg("rho_init") = -1.0,
           R"(Solve with KSP-QP using already-parsed problem data (dict from parse_sif).
 
 Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter,
-krylov_iter, fact, smw_count, pmm_tol_achieved.)");
+krylov_iter, fact, smw_count, pmm_tol_achieved.
+
+trace_path: diagnostic-only, default "" (no tracing, matches prior behavior exactly). When
+set, writes a per-PMM-iteration and per-SSN-inner-iteration CSV trace to that path with columns
+pmm_iter,ssn_iter,n_flip_K,n_flip_W,n_active_W,n_active_K,ssn_opt,mu,rho,ssn_res -- n_flip_K/
+n_flip_W/n_active_W/n_active_K are -1 on PMM-level rows (not applicable there) and ssn_opt is
+-1 on SSN-inner-loop rows (only set once a full solve_ssn() call returns); ssn_opt is the underlying
+SSN<T>::TerminationStatus enum value (0=Optimal, 1=MaxInnerIterations, 2=LineSearchFailed,
+3=Stagnated, 4=Interrupted, 5=TimeLimit). Meant for investigating active-set churn, not for
+routine use -- it turns on PrintWhat::SSN-level per-inner-iteration reporting, which has
+non-trivial overhead on problems with many SSN iterations.
+
+q_diag_eps0/q_diag_eps_decay: diagnostic-only continuation experiment. A value
+q_diag_eps0 * q_diag_eps_decay^pmm_iter is added to every H_diag entry (in SSN's Newton
+system only -- never to the shared Q_diag used for gradients/residuals/termination checks,
+so it cannot change what "converged" means). Defaults (0, 1) are an exact no-op.
+
+rho_init: diagnostic-only override of rho's starting value (default: rho_limit, i.e. pinned
+at its ceiling from PMM iteration 0). Does not appear in any outer termination check or in
+objective_value(), only in update_PMM_parameters()'s own schedule and SSN's H_diag/gradient,
+so it cannot corrupt what "converged" means -- only the search dynamics. Sentinel -1
+(default) leaves rho at its usual start, an exact no-op.)");
 }
