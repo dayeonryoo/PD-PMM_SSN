@@ -1209,12 +1209,13 @@ TEST(KspQpSolveEndToEnd, TerminatesWithTimeLimitStatusWhenInjectedClockExceedsTi
   auto sol = ns.solve();
   EXPECT_EQ(sol.opt, TerminationStatus::TimeLimit);
 
-  // free_scratch_memory() runs on TimeLimit too -- same spot-check as the Interrupted test below.
-  EXPECT_EQ(ns.Q.nonZeros(), 0);
-  EXPECT_EQ(ns.Q_ruiz.nonZeros(), 0);
-  EXPECT_EQ(ns.c_orig.size(), 0);
-  EXPECT_EQ(ns.Ax_scratch_.size(), 0);
-  EXPECT_EQ(ns.D2_diag.size(), 0);
+  // Regression check: this break used to clear the Ruiz factors and c_orig before the loop exit,
+  // which left the post-loop printable_sol()/objective_value() reading emptied buffers and
+  // reporting a size-0 solution with obj_val == obj_const. Same check as the Interrupted and
+  // MaxSsnIterations tests: a timed-out solve still reports its last accepted iterate.
+  EXPECT_EQ(sol.x.size(), 1);
+  EXPECT_EQ(sol.z.size(), 1);
+  EXPECT_TRUE(std::isfinite(sol.obj_val));
 }
 
 TEST(KspQpSolveEndToEnd, TerminatesWithMaxSsnIterationsWhenSsnIterationBudgetIsExhausted) {
@@ -1277,7 +1278,7 @@ TEST(KspQpSolveEndToEnd, TerminatesWithMaxPmmIterationsWhenIterationBudgetIsExha
   EXPECT_EQ(sol.opt, TerminationStatus::MaxPmmIterations);
 }
 
-TEST(KspQpSolveEndToEnd, TerminatesWithInterruptedStatusAndFreesScratchMemoryWhenInterruptedFlagIsSet) {
+TEST(KspQpSolveEndToEnd, TerminatesWithInterruptedStatusAndReportsSolutionWhenInterruptedFlagIsSet) {
   // An unconditionally-true interrupted_ fires on the very first NS.solve_ssn() call (checked as
   // the first statement of the SSN inner loop too), so this reaches TerminationStatus::Interrupted
   // regardless of the problem.
@@ -1293,13 +1294,13 @@ TEST(KspQpSolveEndToEnd, TerminatesWithInterruptedStatusAndFreesScratchMemoryWhe
   auto sol = ns.solve();
   EXPECT_EQ(sol.opt, TerminationStatus::Interrupted);
 
-  // free_scratch_memory() cleared the buffers not referenced by NS -- spot-check one from each
-  // category (setup-only, per-iteration-helper, and PMM-loop scratch).
-  EXPECT_EQ(ns.Q.nonZeros(), 0);
-  EXPECT_EQ(ns.Q_ruiz.nonZeros(), 0);
-  EXPECT_EQ(ns.c_orig.size(), 0);
-  EXPECT_EQ(ns.Ax_scratch_.size(), 0);
-  EXPECT_EQ(ns.D2_diag.size(), 0);
+  // Regression check: this break used to clear the Ruiz factors and c_orig before the loop exit,
+  // which left the post-loop printable_sol()/objective_value() reading emptied buffers and
+  // reporting a size-0 solution with obj_val == obj_const. An interrupted solve still reports its
+  // last accepted iterate.
+  EXPECT_EQ(sol.x.size(), 1);
+  EXPECT_EQ(sol.z.size(), 1);
+  EXPECT_TRUE(std::isfinite(sol.obj_val));
 }
 
 // ===================== report_ hook =====================

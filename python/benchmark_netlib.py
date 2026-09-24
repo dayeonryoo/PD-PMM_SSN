@@ -1,11 +1,11 @@
 """
-Benchmark KSP-QP vs QPALM vs OSQP on the Netlib LP test set.
+Benchmark KSP-QP vs QPALM vs OSQP on the Netlib LP and Kennington LP test sets.
 
-Outputs
+Outputs (<set> is "netlib", "kennington", or "netlib_kennington" — see --set)
 -------
-  results/comparison_netlib.csv                    - per-problem timing, iteration counts, and status
-  results/performance_profile_netlib.pdf/png       - Dolan-Moré performance profile (run time)
-  results/performance_profile_netlib_iters.pdf/png - Dolan-Moré performance profile (iterations)
+  results/comparison_<set>.csv                    - per-problem timing, iteration counts, and status
+  results/performance_profile_<set>.pdf/png       - Dolan-Moré performance profile (run time)
+  results/performance_profile_<set>_iters.pdf/png - Dolan-Moré performance profile (iterations)
 
 === HOW TO RUN FROM SCRATCH ===
 
@@ -33,6 +33,7 @@ Step 3 - Run the benchmark
 Settings: tol = 1e-6, time limit = 60 s, max iterations = infinity.
         --root:       to change the output directory (default: results/).
         --out:        to change the output file prefix (default: comparison_netlib).
+        --set:        to select which test sets to run among netlib, kennington (default: both).
         --solver:     to select which solvers to run among ksp-qp, qpalm, osqp (default: all three).
         --tol:        to change the solver tolerance (default: 1e-6).
         --time-limit: to change the solver time limit in seconds (default: 60).
@@ -182,6 +183,39 @@ LPS = {
 }
 
 # ---------------------------------------------------------------------------
+# Kennington LP problem list  (name → reference optimal objective)
+#
+# The large Netlib "kennington" family, distributed separately from the main
+# Netlib LP set and living in data/kennington/.  Reference objectives are the
+# published Kennington optima; they are documentation only — nothing in this
+# script reads them.
+# ---------------------------------------------------------------------------
+KENNINGTON = {
+    "CRE-A":   2.9889732e+07,
+    "CRE-B":   2.3129640e+07,
+    "CRE-C":   2.5275116e+07,
+    "CRE-D":   2.4454970e+07,
+    "KEN-07": -6.7952044e+08,
+    "KEN-11": -6.9723823e+09,
+    "KEN-13": -1.0257395e+10,
+    "KEN-18": -5.2217025e+10,
+    "OSA-07":  5.3572252e+05,
+    "OSA-14":  1.1064628e+06,
+    "OSA-30":  2.1421399e+06,
+    "OSA-60":  4.0440725e+06,
+    "PDS-02":  2.8857862e+10,
+    "PDS-06":  2.7761038e+10,
+    "PDS-10":  2.6727094e+10,
+    "PDS-20":  2.3821659e+10,
+}
+
+# Test set name → (problem dict, directory under data/, profile-plot label)
+TEST_SETS = {
+    "netlib":     (LPS,        "netlib",     "Netlib LPs"),
+    "kennington": (KENNINGTON, "kennington", "Kennington LPs"),
+}
+
+# ---------------------------------------------------------------------------
 # Subprocess worker functions (each spawned in a fresh process for clean RSS)
 # ---------------------------------------------------------------------------
 
@@ -241,6 +275,11 @@ def main() -> None:
         "--out", default="", help="Prefix for output filenames (e.g. '0508' → '0508_comparison_netlib.csv')"
     )
     parser.add_argument(
+        "--set", nargs="+", dest="sets", default=["netlib", "kennington"],
+        choices=["netlib", "kennington"], metavar="SET",
+        help="Test sets to run (default: both). Choices: netlib kennington",
+    )
+    parser.add_argument(
         "--solver", nargs="+", default=["ksp-qp", "qpalm", "osqp"],
         choices=["ksp-qp", "qpalm", "osqp"], metavar="SOLVER",
         help="Solvers to run (default: all three). Choices: ksp-qp qpalm osqp",
@@ -254,9 +293,19 @@ def main() -> None:
     solvers = set(args.solver)
 
     root      = Path(args.root).resolve()
-    data_dir  = root / "data" / "netlib"
     result_dir = root / "results"
     result_dir.mkdir(exist_ok=True)
+
+    # Selected test sets, always in the canonical order of TEST_SETS.
+    set_names = [s for s in TEST_SETS if s in set(args.sets)]
+    # (name, path) for every problem across the selected sets, in list order.
+    problems: list[tuple[str, Path]] = []
+    for s in set_names:
+        lp_dict, subdir, _ = TEST_SETS[s]
+        data_dir = root / "data" / subdir
+        problems += [(name, data_dir / f"{name}.mps") for name in lp_dict]
+    suffix = "_".join(set_names)
+    label  = " + ".join(TEST_SETS[s][2] for s in set_names)
 
     tol        = args.tol
     time_limit = args.time_limit
@@ -264,7 +313,7 @@ def main() -> None:
     max_iter   = 10_000_000_000   # effectively infinite for KSP-QP
 
     prefix = f"{args.out}_" if args.out else ""
-    csv_path = result_dir / f"{prefix}comparison_netlib.csv"
+    csv_path = result_dir / f"{prefix}comparison_{suffix}.csv"
     fieldnames = [
         "name",
         "ssn_solved",   "ssn_status",   "pmm_iter", "ssn_iter",
@@ -274,15 +323,15 @@ def main() -> None:
         "osqp_solved",  "osqp_status",  "osqp_iter",                      "osqp_obj",  "osqp_tol_achieved",  "osqp_time",
     ]
 
-    n_problems = len(LPS)
+    n_problems = len(problems)
     rows: list[dict] = _load_existing_rows(csv_path)
 
     def _flush() -> None:
         """Rewrite the CSV from `rows` — called right after every solver finishes."""
         _write_csv(csv_path, rows, fieldnames)
 
-    for idx, (name, _ref_obj) in enumerate(LPS.items(), 1):
-        mps_path = str(data_dir / f"{name}.mps")
+    for idx, (name, path) in enumerate(problems, 1):
+        mps_path = str(path)
         if not os.path.exists(mps_path):
             print(f"[{idx:3d}/{n_problems}] SKIP (file not found): {name}")
             continue
@@ -371,14 +420,13 @@ def main() -> None:
     print(f"\nResults written to: {csv_path}")
 
     # ---- Performance profiles -------------------------------------------
-    label = "Netlib LPs"
-    out_prefix = result_dir / f"{prefix}performance_profile_netlib"
+    out_prefix = result_dir / f"{prefix}performance_profile_{suffix}"
     plot_performance_profile(csv_path, out_prefix, label, tol=tol, time_limit=time_limit, solvers=solvers)
 
-    out_prefix_iters = result_dir / f"{prefix}performance_profile_netlib_iters"
+    out_prefix_iters = result_dir / f"{prefix}performance_profile_{suffix}_iters"
     plot_performance_profile_iters(csv_path, out_prefix_iters, label, tol=tol, time_limit=time_limit, solvers=solvers)
 
-    out_prefix_inner = result_dir / f"{prefix}performance_profile_netlib_inner_iters"
+    out_prefix_inner = result_dir / f"{prefix}performance_profile_{suffix}_inner_iters"
     plot_performance_profile_inner_iters(csv_path, out_prefix_inner, label, tol=tol, time_limit=time_limit, solvers=solvers)
 
 

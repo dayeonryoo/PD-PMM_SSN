@@ -670,105 +670,6 @@ typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const 
     return res_norms_unscaled;
 }
 
-/*
-template <typename T> // unlifted
-typename KSP_QP<T>::ResVec KSP_QP<T>::compute_residual_unscaled_inf_norms(const Vec& Ax, const Vec& Bx, const Vec& Qx) {
-    // Return the unscaled residual norms (primal, dual, complementarity for x, complementarity for Bx).
-    Vec& A_tr_y1 = A_tr_y1_scratch_;
-    Vec& B_tr_y2 = B_tr_y2_scratch_;
-
-    // Dual residual, scaled space (needed below to derive the unscaled dual residual).
-    Vec& num = num_scratch_;
-    num.noalias() = c + z;
-    if (Q_info != 0) num += Qx;
-    if (M != 0) {
-        A_tr_y1.noalias() = A_tr * y1;
-        num -= A_tr_y1;
-    }
-    if (l != 0) {
-        B_tr_y2.noalias() = B_tr * y2;
-        num -= B_tr_y2;
-    }
-
-    // In case the problem is lifted via Q ≈ LLᵀ with an auxiliary v = Lᵀx (x.tail(n)) and its own multiplier y_v = y1.tail(n),
-    // the dual residual must be recomputed directly from the true Q and the original A_ruizᵀ, bypassing v/y_v entirely.
-    if (Q_info == 2) {
-        x_head_scaled_scratch_.noalias() = D2_diag.cwiseProduct(x.head(n));
-        Qx_true_scratch_.noalias() = Q.template selfadjointView<Eigen::Lower>() * x_head_scaled_scratch_;
-        num.head(n).noalias() = c.head(n) + z.head(n) + D2_diag.cwiseProduct(Qx_true_scratch_);
-        if (m != 0) {
-            Atr_y1a_scratch_.noalias() = A_tr.leftCols(m) * y1.head(m);
-            num.head(n) -= Atr_y1a_scratch_.head(n);
-        }
-        if (l != 0) num.head(n) -= B_tr_y2.head(n);
-    }
-
-    // ===== Unscaled residual norms =====
-    // Primal residual norm. For Q_info==2, restricted to the original m-row block of Ax/b_orig.
-    T res_p_unscaled;
-    if (M == 0) res_p_unscaled = T(0);
-    else {
-        Vec& Ax_unscaled = Ax_unscaled_scratch_;
-        Ax_unscaled.noalias() = Ax.cwiseProduct(D1A_ext_inv);
-        if (Q_info == 2) {
-            if (m == 0) res_p_unscaled = T(0);
-            else {
-                T denom_unscaled = T(1) + std::max(inf_norm(Ax_unscaled.head(m)), inf_norm(b_orig.head(m)));
-                res_p_unscaled = inf_norm(Ax_unscaled.head(m) - b_orig.head(m)) / denom_unscaled;
-            }
-        } else {
-            T denom_unscaled = T(1) + std::max(inf_norm(Ax_unscaled), inf_norm(b_orig));
-            res_p_unscaled = inf_norm(Ax_unscaled - b_orig) / denom_unscaled;
-        }
-    }
-
-    // Dual residual norm. For Q_info==2, both the residual itself and its normalization scale are
-    // restricted to the original x-block (head(n)) and computed from true Q/A_ruiz data only.
-    Vec& z_unscaled = z_unscaled_scratch_;
-    Vec& num_unscaled = num_unscaled_scratch_;
-    z_unscaled.noalias() = z.cwiseProduct(D2_ext_inv);
-    num_unscaled.noalias() = num.cwiseProduct(D2_ext_inv);
-    T denom_unscaled = std::max(inf_norm(c_orig), inf_norm(z_unscaled));
-    T num_d_norm;
-    if (Q_info == 2) {
-        denom_unscaled = std::max(denom_unscaled, inf_norm(Qx_true_scratch_));
-        if (m != 0) denom_unscaled = std::max(denom_unscaled, inf_norm(Atr_y1a_scratch_.head(n).cwiseProduct(D2_ext_inv.head(n))));
-        num_d_norm = inf_norm(num_unscaled.head(n));
-    } else {
-        if (Q_info != 0) denom_unscaled = std::max(denom_unscaled, inf_norm(Qx.cwiseProduct(D2_ext_inv)));
-        if (M != 0)      denom_unscaled = std::max(denom_unscaled, inf_norm(A_tr_y1.cwiseProduct(D2_ext_inv)));
-        num_d_norm = inf_norm(num_unscaled);
-    }
-    if (l != 0) denom_unscaled = std::max(denom_unscaled, inf_norm(B_tr_y2.cwiseProduct(D2_ext_inv)));
-    denom_unscaled += T(1);
-    T res_d_unscaled = num_d_norm / denom_unscaled;
-
-    // Complementarity residual norm for box constraints on x.
-    Vec& x_unscaled = x_unscaled_scratch_;
-    x_unscaled.noalias() = x.cwiseProduct(D2_ext);
-    Vec& proj_K_unscaled = proj_K_unscaled_scratch_;
-    proj_K_unscaled.noalias() = proj(x_unscaled + z_unscaled, lx_orig, ux_orig);
-    T compl_x_unscaled = inf_norm(x_unscaled - proj_K_unscaled) / (T(1) + std::max(inf_norm(z_unscaled), inf_norm(proj_K_unscaled)));
-
-    // Complementarity residual norm for box constraints on Bx.
-    T compl_w_unscaled;
-    if (l == 0) compl_w_unscaled = T(0);
-    else {
-        Vec& Bx_unscaled = Bx_unscaled_scratch_;
-        Vec& y2_unscaled = y2_unscaled_scratch_;
-        Bx_unscaled.noalias() = Bx.cwiseProduct(D1B_diag_inv);
-        y2_unscaled.noalias() = y2.cwiseProduct(D1B_diag);
-        Vec& proj_W_unscaled = proj_W_unscaled_scratch_;
-        proj_W_unscaled.noalias() = proj(Bx_unscaled - y2_unscaled, lw_orig, uw_orig);
-        compl_w_unscaled = inf_norm(Bx_unscaled - proj_W_unscaled) / (T(1) + std::max(inf_norm(y2_unscaled), inf_norm(proj_W_unscaled)));
-    }
-
-    ResVec res_norms_unscaled;
-    res_norms_unscaled << res_p_unscaled, res_d_unscaled, compl_x_unscaled, compl_w_unscaled;
-    return res_norms_unscaled;
-}
-*/
-
 template <typename T>
 T KSP_QP<T>::objective_value(const Vec& x_orig) {
     T obj_val = obj_const + c_orig.dot(x_orig);
@@ -940,38 +841,6 @@ void KSP_QP<T>::update_multipliers_if_accurate(typename SSN<T>::TerminationStatu
 }
 
 template <typename T>
-void KSP_QP<T>::free_scratch_memory() {
-    // Setup-only leftovers: dead weight since the constructor finished, regardless of interruption.
-    Q_ruiz = SpMat(); A_ruiz = SpMat(); B_ruiz = SpMat();
-    problem_Q_diag.resize(0); Q_diag_ruiz.resize(0);
-    c_ruiz.resize(0); b_ruiz.resize(0);
-    lx_ruiz.resize(0); ux_ruiz.resize(0); lw_ruiz.resize(0); uw_ruiz.resize(0);
-
-    // Used only inside this iteration's already-completed helper calls (objective_value,
-    // printable_sol, compute_residual_unscaled_inf_norms, primal_infeas, dual_infeas).
-    Q = SpMat();
-    D1A_diag.resize(0); D1B_diag.resize(0); D2_diag.resize(0);
-    D1A_ext.resize(0); D2_ext.resize(0); D1A_ext_inv.resize(0);
-    c_orig.resize(0); b_orig.resize(0);
-    lx_orig.resize(0); ux_orig.resize(0); lw_orig.resize(0); uw_orig.resize(0);
-
-    // Per-PMM-iteration scratch, not referenced by NS.
-    Ax_scratch_.resize(0); Bx_scratch_.resize(0); Qx_scratch_.resize(0);
-    Ax_old_scratch_.resize(0); Bx_old_scratch_.resize(0);
-    Adx_scratch_.resize(0); Bdx_scratch_.resize(0);
-    x_old_scratch_.resize(0); y2_old_scratch_.resize(0);
-    A_tr_y1_scratch_.resize(0); B_tr_y2_scratch_.resize(0);
-    num_scratch_.resize(0);
-    proj_K_unscaled_scratch_.resize(0); proj_W_unscaled_scratch_.resize(0);
-    Ax_unscaled_scratch_.resize(0);
-    z_unscaled_scratch_.resize(0); num_unscaled_scratch_.resize(0);
-    x_unscaled_scratch_.resize(0);
-    Bx_unscaled_scratch_.resize(0); y2_unscaled_scratch_.resize(0);
-    x_head_scaled_scratch_.resize(0); Qx_true_scratch_.resize(0); Atr_y1a_scratch_.resize(0);
-}
-
-
-template <typename T>
 Solution<T> KSP_QP<T>::solve() {
     auto solving_start = now_();
 
@@ -1103,14 +972,12 @@ Solution<T> KSP_QP<T>::solve() {
         // the second conditions catches them occured between PMM iterations.
         if (NS.opt == SSN<T>::TerminationStatus::Interrupted || interrupted_()) {
             result = TerminationStatus::Interrupted;
-            free_scratch_memory();
             break;
         }
         auto solving_current = now_();
         double solving_current_time = time_diff_s(solving_start, solving_current); // in seconds
         if (NS.opt == SSN<T>::TerminationStatus::TimeLimit || solving_current_time > time_limit) {
             result = TerminationStatus::TimeLimit;
-            free_scratch_memory();
             break;
         }
 

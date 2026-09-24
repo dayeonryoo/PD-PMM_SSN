@@ -138,7 +138,7 @@ public:
     T mu0 = 1e0;
     T rho0 = 1e0;
     T mu = 1e2;
-    T rho = 1e3;
+    T rho = 1e7;
     T ssn_tol = 1e-2;
 
     // Outputs:
@@ -259,7 +259,6 @@ public:
     bool dual_infeas(const Vec& delta_x, const Vec& Adx, const Vec& Bdx);
     void accept_ssn_iterate(const SSN<T>& NS);
     void update_multipliers_if_accurate(typename SSN<T>::TerminationStatus ssn_opt, Vec& delta_y1, Vec& delta_z);
-    void free_scratch_memory(); // in case the solver is abruptly stopped due to time limit or user iteruption
     Solution<T> solve();
 };
 

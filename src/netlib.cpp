@@ -23,7 +23,7 @@ using SpMat = Eigen::SparseMatrix<T>;
 using Triplet = Eigen::Triplet<T>;
 
 // ==================== Solving Netlib LPs ====================
-
+/*
 int main(int argc, char** argv) {
     if (cli::has_flag(argc, argv, "--help") || cli::has_flag(argc, argv, "-h")) {
         std::cout <<
@@ -239,7 +239,7 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-
+*/
 // ==================== Netlib infeasible problems ====================
 /*
 int main(int argc, char** argv) {
@@ -302,7 +302,7 @@ int main(int argc, char** argv) {
     int max_iter = cli::get_int(argc, argv, "--max-iter", 3000);
     double time_limit = cli::get_double(argc, argv, "--time-limit", 60.0); // in seconds
 
-    PrintWhen when = PrintWhen::NEVER;
+    PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
     // Solver result
@@ -369,17 +369,18 @@ int main(int argc, char** argv) {
 */
 
 // ==================== A single Netlib infeasible problem ====================
-/*
+
 int main() {
 
     std::string root = "data/netlib_infeas/";  // run from the repo root
-    std::string name = "GOSH";
+    std::string name = "KLEIN1";
     std::string filename = root + name + ".mps";
 
     // Parameters for KSP-QP solver
     T tol = 1e-6;
     int max_iter = 1000;
-    PrintWhen when = PrintWhen::EVERY10;
+    T time_limit = 60.0; // in seconds
+    PrintWhen when = PrintWhen::ALWAYS;
     PrintWhat what = PrintWhat::TUNING;
 
     // Extract problem data from the mps file using our MpsFormatParser and construct solver
@@ -387,7 +388,7 @@ int main() {
     ParsedModel<T> model = parser.parse(filename);
     KSPQPdata<T> pd = parser.to_kspqp(model);
 
-    Problem<T> prob(pd, tol, max_iter, when, what);
+    Problem<T> prob(pd, tol, max_iter, time_limit, when, what);
     KSP_QP<T> solver(prob);
 
     std::cout << "================================================ Solving " << name << " =================================================\n";
@@ -395,7 +396,9 @@ int main() {
     // Solve the LP
     Solution<T> sol = solver.solve();
     sol.print_summary();
+    
+    print_feasibility(pd, sol.x, tol);
 
     return 0;
 }
-*/
+

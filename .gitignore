@@ -76,7 +76,6 @@ __pycache__/
 # Personal experiment data and results (not for upload)
 ############################################
 results/
-data/
 
 ############################################
 # LaTeX / notes (if you keep derivations)
