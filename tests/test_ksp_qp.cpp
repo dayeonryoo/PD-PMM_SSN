@@ -894,11 +894,14 @@ TEST(UpdatePmmParameters, LineSearchFailedLoosensMuRhoAndGrowsSsnTol) {
 // specific ruiz scaling factors, which are solver-internal and not hand-predicted here.
 
 TEST(PrimalInfeas, DetectsCertificateOnHandBuiltInfeasibleLp) {
+  // min 0  s.t.  x = 1000,  x <= 0.  Genuinely infeasible.  The finite ux is what makes the
+  // certificate provable: condition 2's lhs is the support function of cert_z over [lx, ux], so
+  // the coordinate cert_z leans on must be bounded on the side cert_z points to (see condition 3).
   SpMat A = DenseToSparse((Eigen::MatrixXd(1, 1) << 1.0).finished());
   Vec b(1);
-  b << 1000.0;  // large positive, unconstrained x -- see condition-2 derivation in the test file header
+  b << 1000.0;  // large positive -- see condition-2 derivation in the test file header
   auto problem = MakeProblem(1, 1, 0, SpMat(1, 1), A, SpMat(0, 1), Vec::Zero(1), b, 0.0,
-                              Vec::Constant(1, -kInf), Vec::Constant(1, kInf), Vec(0), Vec(0));
+                              Vec::Constant(1, -kInf), Vec::Zero(1), Vec(0), Vec(0));
   KSP_QP<double> ns(problem);
   ASSERT_FALSE(ns.setup_failed);
   ASSERT_GT(ns.b(0), 0.0);  // ruiz scaling preserves sign
@@ -909,6 +912,52 @@ TEST(PrimalInfeas, DetectsCertificateOnHandBuiltInfeasibleLp) {
   Vec cert_z = ns.A_tr * cert_y1;  // makes condition 1's lhs exactly zero
 
   EXPECT_TRUE(ns.primal_infeas(cert_y1, cert_y2, cert_z));
+}
+
+TEST(PrimalInfeas, RejectsCertificateLeaningOnAnInfiniteBound) {
+  // Same certificate as DetectsCertificateOnHandBuiltInfeasibleLp, but ux = +inf, which turns the
+  // problem into min 0 s.t. x = 1000, x free -- feasible, with x = 1000.  cert_z > 0 on a
+  // coordinate with no upper bound makes condition 2's support function +inf, so the certificate
+  // proves nothing and condition 3 abandons it.  The pre-fix code instead treated that term as 0,
+  // leaving lhs2 = -b*cert_y1 = -1000 < 0 and reporting this feasible LP as primal infeasible; on
+  // the Netlib set that misreported CRE-A, CRE-C, SCORPION, SCSD6, SCTAP1 and all six SHIP*.
+  SpMat A = DenseToSparse((Eigen::MatrixXd(1, 1) << 1.0).finished());
+  Vec b(1);
+  b << 1000.0;
+  auto problem = MakeProblem(1, 1, 0, SpMat(1, 1), A, SpMat(0, 1), Vec::Zero(1), b, 0.0,
+                              Vec::Constant(1, -kInf), Vec::Constant(1, kInf), Vec(0), Vec(0));
+  KSP_QP<double> ns(problem);
+  ASSERT_FALSE(ns.setup_failed);
+
+  Vec cert_y1(1);
+  cert_y1 << 1.0;
+  Vec cert_y2(0);
+  Vec cert_z = ns.A_tr * cert_y1;  // condition 1 holds exactly, condition 2's lhs would be -1000
+
+  EXPECT_FALSE(ns.primal_infeas(cert_y1, cert_y2, cert_z));
+}
+
+TEST(PrimalInfeas, RejectsCertificateLeaningOnAnInfiniteBoxBound) {
+  // Condition 3 on the Bx side: w is free, so a nonzero cert_y2 makes the support function over
+  // [lw, uw] infinite and the certificate unusable, whichever sign cert_y2 has.  Both signs are
+  // exercised because the two infinite bounds are guarded by opposite branches of condition 3.
+  SpMat A = DenseToSparse((Eigen::MatrixXd(1, 1) << 1.0).finished());
+  SpMat B = DenseToSparse((Eigen::MatrixXd(1, 1) << 1.0).finished());
+  Vec b(1);
+  b << 1000.0;
+  auto problem = MakeProblem(1, 1, 1, SpMat(1, 1), A, B, Vec::Zero(1), b, 0.0,
+                              Vec::Constant(1, -kInf), Vec::Zero(1),
+                              Vec::Constant(1, -kInf), Vec::Constant(1, kInf));
+  KSP_QP<double> ns(problem);
+  ASSERT_FALSE(ns.setup_failed);
+
+  Vec cert_y1(1);
+  cert_y1 << 1.0;
+  for (double s : {1.0, -1.0}) {
+    Vec cert_y2 = Vec::Constant(1, s);
+    Vec cert_z = ns.A_tr * cert_y1 + ns.B_tr * cert_y2;  // condition 1's lhs is exactly zero
+    EXPECT_FALSE(ns.primal_infeas(cert_y1, cert_y2, cert_z)) << "cert_y2 sign " << s;
+  }
 }
 
 TEST(PrimalInfeas, ReturnsFalseForZeroCertificate) {
@@ -928,7 +977,7 @@ TEST(PrimalInfeas, ReturnsFalseWhenCondition2PassesButCondition1Fails) {
   Vec b(1);
   b << 1000.0;
   auto problem = MakeProblem(1, 1, 0, SpMat(1, 1), A, SpMat(0, 1), Vec::Zero(1), b, 0.0,
-                              Vec::Constant(1, -kInf), Vec::Constant(1, kInf), Vec(0), Vec(0));
+                              Vec::Constant(1, -kInf), Vec::Zero(1), Vec(0), Vec(0));
   KSP_QP<double> ns(problem);
   ASSERT_FALSE(ns.setup_failed);
   ASSERT_GT(ns.b(0), 0.0);
@@ -1652,9 +1701,11 @@ TEST(SolvePrimalInfeasCertificateOrdering, FreshDeltaY1AfterMultiplierUpdateDete
   SpMat B = DenseToSparse((Eigen::MatrixXd(1, 1) << 1.0).finished());
   Vec c = Vec::Zero(1), b(1);
   b << 1000.0;  // large positive: makes condition 2 comfortably satisfied once delta_y1 != 0.
+  // w is pinned to 0 while x = 1000: infeasible, and the finite lw/uw keep condition 3 satisfied
+  // for the nonzero cert_y2 below (a free w would make condition 2's support function +inf).
   auto problem = MakeProblem(1, 1, 1, SpMat(1, 1), A, B, c, b, 0.0,
                               Vec::Constant(1, -kInf), Vec::Constant(1, kInf),
-                              Vec::Constant(1, -kInf), Vec::Constant(1, kInf));
+                              Vec::Zero(1), Vec::Zero(1));
   KSP_QP<double> pmm(problem);
   ASSERT_FALSE(pmm.setup_failed);
   ASSERT_GT(pmm.b(0), 0.0);  // ruiz scaling preserves sign

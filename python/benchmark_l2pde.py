@@ -1,5 +1,6 @@
 """
-Benchmark KSP-QP vs QPALM vs OSQP on L2-regularized PDE-constrained QP problems (see include/pde_generator.hpp).
+Benchmark KSP-QP vs QPALM vs OSQP on L2-regularized PDE-constrained QP problems
+(see pde_generator.py; problems from Pearson & Gondzio, 2017).
 
 Three named tables are produced:
 
@@ -67,6 +68,8 @@ except ModuleNotFoundError:
         "  cmake .. && cmake --build . --config Release"
     )
 
+import pde_generator
+
 from benchmark_common import (
     kspqp_to_qpalm,
     run_qpalm,
@@ -127,7 +130,7 @@ def _fmt_bound(v: float) -> str:
 # ---------------------------------------------------------------------------
 
 def _generate(choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps, lumped_mass, discretization):
-    return ksp_qp_bind.generate_pde_l2_qp(
+    return pde_generator.generate_pde_l2_qp(
         choice, nc, beta, y_lower, y_upper, u_lower, u_upper, eps,
         lumped_mass=lumped_mass, discretization=discretization
     )

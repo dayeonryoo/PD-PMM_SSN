@@ -577,10 +577,6 @@ void KSP_QP<T>::initialize_sols() { // using 0 vectors
     x_unscaled_scratch_     = Vec::Zero(N);
     Bx_unscaled_scratch_    = Vec::Zero(l);
     y2_unscaled_scratch_    = Vec::Zero(l);
-
-    x_head_scaled_scratch_  = Vec::Zero(n);
-    Qx_true_scratch_        = Vec::Zero(n);
-    Atr_y1a_scratch_        = Vec::Zero(N);
 }
 
 template <typename T>
@@ -727,32 +723,44 @@ bool KSP_QP<T>::primal_infeas(const Vec& cert_y1, const Vec& cert_y2, const Vec&
     cert_y2 = y2_new - y2_old (after SSN iterations)
     cert_z  = delta_z = z_new - z_old
 
-    The QP is determined to be primal infeasible if all 2 conditions hold for nonzero [delta_y1, delta_y2, delta_z]:
+    The QP is determined to be primal infeasible if all 3 conditions hold for nonzero [delta_y1, delta_y2, delta_z]:
     1. ||A^T cert_y1 + B^T cert_y2 - cert_z||_inf <= eps_pinf * max{||cert_y1||_inf, ||cert_y2||_inf, ||cert_z||_inf};
     2. -b^T cert_y1 + sum_i [uw_i * max(-cert_y2_i, 0)] + sum_i [lw_i * min(-cert_y2_i, 0)]
                      + sum_i [ux_i * max(cert_z_i, 0)]   + sum_i [lx_i * min(cert_z_i, 0)]
        <= -eps_pinf * max{||cert_y1||_inf, ||cert_y2||_inf, ||cert_z||_inf}
-       for finite lx_i, ux_i, lw_i, uw_i.
+       for finite lx_i, ux_i, lw_i, uw_i;
+    3. every certificate component multiplying an infinite bound is (numerically) zero.
 
     Infeasibility is determined in unscaled scope.
     */
+   
     T cert_inf = std::max({M > 0 ? inf_norm(cert_y1.cwiseProduct(D1A_ext)) : T(0),
                            l > 0 ? inf_norm(cert_y2.cwiseProduct(D1B_diag)) : T(0),
                            inf_norm(cert_z.cwiseQuotient(D2_ext))}); // Unscaled certificate norms
     if (cert_inf < T(100) * std::numeric_limits<T>::epsilon()) return false;
 
-    // Condition 2
+    // Conditions 2 and 3. cert_tol is a noise floor for "is this component zero", not a residual
+    // tolerance -- eps_pinf keeps its full strictness in conditions 1 and 2. A component on an
+    // unbounded coordinate never reaches exactly zero in floating point, so some floor is needed:
+    // above it the certificate is abandoned, below it the term is skipped.
+    const T cert_tol = T(1e5) * eps_pinf * cert_inf; // 1e2 * tol * cert_inf
     T lhs2 = T(0); // scale-invariant
     if (M > 0) lhs2 -= b.dot(cert_y1);
     for (int i = 0; i < l; ++i) {
         const T cy2i = -cert_y2(i);
+        const T cy2i_unscaled = cy2i * D1B_diag(i);
         if (uw(i) < inf)  lhs2 += uw(i) * std::max(cy2i, T(0));
+        else if (cy2i_unscaled >  cert_tol) return false;
         if (lw(i) > -inf) lhs2 += lw(i) * std::min(cy2i, T(0));
+        else if (cy2i_unscaled < -cert_tol) return false;
     }
     for (int i = 0; i < N; ++i) {
         const T czi = cert_z(i);
+        const T czi_unscaled = czi / D2_ext(i);
         if (ux(i) < inf)  lhs2 += ux(i) * std::max(czi, T(0));
+        else if (czi_unscaled >  cert_tol) return false;
         if (lx(i) > -inf) lhs2 += lx(i) * std::min(czi, T(0));
+        else if (czi_unscaled < -cert_tol) return false;
     }
     if (lhs2 > -eps_pinf * cert_inf) return false;
 
@@ -926,16 +934,6 @@ Solution<T> KSP_QP<T>::solve() {
         accept_ssn_iterate(NS);
         update_multipliers_if_accurate(NS.opt, delta_y1, delta_z);
 
-        // Infeasibility checks.
-        if (primal_infeas(delta_y1, y2 - y2_old_scratch_, delta_z)) {
-            result = TerminationStatus::PrimalInfeasible; std::cout << "[Infeasibility] Primal infeasible.\n";
-            break;
-        }
-        if (dual_infeas(x - x_old_scratch_, Adx_scratch_, Bdx_scratch_)) {
-            result = TerminationStatus::DualInfeasible; std::cout << "[Infeasibility] Dual infeasible.\n";
-            break;
-        }
-
         // Compute new residual norms.
         ResVec new_res_norms = compute_residual_unscaled_inf_norms(Ax_scratch_, Bx_scratch_, Qx_scratch_);
         pmm_tol_achieved = new_res_norms.maxCoeff();
@@ -957,6 +955,16 @@ Solution<T> KSP_QP<T>::solve() {
         // Check termination criterion.
         if (pmm_tol_achieved < tol) {
             result = TerminationStatus::Optimal;
+            break;
+        }
+
+        // Infeasibility checks
+        if (primal_infeas(delta_y1, y2 - y2_old_scratch_, delta_z)) {
+            result = TerminationStatus::PrimalInfeasible; std::cout << "[Infeasibility] Primal infeasible.\n";
+            break;
+        }
+        if (dual_infeas(x - x_old_scratch_, Adx_scratch_, Bdx_scratch_)) {
+            result = TerminationStatus::DualInfeasible; std::cout << "[Infeasibility] Dual infeasible.\n";
             break;
         }
 

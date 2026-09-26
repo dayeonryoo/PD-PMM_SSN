@@ -2,8 +2,6 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
-#include <algorithm>
-#include <cctype>
 #include <fstream>
 #include <string>
 
@@ -13,7 +11,6 @@
 #include "ksp_qp.hpp"
 #include "problem.hpp"
 #include "mps_format_parser.hpp"
-#include "pde_generator.hpp"
 
 namespace py = pybind11;
 using T      = double;
@@ -121,6 +118,8 @@ Returns dict:
   smw_count         – total number of SMW preconditioner applications
   pmm_tol_achieved  – tolerance achieved by PMM at termination
   x                 – primal solution vector (original, unscaled units)
+  y1, y2, z         – multipliers for Ax = b, Bx = w and the box constraints on x,
+                      in the same original, unscaled units as x
 -----------------------------------------------------------------------*/
 py::dict solve_from_sif(const std::string& filename,
                         double tol         = 1e-6,
@@ -128,7 +127,7 @@ py::dict solve_from_sif(const std::string& filename,
                         double time_limit  = 600.0) {
     int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
-    Vec x_sol;
+    Vec x_sol, y1_sol, y2_sol, z_sol;
     {
         py::gil_scoped_release release;
         MpsFormatParser<T>   parser;
@@ -151,6 +150,9 @@ py::dict solve_from_sif(const std::string& filename,
         smw_count        = sol.smw_count;
         pmm_tol_achieved = (double)sol.pmm_tol_achieved;
         x_sol            = sol.x;
+        y1_sol           = sol.y1;
+        y2_sol           = sol.y2;
+        z_sol            = sol.z;
     }
 
     py::dict out;
@@ -166,6 +168,9 @@ py::dict solve_from_sif(const std::string& filename,
     out["smw_count"]        = smw_count;
     out["pmm_tol_achieved"] = pmm_tol_achieved;
     out["x"]                = eigen_vec_to_array(x_sol);
+    out["y1"]               = eigen_vec_to_array(y1_sol);
+    out["y2"]               = eigen_vec_to_array(y2_sol);
+    out["z"]                = eigen_vec_to_array(z_sol);
     return out;
 }
 
@@ -235,7 +240,7 @@ py::dict solve_from_data(const py::dict& pd_dict,
 
     int opt, pmm_iter, ssn_iter, krylov_iter, fact, smw_count;
     double obj_val, setup_time, solve_time, run_time, pmm_tol_achieved;
-    Vec x_sol;
+    Vec x_sol, y1_sol, y2_sol, z_sol;
     {
         py::gil_scoped_release release;
         // trace_path is diagnostic-only: when set, writes a per-PMM-iteration and
@@ -278,6 +283,9 @@ py::dict solve_from_data(const py::dict& pd_dict,
         smw_count        = sol.smw_count;
         pmm_tol_achieved = (double)sol.pmm_tol_achieved;
         x_sol            = sol.x;
+        y1_sol           = sol.y1;
+        y2_sol           = sol.y2;
+        z_sol            = sol.z;
     }
 
     py::dict out;
@@ -293,116 +301,10 @@ py::dict solve_from_data(const py::dict& pd_dict,
     out["smw_count"]        = smw_count;
     out["pmm_tol_achieved"] = pmm_tol_achieved;
     out["x"]                = eigen_vec_to_array(x_sol);
+    out["y1"]               = eigen_vec_to_array(y1_sol);
+    out["y2"]               = eigen_vec_to_array(y2_sol);
+    out["z"]                = eigen_vec_to_array(z_sol);
     return out;
-}
-
-/*-----------------------------------------------------------------------
-Helper: KSPQPdata<T> → Python dict (same format as parse_sif output)
------------------------------------------------------------------------*/
-static py::dict kspqp_to_dict(const KSPQPdata<T>& pd) {
-    py::dict out;
-    out["n"] = pd.n;
-    out["m"] = pd.m;
-    out["l"] = pd.l;
-
-    for (auto& [M, key] : std::vector<std::pair<const SpMat*, std::string>>{
-            {&pd.Q, "Q"}, {&pd.A, "A"}, {&pd.B, "B"}}) {
-        py::dict d = eigen_sparse_to_dict(*M, key);
-        for (auto item : d) out[item.first] = item.second;
-    }
-
-    out["c"]         = eigen_vec_to_array(pd.c);
-    out["b"]         = eigen_vec_to_array(pd.b);
-    out["lx"]        = eigen_vec_to_array(pd.lx);
-    out["ux"]        = eigen_vec_to_array(pd.ux);
-    out["lw"]        = eigen_vec_to_array(pd.lw);
-    out["uw"]        = eigen_vec_to_array(pd.uw);
-    out["obj_const"] = (double)pd.obj_const;
-    return out;
-}
-
-/*-----------------------------------------------------------------------
-Helper: "fem"/"fd" (case-insensitive) → pdegen::Discretization
------------------------------------------------------------------------*/
-static pdegen::Discretization parse_discretization(const std::string& s) {
-    std::string lower = s;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                    [](unsigned char c) { return std::tolower(c); });
-    if (lower == "fem") return pdegen::Discretization::FEM;
-    if (lower == "fd")  return pdegen::Discretization::FD;
-    throw std::invalid_argument("discretization must be 'fem' or 'fd'");
-}
-
-/*-----------------------------------------------------------------------
-Generate L1/L2-regularised PDE-constrained QPs from (Gondzio, Pougkakiotis & Pearson 2022).
-
-choice  = "poisson"  or  "convdiff"
-nc      = grid exponent (grid size = 2^nc + 1 per direction)
-alpha1  = L1 regularisation weight
-alpha2  = L2 regularisation weight
-y_lower/y_upper = state bounds (default ±inf)
------------------------------------------------------------------------*/
-py::dict generate_pde_l1l2_qp(const std::string& choice,
-                              int nc, double alpha1, double alpha2,
-                              double y_lower = -std::numeric_limits<double>::infinity(),
-                              double y_upper =  std::numeric_limits<double>::infinity(),
-                              bool lumped_mass = false,
-                              const std::string& discretization = "fem") {
-    if (choice != "poisson" && choice != "convdiff")
-        throw std::invalid_argument("choice must be 'poisson' or 'convdiff'");
-    const pdegen::Discretization disc = parse_discretization(discretization);
-
-    KSPQPdata<T> pd;
-    {
-        py::gil_scoped_release release;
-        pd = (choice == "poisson")
-               ? pdegen::make_poisson_l1l2_control<T>(nc, (T)alpha1, (T)alpha2, T(-2), T(1.5),
-                                                       (T)y_lower, (T)y_upper, lumped_mass, disc)
-               : pdegen::make_convdiff_l1l2_control<T>(nc, (T)alpha1, (T)alpha2, T(-2), T(1.5), T(0.02),
-                                                        (T)y_lower, (T)y_upper, lumped_mass, disc);
-    }
-    return kspqp_to_dict(pd);
-}
-
-/*-----------------------------------------------------------------------
-Generate L2-regularised PDE-constrained QPs from (Pearson & Gondzio 2017).
-
-choice = "poisson"       - 2D Poisson control (control-constrained)
-choice = "poisson_state" - 2D Poisson control (state-constrained)
-choice = "convdiff"      - 2D convection-diffusion control
-
-y_lower/y_upper/u_lower/u_upper default to ±inf (unconstrained).
-eps applies to "convdiff" only (diffusion coefficient).
------------------------------------------------------------------------*/
-py::dict generate_pde_l2_qp(const std::string& choice,
-                                     int nc, double beta,
-                                     double y_lower = -std::numeric_limits<double>::infinity(),
-                                     double y_upper =  std::numeric_limits<double>::infinity(),
-                                     double u_lower = -std::numeric_limits<double>::infinity(),
-                                     double u_upper =  std::numeric_limits<double>::infinity(),
-                                     double eps = 0.01,
-                                     bool lumped_mass = false,
-                                     const std::string& discretization = "fem") {
-    if (choice != "poisson" && choice != "poisson_state" && choice != "convdiff")
-        throw std::invalid_argument(
-            "choice must be one of 'poisson', 'poisson_state', 'convdiff'");
-    const pdegen::Discretization disc = parse_discretization(discretization);
-
-    KSPQPdata<T> pd;
-    {
-        py::gil_scoped_release release;
-        if (choice == "poisson") {
-            pd = pdegen::make_poisson_l2_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                    (T)u_lower, (T)u_upper, lumped_mass, disc);
-        } else if (choice == "poisson_state") {
-            pd = pdegen::make_poisson_l2_state_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                        (T)u_lower, (T)u_upper, lumped_mass, disc);
-        } else { // convdiff
-            pd = pdegen::make_convdiff_l2_control<T>(nc, (T)beta, (T)y_lower, (T)y_upper,
-                                                    (T)u_lower, (T)u_upper, (T)eps, lumped_mass, disc);
-        }
-    }
-    return kspqp_to_dict(pd);
 }
 
 /*-----------------------------------------------------------------------
@@ -426,58 +328,12 @@ The sparse matrices are in CSC format (data / indices / indptr / shape).)");
           R"(Parse a SIF/MPS file and solve it with the KSP-QP solver.
 
 Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter,
-krylov_iter, fact, smw_count, pmm_tol_achieved.
+krylov_iter, fact, smw_count, pmm_tol_achieved, x, y1, y2, z (x and the multipliers y1/y2/z
+are returned in the original, unscaled units, so they can be checked against the problem data
+as given).
 status == 0  → optimal solution found
 status <  0  → infeasibility detected
 status >  0  → iteration / time limit reached)");
-
-    m.def("generate_pde_l1l2_qp", &generate_pde_l1l2_qp,
-          py::arg("choice"), py::arg("nc"), py::arg("alpha1"), py::arg("alpha2"),
-          py::arg("y_lower") = -std::numeric_limits<double>::infinity(),
-          py::arg("y_upper") =  std::numeric_limits<double>::infinity(),
-          py::arg("lumped_mass") = false,
-          py::arg("discretization") = "fem",
-          R"(Generate a L1/L2-regularized PDE-constrained QP via split control variables.
-
-choice = 'poisson'  or  'convdiff'
-nc     = grid exponent (grid size = 2^nc + 1 per direction; n_display = 2*(2^nc+1)^2)
-alpha1 = L1 regularisation weight
-alpha2 = L2 regularisation weight (0 is valid)
-y_lower/y_upper = state bounds (default ±inf, i.e. control-constrained only;
-                  pass finite bounds for a state- or jointly-constrained problem)
-lumped_mass = if True, use the lumped (diagonal) mass matrix instead of the
-              consistent Q1 mass matrix. Ignored (always lumped) when
-              discretization='fd'.
-discretization = 'fem' (default, Q1 finite elements) or 'fd' (5-point
-              finite-difference stencil with first-order upwind convection).
-
-Returns the same dict format as parse_sif(), so the result can be passed
-directly to solve_from_data() and used with kspqp_to_qpalm().)");
-
-    m.def("generate_pde_l2_qp", &generate_pde_l2_qp,
-          py::arg("choice"), py::arg("nc"), py::arg("beta"),
-          py::arg("y_lower") = -std::numeric_limits<double>::infinity(),
-          py::arg("y_upper") =  std::numeric_limits<double>::infinity(),
-          py::arg("u_lower") = -std::numeric_limits<double>::infinity(),
-          py::arg("u_upper") =  std::numeric_limits<double>::infinity(),
-          py::arg("eps") = 0.01,
-          py::arg("lumped_mass") = false,
-          py::arg("discretization") = "fem",
-          R"(Generate a L2-regularized PDE-constrained QP.
-
-choice = 'poisson' (control-constrained)  or  'poisson_state' (state-constrained)  or  'convdiff' (control- and state-constrained)
-nc     = grid exponent (grid size = 2^nc + 1 per direction)
-beta   = L2 regularisation weight
-y_lower/y_upper/u_lower/u_upper = box bounds on state/control (default ±inf)
-eps = diffusion coefficient, 'convdiff' only.
-lumped_mass = if True, use the lumped (diagonal) mass matrix instead of the
-              consistent Q1 mass matrix. Ignored (always lumped) when
-              discretization='fd'.
-discretization = 'fem' (default, Q1 finite elements) or 'fd' (5-point
-              finite-difference stencil with first-order upwind convection).
-
-Returns the same dict format as parse_sif(), so the result can be passed
-directly to solve_from_data() and used with kspqp_to_qpalm().)");
 
     m.def("solve_from_data", &solve_from_data,
           py::arg("pd"),
@@ -489,7 +345,9 @@ directly to solve_from_data() and used with kspqp_to_qpalm().)");
           R"(Solve with KSP-QP using already-parsed problem data (dict from parse_sif).
 
 Returns a dict with keys: status, obj_val, setup_time, solve_time, run_time, pmm_iter, ssn_iter,
-krylov_iter, fact, smw_count, pmm_tol_achieved.
+krylov_iter, fact, smw_count, pmm_tol_achieved, x, y1, y2, z (x and the multipliers y1/y2/z
+are returned in the original, unscaled units, so they can be checked against the problem data
+as given).
 
 trace_path: diagnostic-only, default "" (no tracing, matches prior behavior exactly). When
 set, writes a per-PMM-iteration and per-SSN-inner-iteration CSV trace to that path with columns

@@ -26,7 +26,10 @@
 //    the first value-bearing line: fixed-column parsing is attempted first,
 //    and the file is only concluded to be free-format if that fixed-column
 //    reading disagrees with a whitespace-delimited reading of the same
-//    line. Once decided, the format is used for the rest of the file.
+//    line. Once decided, the format is used for the rest of the file --
+//    except that any individual line whose tokens overflow the fixed fields
+//    is read free-format regardless, since the fixed reading would silently
+//    truncate it (see fixed_fields_would_truncate()).
 //  - Bounds/RHS/RANGES magnitudes at or beyond to_kspqp()'s inf_cap are
 //    treated as infinite, and lower/upper pairs within eq_tol of each other
 //    are snapped to their exact midpoint (inclusive at diff == eq_tol).
@@ -411,8 +414,6 @@ void MpsFormatParser<T>::parse_bounds(const std::vector<std::string_view>& token
         value_str = tokens[3];
     } else if (tokens.size() == 3) {
         // tokens[1] could be either bound name or column name.
-        // If tokens[1] is an existing column name or tokens[2] parses as a number,
-        // treat it as column name and use default bound name.
         auto is_number = [](std::string_view s) {
             if (s.empty()) return false;
             try {
@@ -423,8 +424,22 @@ void MpsFormatParser<T>::parse_bounds(const std::vector<std::string_view>& token
                 return false;
             }
         };
+        auto is_col = [this](std::string_view s) {
+            return col_map_.find(std::string(s)) != col_map_.end();
+        };
 
-        if (col_map_.find(std::string(tokens[1])) != col_map_.end() || is_number(tokens[2])) {
+        if (!needs_value) {
+            // Value-less types (FR/MI/PL/BV) have no value field, so the standard
+            // layout <type> <bound_name> <col_name> is the default reading.  Fall back
+            // to <type> <col_name> <value> only when tokens[2] cannot be a column name
+            // (unknown *and* numeric) while tokens[1] is a known column.
+            // BOUNDS follows COLUMNS, so col_map_ already holds every real column;
+            // is_number() alone must not decide, or numeric column names (e.g. DPKLO1,
+            // whose columns are named "1".."133") get mistaken for bound values.
+            cname = (!is_col(tokens[2]) && is_number(tokens[2]) && is_col(tokens[1]))
+                        ? tokens[1] : tokens[2];
+        } else if (is_col(tokens[1]) || is_number(tokens[2])) {
+            // <type> <col_name> <value>: the bound set name is omitted.
             cname = tokens[1];
             value_str = tokens[2];
         } else {
@@ -628,6 +643,12 @@ bool MpsFormatParser<T>::is_comment_or_blank(const std::string& line) {
     return true; // Blank line.
 }
 
+// The six fixed-column MPS fields, as {start offset, width} pairs (0-based).
+// Shared by split_fixed_by_section() and fixed_fields_would_truncate().
+static constexpr struct { int start, len; } kMpsFixedFields[6] = {
+    {1, 2}, {4, 8}, {14, 8}, {24, 12}, {39, 8}, {49, 12}
+};
+
 template <typename T>
 void MpsFormatParser<T>::split_fixed_by_section(std::string_view line, Section sec,
                                                  std::vector<std::string_view>& out) {
@@ -635,12 +656,12 @@ void MpsFormatParser<T>::split_fixed_by_section(std::string_view line, Section s
         if ((int)line.size() <= start) return {};
         return trim(line.substr(start, std::min(len, (int)line.size() - start)));
     };
-    std::string_view F1 = field(1, 2);
-    std::string_view F2 = field(4, 8);
-    std::string_view F3 = field(14, 8);
-    std::string_view F4 = field(24, 12);
-    std::string_view F5 = field(39, 8);
-    std::string_view F6 = field(49, 12);
+    std::string_view F1 = field(kMpsFixedFields[0].start, kMpsFixedFields[0].len);
+    std::string_view F2 = field(kMpsFixedFields[1].start, kMpsFixedFields[1].len);
+    std::string_view F3 = field(kMpsFixedFields[2].start, kMpsFixedFields[2].len);
+    std::string_view F4 = field(kMpsFixedFields[3].start, kMpsFixedFields[3].len);
+    std::string_view F5 = field(kMpsFixedFields[4].start, kMpsFixedFields[4].len);
+    std::string_view F6 = field(kMpsFixedFields[5].start, kMpsFixedFields[5].len);
 
     out.clear();
     auto push = [&](std::string_view s) {
@@ -765,10 +786,41 @@ void MpsFormatParser<T>::split_free_by_section(const std::vector<std::string_vie
     }
 }
 
+// True if reading `line` by fixed columns would chop a token in half: some token
+// begins inside one of the six fixed fields but runs past that field's end.
+//
+// Such a line cannot be expressed in the fixed layout at all, so the fixed reading
+// is guaranteed wrong -- and wrong silently, since a truncated number usually still
+// parses.  Values written at full double precision are the common case:
+// "1.1305249478260869e+01" does not fit the 12-column value field and would be read
+// as "1.1305249478", losing the exponent and with it a factor of ten.
+//
+// A name with embedded spaces -- the one thing fixed format buys you -- splits into
+// tokens that each sit wholly inside their field, so this stays false for the files
+// that genuinely need fixed-column parsing.
+template <typename T>
+bool MpsFormatParser<T>::fixed_fields_would_truncate(std::string_view line,
+                                                      const std::vector<std::string_view>& toks) {
+    for (std::string_view tok : toks) {
+        if (tok.empty()) continue;
+        // ws_tokens_ are views into `line`; ignore anything that is not (defensive).
+        if (tok.data() < line.data() || tok.data() + tok.size() > line.data() + line.size()) continue;
+        const int start = static_cast<int>(tok.data() - line.data());
+        const int end   = start + static_cast<int>(tok.size());
+        for (const auto& f : kMpsFixedFields)
+            if (start >= f.start && start < f.start + f.len && end > f.start + f.len)
+                return true;
+    }
+    return false;
+}
+
 template <typename T>
 void MpsFormatParser<T>::tokenize_line(const std::string& line, Section sec) {
-    // Format is decided once per file by decide_format_from().
-    if (format_ == Format::FREE) {
+    // Format is decided once per file by decide_format_from(), but a single line whose
+    // tokens overflow the fixed fields is read free regardless: the fixed reading of
+    // such a line would silently truncate. Files mixing the two are rare but legal,
+    // and this keeps the override local instead of reinterpreting the whole file.
+    if (format_ == Format::FREE || fixed_fields_would_truncate(line, ws_tokens_)) {
         split_free_by_section(ws_tokens_, sec, tokens_); // reuse this line's whitespace split
         return;
     }

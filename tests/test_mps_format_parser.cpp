@@ -492,6 +492,77 @@ TEST(MpsFormatParserParse, SecondBoundsSetWithDifferentNameStillApplies) {
   EXPECT_NEAR(model.col_upper(0), 9.0, kTight);    // from BND2, still applied
 }
 
+// A value-less bound (FR/MI/PL/BV) on a file whose columns are named with digits
+// -- as in DPKLO1.SIF, whose 133 columns are named "1".."133" and whose bound set
+// is named "0".  The three tokens "FR 0 1" must read as <type> <bound_name> <col>;
+// mistaking the numeric column name for a bound value would leave every real
+// column at its default [0, inf) and invent a spurious free column, which turned
+// the whole QP infeasible.
+TEST(MpsFormatParserParse, ValuelessBoundOnNumericallyNamedColumnIsNotMisreadAsAValue) {
+  std::string content;
+  content += "ROWS\n";
+  content += MpsLine({{2, "N"}, {5, "78"}}) + "\n";
+  content += "COLUMNS\n";
+  content += MpsLine({{5, "1"}, {15, "78"}, {25, "1.0"}}) + "\n";
+  content += MpsLine({{5, "2"}, {15, "78"}, {25, "1.0"}}) + "\n";
+  content += "BOUNDS\n";
+  content += MpsLine({{2, "FR"}, {5, "0"}, {15, "1"}}) + "\n";
+  content += MpsLine({{2, "MI"}, {5, "0"}, {15, "2"}}) + "\n";
+  content += "ENDATA\n";
+
+  MpsFormatParser<double> parser;
+  auto model = parser.parse(WriteTempMps(content));
+  const double inf = std::numeric_limits<double>::infinity();
+
+  ASSERT_EQ(model.num_cols, 2);  // no spurious column named "0"
+  EXPECT_EQ(model.col_lower(0), -inf);  // column "1": FR
+  EXPECT_EQ(model.col_upper(0), inf);
+  EXPECT_EQ(model.col_lower(1), -inf);  // column "2": MI
+  EXPECT_EQ(model.col_upper(1), inf);
+}
+
+// The bound set name may be omitted, leaving a value-less type with a trailing
+// (ignored) value.  Only then may the middle token be the column name.
+TEST(MpsFormatParserParse, ValuelessBoundWithOmittedBoundNameAndTrailingValueUsesMiddleToken) {
+  std::string content;
+  content += "ROWS\n";
+  content += FreeLine({"N", "COST"}) + "\n";
+  content += "COLUMNS\n";
+  content += FreeLine({"X1", "COST", "1.0"}) + "\n";
+  content += "BOUNDS\n";
+  content += FreeLine({"MI", "X1", "-1.0e30"}) + "\n";
+  content += "ENDATA\n";
+
+  MpsFormatParser<double> parser;
+  auto model = parser.parse(WriteTempMps(content));
+  const double inf = std::numeric_limits<double>::infinity();
+
+  ASSERT_EQ(model.num_cols, 1);  // no spurious column named "-1.0e30"
+  EXPECT_EQ(model.col_lower(0), -inf);
+  EXPECT_EQ(model.col_upper(0), inf);
+}
+
+// A column that appears only in BOUNDS (an all-zero column) is still created
+// from the third token rather than being confused with the bound set name.
+TEST(MpsFormatParserParse, ValuelessBoundCreatesColumnSeenOnlyInBoundsSection) {
+  std::string content;
+  content += "ROWS\n";
+  content += FreeLine({"N", "COST"}) + "\n";
+  content += "COLUMNS\n";
+  content += FreeLine({"X1", "COST", "1.0"}) + "\n";
+  content += "BOUNDS\n";
+  content += FreeLine({"FR", "BND", "X2"}) + "\n";
+  content += "ENDATA\n";
+
+  MpsFormatParser<double> parser;
+  auto model = parser.parse(WriteTempMps(content));
+  const double inf = std::numeric_limits<double>::infinity();
+
+  ASSERT_EQ(model.num_cols, 2);  // X1 and X2, not a column named "BND"
+  EXPECT_EQ(model.col_lower(1), -inf);
+  EXPECT_EQ(model.col_upper(1), inf);
+}
+
 TEST(MpsFormatParserParse, UnknownBoundTypeThrows) {
   std::string content;
   content += "ROWS\n";
@@ -504,6 +575,76 @@ TEST(MpsFormatParserParse, UnknownBoundTypeThrows) {
 
   MpsFormatParser<double> parser;
   EXPECT_THROW(parser.parse(WriteTempMps(content)), std::runtime_error);
+}
+
+// ===================== parse(): fixed-field overflow =====================
+
+// A file that looks fixed-format from its first line (" N  OBJ" carries no numeric
+// field, so both readings agree) but whose values are written at full double
+// precision.  "1.1305249478260869e+01" overruns the 12-column value field and would
+// be read as "1.1305249478" -- losing the exponent, and with it a factor of ten.
+// Every value must survive intact, and the truncation must not silently produce a
+// plausible-but-wrong number.
+TEST(MpsFormatParserParse, FullPrecisionValuesOverflowingTheFixedValueFieldAreNotTruncated) {
+  std::string content;
+  content += "ROWS\n";
+  content += MpsLine({{2, "N"}, {5, "OBJ"}}) + "\n";
+  content += MpsLine({{2, "L"}, {5, "C1"}}) + "\n";
+  content += "COLUMNS\n";
+  content += MpsLine({{5, "X1"}, {15, "OBJ"}, {25, "7.6099999999999994e+00"}}) + "\n";
+  content += MpsLine({{5, "X1"}, {15, "C1"}, {25, "1.0"}}) + "\n";
+  content += "RHS\n";
+  content += MpsLine({{5, "RHS"}, {15, "C1"}, {25, "3.5519999999999996e-02"}}) + "\n";
+  content += "BOUNDS\n";
+  content += MpsLine({{2, "LO"}, {5, "BND"}, {15, "X1"}, {25, "5.4412913913043628e+00"}}) + "\n";
+  content += MpsLine({{2, "UP"}, {5, "BND"}, {15, "X1"}, {25, "1.1305249478260869e+01"}}) + "\n";
+  content += "ENDATA\n";
+
+  MpsFormatParser<double> parser;
+  auto model = parser.parse(WriteTempMps(content));
+
+  EXPECT_NEAR(model.c(0), 7.6099999999999994e+00, kTight);
+  EXPECT_NEAR(model.row_upper(0), 3.5519999999999996e-02, kTight);
+  EXPECT_NEAR(model.col_lower(0), 5.4412913913043628e+00, kTight);
+  EXPECT_NEAR(model.col_upper(0), 1.1305249478260869e+01, kTight);  // not 1.1305249478
+}
+
+// The truncated upper bound (1.13) would fall below the untruncated lower bound
+// (5.44), so the pre-fix parser rejected the model outright rather than solving a
+// silently corrupted one.  Pins that this no longer throws.
+TEST(MpsFormatParserParse, OverflowingBoundPairNoLongerTriggersInconsistentBoundsError) {
+  std::string content;
+  content += "ROWS\n";
+  content += MpsLine({{2, "N"}, {5, "OBJ"}}) + "\n";
+  content += "COLUMNS\n";
+  content += MpsLine({{5, "X1"}, {15, "OBJ"}, {25, "1.0"}}) + "\n";
+  content += "BOUNDS\n";
+  content += MpsLine({{2, "LO"}, {5, "BND"}, {15, "X1"}, {25, "5.4412913913043628e+00"}}) + "\n";
+  content += MpsLine({{2, "UP"}, {5, "BND"}, {15, "X1"}, {25, "1.1305249478260869e+01"}}) + "\n";
+  content += "ENDATA\n";
+
+  MpsFormatParser<double> parser;
+  EXPECT_NO_THROW(parser.parse(WriteTempMps(content)));
+}
+
+// The overflow override is per-line: short values on the same file still take the
+// fixed reading, so a file mixing both widths parses correctly throughout.
+TEST(MpsFormatParserParse, ShortAndOverflowingValuesCoexistInOneFixedFormatFile) {
+  std::string content;
+  content += "ROWS\n";
+  content += MpsLine({{2, "N"}, {5, "OBJ"}}) + "\n";
+  content += "COLUMNS\n";
+  content += MpsLine({{5, "X1"}, {15, "OBJ"}, {25, "40"}}) + "\n";
+  content += MpsLine({{5, "X2"}, {15, "OBJ"}, {25, "5.2533480000000001e+01"}}) + "\n";
+  content += MpsLine({{5, "X3"}, {15, "OBJ"}, {25, "2.6"}}) + "\n";
+  content += "ENDATA\n";
+
+  MpsFormatParser<double> parser;
+  auto model = parser.parse(WriteTempMps(content));
+  ASSERT_EQ(model.num_cols, 3);
+  EXPECT_NEAR(model.c(0), 40.0, kTight);
+  EXPECT_NEAR(model.c(1), 5.2533480000000001e+01, kTight);
+  EXPECT_NEAR(model.c(2), 2.6, kTight);
 }
 
 // ===================== parse(): QUADOBJ / lower-triangular storage =====================

@@ -67,6 +67,8 @@ private:
     static void split_fixed_by_section(std::string_view line, Section sec,
                                         std::vector<std::string_view>& out);
     void tokenize_line(const std::string& line, Section sec);
+    static bool fixed_fields_would_truncate(std::string_view line,
+                                             const std::vector<std::string_view>& toks);
     static std::string_view trim(std::string_view s);
 
     bool set_section(const std::vector<std::string_view>& tokens);

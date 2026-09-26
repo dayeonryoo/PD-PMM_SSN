@@ -69,6 +69,7 @@ from benchmark_common import (
     run_qpalm,
     run_osqp,
     _run_isolated,
+    INF_TOL_FACTOR,
     QPALM_SOLVED,
     OSQP_SOLVED,
     _write_csv,
@@ -237,24 +238,24 @@ def _worker_ssn_mm(sif_path, tol, time_limit, max_iter, conn):
     conn.close()
 
 
-def _worker_qpalm_mm(sif_path, tol, time_limit, conn):
+def _worker_qpalm_mm(sif_path, tol, time_limit, eps_inf, conn):
     result = {}
     try:
         pd_data = ksp_qp_bind.parse_sif(sif_path)
         qpalm_data = kspqp_to_qpalm(pd_data)
-        result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
+        result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0), eps_inf)
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)
     conn.close()
 
 
-def _worker_osqp_mm(sif_path, tol, time_limit, conn):
+def _worker_osqp_mm(sif_path, tol, time_limit, eps_inf, conn):
     result = {}
     try:
         pd_data = ksp_qp_bind.parse_sif(sif_path)
         qpalm_data = kspqp_to_qpalm(pd_data)
-        result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
+        result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0), eps_inf)
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)
@@ -290,6 +291,18 @@ def main() -> None:
         "--cooldown", type=float, default=0.0,
         help="Seconds to sleep between problems to prevent CPU throttling (default: 0)",
     )
+    cert = parser.add_mutually_exclusive_group()
+    cert.add_argument(
+        "--inf-tol-factor", type=float, default=INF_TOL_FACTOR, dest="inf_tol_factor",
+        help=f"QPALM/OSQP eps_prim_inf = eps_dual_inf = FACTOR * tol "
+             f"(default: {INF_TOL_FACTOR:g}, matching KSP-QP's eps_pinf = 1e-3 * tol, "
+             f"so all three solvers test their certificates at the same ratio).",
+    )
+    cert.add_argument(
+        "--library-default-cert-tol", action="store_true", dest="library_cert_tol",
+        help="Leave QPALM/OSQP at their shipped certificate tolerances "
+             "(QPALM 1e-5, OSQP 1e-4) instead of matching KSP-QP.",
+    )
     mp.set_start_method("spawn", force=True)
     args = parser.parse_args()
     solvers = set(args.solver)
@@ -303,6 +316,11 @@ def main() -> None:
     time_limit = args.time_limit
     cooldown   = args.cooldown
     max_iter   = 10_000_000_000   # effectively infinite for KSP-QP
+    eps_inf    = None if args.library_cert_tol else args.inf_tol_factor * tol
+
+    print(f"tol = {tol:g}, time limit = {time_limit:g} s, QPALM/OSQP certificate tolerance = "
+          + ("library defaults (QPALM 1e-5, OSQP 1e-4)" if eps_inf is None
+             else f"{eps_inf:g} ({args.inf_tol_factor:g} * tol, matching KSP-QP)"))
 
     prefix = f"{args.out}_" if args.out else ""
     csv_path = result_dir / f"{prefix}comparison_mm.csv"
@@ -364,7 +382,7 @@ def main() -> None:
 
         # ---- QPALM --------------------------------------------------
         if "qpalm" in solvers:
-            qpalm_out = _run_isolated(_worker_qpalm_mm, (sif_path, tol, time_limit))
+            qpalm_out = _run_isolated(_worker_qpalm_mm, (sif_path, tol, time_limit, eps_inf))
             if "error" in qpalm_out:
                 print(f"  QPALM   : ERROR — {qpalm_out['error']}")
                 row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf,
@@ -389,7 +407,7 @@ def main() -> None:
 
         # ---- OSQP ---------------------------------------------------
         if "osqp" in solvers:
-            osqp_out = _run_isolated(_worker_osqp_mm, (sif_path, tol, time_limit))
+            osqp_out = _run_isolated(_worker_osqp_mm, (sif_path, tol, time_limit, eps_inf))
             if "error" in osqp_out:
                 print(f"  OSQP    : ERROR — {osqp_out['error']}")
                 row.update(osqp_status=-99, osqp_solved=0, osqp_time=np.inf, osqp_iter=np.inf,

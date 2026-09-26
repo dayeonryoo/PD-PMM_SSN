@@ -1,11 +1,11 @@
 """
 Shared helpers for benchmark_*.py scripts (benchmark_mm.py, benchmark_netlib.py,
-benchmark_l1l2pde.py, benchmark_l2pde.py):
+benchmark_infeas.py, benchmark_l2pde.py):
 
   - QPALM / OSQP imports (with install hints) and status constants
   - KSPQPdata -> QPALM/OSQP conversion and solver wrappers
   - crash-tolerant subprocess isolation
-  - the per-problem three-solver runner shared by the PDE benchmarks
+  - the per-problem three-solver runner used by the PDE benchmark
   - CSV read/write helpers
   - Dolan-Moré performance-profile computation and plotting
 """
@@ -37,6 +37,18 @@ osqp  = _import_or_exit("osqp",  "Cannot find osqp. Install it with: pip install
 QPALM_SOLVED = qpalm.Info.SOLVED   # == 1
 OSQP_SOLVED  = 1                   # osqp.constant("OSQP_SOLVED")
 
+# Infeasibility certificate tolerance as a multiple of the requested primal-dual
+# tolerance. Mirrors KSP-QP's eps_pinf = eps_dinf = 1e-3 * tol (include/ksp_qp.hpp),
+# so all three solvers test their Farkas certificates at the same ratio.
+#
+# QPALM and OSQP instead ship fixed constants (eps_prim_inf = 1e-5 and 1e-4) that are
+# decoupled from eps_abs/eps_rel. At their own defaults that is coherent -- the
+# certificate test is 10x tighter than the optimality test -- but a benchmark that
+# overrides eps_abs/eps_rel to a smaller tol and leaves the certificate alone inverts
+# the relationship, leaving their infeasibility tests looser than the accuracy asked
+# for. Passing eps_inf to run_qpalm/run_osqp restores the intended ratio.
+INF_TOL_FACTOR = 1e-3
+
 
 # ---------------------------------------------------------------------------
 # Convert KSPQPdata dict (from ksp_qp_bind) to QPALM/OSQP inputs.
@@ -44,7 +56,9 @@ OSQP_SOLVED  = 1                   # osqp.constant("OSQP_SOLVED")
 # KSPQPdata form:  min ½ xᵀQx + cᵀx   s.t.  Ax = b,  lw ≤ Bx ≤ uw,  lx ≤ x ≤ ux
 # QPALM/OSQP form: min ½ xᵀQx + qᵀx   s.t.  bmin ≤ Cx ≤ bmax
 #
-# Stacking:  C = [A; B; Iₙ],  bmin/bmax accordingly.
+# Stacking:  C = [A; B; Iₙ],  bmin/bmax accordingly. The identity block covers every
+# variable, free ones included: QPALM/OSQP conventionally receive a full constraint
+# matrix.
 # ---------------------------------------------------------------------------
 
 def _make_upper_triangular(Q):
@@ -100,8 +114,17 @@ def kspqp_to_qpalm(pd: dict):
 # Solver wrappers
 # ---------------------------------------------------------------------------
 
-def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
-    """Run QPALM on a problem already converted via kspqp_to_qpalm."""
+def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0,
+              eps_inf: float | None = None) -> dict:
+    """Run QPALM on a problem already converted via kspqp_to_qpalm.
+
+    eps_inf sets the primal/dual infeasibility *certificate* tolerance. Left as
+    None, QPALM keeps its shipped default (eps_prim_inf = eps_dual_inf = 1e-5),
+    which is decoupled from eps_abs/eps_rel: at the library's own defaults
+    (eps_abs = 1e-4) the certificate is 10x tighter than the optimality test,
+    but once eps_abs is overridden to a smaller tol the relationship inverts.
+    Pass a value to restore a fixed certificate-to-optimality ratio.
+    """
     Q_upper, q, C, bmin, bmax, n, m_total = qpalm_data
 
     data      = qpalm.Data(n, m_total)
@@ -118,6 +141,9 @@ def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float
     settings.time_limit   = time_limit
     settings.verbose      = 0               # silent
     settings.scaling      = 10              # default Ruiz scaling passes
+    if eps_inf is not None:
+        settings.eps_prim_inf = eps_inf
+        settings.eps_dual_inf = eps_inf
 
     solver = qpalm.Solver(data, settings)   # setup: Ruiz scaling + factorisation
     solver.solve()
@@ -135,9 +161,19 @@ def run_qpalm(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float
     }
 
 
-def run_osqp(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0) -> dict:
-    """Run OSQP on a problem already converted via kspqp_to_qpalm."""
+def run_osqp(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float = 0.0,
+             eps_inf: float | None = None) -> dict:
+    """Run OSQP on a problem already converted via kspqp_to_qpalm.
+
+    eps_inf sets the primal/dual infeasibility *certificate* tolerance. Left as
+    None, OSQP keeps its shipped default (eps_prim_inf = eps_dual_inf = 1e-4),
+    decoupled from eps_abs/eps_rel in the same way QPALM's is -- see run_qpalm.
+    """
     Q_upper, q, C, bmin, bmax, *_ = qpalm_data
+
+    inf_kwargs = {} if eps_inf is None else {
+        "eps_prim_inf": eps_inf, "eps_dual_inf": eps_inf,
+    }
 
     prob = osqp.OSQP()
     prob.setup(                       # setup: scaling + factorisation
@@ -148,6 +184,7 @@ def run_osqp(qpalm_data: tuple, tol: float, time_limit: float, obj_const: float 
         time_limit = time_limit,
         verbose    = False,
         scaling    = 10,
+        **inf_kwargs,
     )
     res = prob.solve()
 

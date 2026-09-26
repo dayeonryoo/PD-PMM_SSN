@@ -62,8 +62,9 @@ target_link_libraries(ksp_qp_netlib ksp_qp)
 add_executable(ksp_qp_maros_meszaros src/maros_meszaros.cpp)
 target_link_libraries(ksp_qp_maros_meszaros ksp_qp)
 
-add_executable(ksp_qp_pde src/pde.cpp)
-target_link_libraries(ksp_qp_pde ksp_qp)
+# The PDE-constrained QP generators live in python/pde_generator.py (with the
+# Q1 element kernels in python/fem_q1.py), so include/ holds solver code only.
+# Generate and solve those problems via python/benchmark_l2pde.py.
 
 # ----------------------
 # Tests

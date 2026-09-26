@@ -60,19 +60,22 @@ cmake --build . --config Release
 > ship a prebuilt release binary. In those cases, switch `-march=native` to a portable baseline
 > (e.g. `-march=x86-64-v2`) first.
 
-This produces three executables inside `build/`:
+This produces two executables inside `build/`:
 
 | Executable | Source | Description |
 |---|---|---|
 | `ksp_qp_netlib` | `src/netlib.cpp` | Runs the solver on Netlib LPs (`.mps`) |
 | `ksp_qp_maros_meszaros` | `src/maros_meszaros.cpp` | Runs the solver on Maros-Meszaros QPs (`.SIF`) |
-| `ksp_qp_pde` | `src/pde.cpp` | Runs the solver on a PDE-constrained QP built by `pde_generator.hpp` |
 
-`ksp_qp_netlib`, `ksp_qp_maros_meszaros`, and `ksp_qp_pde` each take `--name`, `--tol`,
+PDE-constrained QPs are generated in Python (`python/pde_generator.py`) rather than by a C++
+driver, so that `include/` holds solver code only — see
+[the PDE benchmark](#pde-constrained-qp-benchmarks-smooth-l2-regularized) below.
+
+`ksp_qp_netlib` and `ksp_qp_maros_meszaros` each take `--name`, `--tol`,
 `--max-iter`, and `--time-limit` flags. `--name` picks a single problem to solve, or `all` to
-sweep every problem the driver knows about (`ksp_qp_netlib` and `ksp_qp_maros_meszaros` also
+sweep every problem the driver knows about (both also
 take `--root` to point at a different data directory, and write a CSV when `--name all` is
-used). Run any of them with `--help` for the full flag list. Run them from the repo root so
+used). Run either of them with `--help` for the full flag list. Run them from the repo root so
 their default (relative) data paths resolve, or pass `--root`. Each driver still hardcodes its
 `PrintWhen`/`PrintWhat` settings and (beyond the flags above) some legacy alternates only
 reachable by editing `main()` — see
@@ -331,33 +334,40 @@ reference objectives, appending a row to `<root>/results/maros_meszaros_all.csv`
 For comparing against QPALM/OSQP rather than just checking against reference objectives, use
 the Python benchmark instead (see below) — that's what produces performance profiles.
 
-### `ksp_qp_pde` — PDE-constrained QPs (`src/pde.cpp`)
+### PDE-constrained QPs — generated in Python
 
-```bash
-./build/ksp_qp_pde [--name PROBLEM|all] [--nc N] [--tol T] [--max-iter N] [--time-limit S]
+There is no C++ driver for these: the generators live in `python/pde_generator.py` (Q1 FEM and
+FD assembly, built on the element kernels in `python/fem_q1.py`), so `include/` stays
+solver-only. They build the L2-regularized PDE-constrained control problems of
+(Pearson & Gondzio, 2017):
+
+| Choice | Generator | Problem |
+|---|---|---|
+| `poisson` | `make_poisson_l2_control` | 2D Poisson control, control-constrained |
+| `poisson_state` | `make_poisson_l2_state_control` | 2D Poisson control, state-constrained |
+| `convdiff` | `make_convdiff_l2_control` | 2D convection-diffusion control |
+
+Each returns a `KSPQPdata`; `.to_dict()` gives the CSC/numpy dict that
+`ksp_qp_bind.solve_from_data()` and `benchmark_common.kspqp_to_qpalm()` consume.
+`generate_pde_l2_qp(choice, nc, beta, ...)` wraps all three and returns that dict directly:
+
+```python
+import pde_generator, ksp_qp_bind          # from the python/ directory
+pd = pde_generator.generate_pde_l2_qp("convdiff", nc=6, beta=1e-2,
+                                      y_lower=0.0, y_upper=0.2,
+                                      u_lower=-0.75, u_upper=0.75, eps=0.01)
+res = ksp_qp_bind.solve_from_data(pd, 1e-6, 10**9, 600.0)
 ```
 
-Builds and solves one named problem via `include/pde_generator.hpp`'s generators, printing the
-solution summary. `--name` is one of:
-
-| Name | Generator |
-|---|---|
-| `l1l2_poisson` | `pdegen::make_poisson_l1l2_control` |
-| `l1l2_convdiff` | `pdegen::make_convdiff_l1l2_control` |
-| `l2_poisson_control` | `pdegen::make_poisson_l2_control` |
-| `l2_poisson_state` | `pdegen::make_poisson_l2_state_control` |
-| `l2_convdiff` (default) | `pdegen::make_convdiff_l2_control` |
-
-`--name all` solves all five in sequence. `--nc` sets the grid exponent (grid size ~ `2^nc`)
-passed to whichever generator(s) run (default: 6). The other generator arguments (regularization
-weights, state/control bounds) are fixed per problem in `build_problem()` in `pde.cpp` — editing
-those still requires a rebuild.
+`nc` is the grid exponent (grid size `2^nc + 1` per direction). `lumped_mass` swaps the
+consistent Q1 mass matrix for the lumped one, and `discretization` selects `"fem"` (default)
+or `"fd"` (5-point stencil with first-order upwind convection; always lumped).
 
 ---
 
 ## Running the benchmarks
 
-All four Python benchmark scripts compare **KSP-QP vs QPALM vs OSQP** and live in `python/`.
+The Python benchmark scripts compare **KSP-QP vs QPALM vs OSQP** and live in `python/`.
 Build the Python binding first (see "Building" above), then `pip install qpalm osqp numpy scipy
 matplotlib pandas`.
 
@@ -391,27 +401,6 @@ Runs the full Netlib LP test set. Writes `results/comparison_netlib.csv` plus Do
 performance profiles (`results/performance_profile_netlib*.pdf/.png`). Same flags as
 `benchmark_mm.py`.
 
-### PDE-constrained QP benchmarks (L1/L2-regularized)
-
-```bash
-cd python
-python3 benchmark_l1l2pde.py
-```
-
-Produces four sweep tables (`poisson_vary_n`, `poisson_vary_a2`, `convdiff_vary_n`,
-`convdiff_vary_a2`), written to `results/l1l2_<table>.csv`.
-
-```
---root DIR             override project root (default: parent of script)
---tol 1e-6              solver tolerance
---time-limit 600        per-problem time limit in seconds (10 min default)
---table {poisson_vary_n,poisson_vary_a2,convdiff_vary_n,convdiff_vary_a2} [...]   default: all four
---nc N [N ...]          grid exponents to sweep for vary-n tables (default: 6 7 8 9 10)
---solver {ksp-qp,qpalm,osqp} [...]   default: all three
---cooldown 0            seconds to sleep between problems
---out PREFIX            output file prefix
-```
-
 ### PDE-constrained QP benchmarks (smooth, L2-regularized)
 
 ```bash
@@ -420,9 +409,21 @@ python3 benchmark_l2pde.py
 ```
 
 Produces three tables — `poisson_control`, `poisson_state`, `convdiff_both` — written to
-`results/l2_<table>.csv`. Same `--root`, `--tol`, `--time-limit`, `--table`, `--nc`,
-`--solver`, `--cooldown`, `--out` flags as `benchmark_l1l2pde.py` (defaults: `tol=1e-9`,
-`nc = 7 8 9 10`).
+`results/l2_<table>.csv`. The problems come from `pde_generator.py`
+(Pearson & Gondzio, 2017); the sweep parameters follow their tables.
+
+```
+--root DIR              override project root (default: parent of script)
+--tol 1e-6              solver tolerance
+--time-limit 600        per-problem time limit in seconds (10 min default)
+--table {poisson_control,poisson_state,convdiff_both} [...]   default: all three
+--nc N [N ...]          grid exponents to sweep (default: 7 8 9 10)
+--solver {ksp-qp,qpalm,osqp} [...]   default: all three
+--cooldown 0            seconds to sleep between problems
+--lumped-mass {0,1}     0 = consistent mass matrix (default), 1 = lumped
+--discretization {fem,fd}   spatial discretization (default: fem)
+--out PREFIX            output file prefix
+```
 
 ---
 
@@ -508,21 +509,21 @@ KSP-QP/
 │   ├── ksp_qp_types.hpp       # ParsedModel/KSPQPdata data structures
 │   ├── schur_operator.hpp    # Schur complement linear operator
 │   ├── schur_preconditioner.hpp
-│   ├── pde_generator.hpp     # Builds PDE-constrained QPs (Q1 FEM / FD) for pde.cpp
-│   ├── fem_q1.hpp            # Q1 finite-element reference-element assembly
 │   ├── printing.hpp         # PrintWhen/PrintWhat runtime printing
 │   └── record_result.hpp
 ├── src/
 │   ├── netlib.cpp           # Netlib LP benchmark runner
-│   ├── maros_meszaros.cpp   # Maros-Meszaros QP benchmark runner
-│   └── pde.cpp              # PDE-constrained problem runner
+│   └── maros_meszaros.cpp   # Maros-Meszaros QP benchmark runner
 ├── python/
 │   ├── ksp_qp_bind.cpp          # pybind11 bindings
+│   ├── fem_q1.py                 # Q1 finite-element reference-element kernels
+│   ├── pde_generator.py          # Builds PDE-constrained QPs (Q1 FEM / FD)
 │   ├── benchmark_common.py       # shared QPALM/OSQP conversion + runner helpers
 │   ├── benchmark_mm.py           # Maros-Meszaros benchmark vs QPALM/OSQP
 │   ├── benchmark_netlib.py       # Netlib LP benchmark vs QPALM/OSQP
-│   ├── benchmark_l1l2pde.py      # L1/L2 PDE-constrained benchmark vs QPALM/OSQP
+│   ├── benchmark_infeas.py       # infeasible-instance benchmark vs QPALM/OSQP
 │   ├── benchmark_l2pde.py        # L2 PDE-constrained benchmark vs QPALM/OSQP
+│   ├── tests/                    # unittest suite for the Python generators
 │   └── CMakeLists.txt            # Python binding build config
 ├── data/
 │   ├── netlib/              # Netlib LP instances (.mps)

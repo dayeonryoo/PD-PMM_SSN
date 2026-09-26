@@ -1,11 +1,14 @@
 """
-Benchmark KSP-QP vs QPALM vs OSQP on the Netlib LP and Kennington LP test sets.
+Benchmark KSP-QP vs QPALM vs OSQP on the feasible Netlib LP test set.
 
-Outputs (<set> is "netlib", "kennington", or "netlib_kennington" — see --set)
+Problems are read from data/netlib-main/feasible/, which holds all 114 feasible
+Netlib instances with the Kennington family blended in.
+
+Outputs
 -------
-  results/comparison_<set>.csv                    - per-problem timing, iteration counts, and status
-  results/performance_profile_<set>.pdf/png       - Dolan-Moré performance profile (run time)
-  results/performance_profile_<set>_iters.pdf/png - Dolan-Moré performance profile (iterations)
+  results/comparison_netlib.csv                    - per-problem timing, iteration counts, and status
+  results/performance_profile_netlib.pdf/png       - Dolan-Moré performance profile (run time)
+  results/performance_profile_netlib_iters.pdf/png - Dolan-Moré performance profile (iterations)
 
 === HOW TO RUN FROM SCRATCH ===
 
@@ -33,7 +36,6 @@ Step 3 - Run the benchmark
 Settings: tol = 1e-6, time limit = 60 s, max iterations = infinity.
         --root:       to change the output directory (default: results/).
         --out:        to change the output file prefix (default: comparison_netlib).
-        --set:        to select which test sets to run among netlib, kennington (default: both).
         --solver:     to select which solvers to run among ksp-qp, qpalm, osqp (default: all three).
         --tol:        to change the solver tolerance (default: 1e-6).
         --time-limit: to change the solver time limit in seconds (default: 60).
@@ -70,6 +72,7 @@ from benchmark_common import (
     run_qpalm,
     run_osqp,
     _run_isolated,
+    INF_TOL_FACTOR,
     QPALM_SOLVED,
     OSQP_SOLVED,
     _write_csv,
@@ -80,140 +83,23 @@ from benchmark_common import (
 )
 
 # ---------------------------------------------------------------------------
-# Netlib LP problem list  (name → reference optimal objective)
-# ---------------------------------------------------------------------------
-LPS = {
-    "25FV47":    5.5018458883e+03,
-    "80BAU3B":   9.8723216072e+05,
-    "ADLITTLE":  2.2549496316e+05,
-    "AFIRO":    -4.6475314286e+02,
-    "AGG":      -3.5991767287e+07,
-    "AGG2":     -2.0239252356e+07,
-    "AGG3":      1.0312115935e+07,
-    "BANDM":    -1.5862801845e+02,
-    "BEACONFD":  3.3592485807e+04,
-    "BLEND":    -3.0812149846e+01,
-    "BNL1":      1.9776292856e+03,
-    "BNL2":      1.8112365404e+03,
-    "BOEING1":  -3.3521356751e+02,
-    "BOEING2":  -3.1501872802e+02,
-    "BORE3D":    1.3730803942e+03,
-    "BRANDY":    1.5185098965e+03,
-    "CAPRI":     2.6900129138e+03,
-    "CYCLE":    -5.2263930249e+00,
-    "CZPROB":    2.1851966989e+06,
-    "D2Q06C":    1.2278423615e+05,
-    "D6CUBE":    3.1549166667e+02,
-    "DEGEN2":   -1.4351780000e+03,
-    "DEGEN3":   -9.8729400000e+02,
-    "DFL001":    1.12664e+07,
-    "E226":     -1.8751929066e+01,
-    "ETAMACRO": -7.5571521774e+02,
-    "FFFFF800":  5.5567961165e+05,
-    "FINNIS":    1.7279096547e+05,
-    "FIT1D":    -9.1463780924e+03,
-    "FIT1P":     9.1463780924e+03,
-    "FIT2D":    -6.8464293294e+04,
-    "FIT2P":     6.8464293232e+04,
-    "FORPLAN":  -6.6421873953e+02,
-    "GANGES":   -1.0958636356e+05,
-    "GFRD-PNC":  6.9022359995e+06,
-    "GREENBEA": -7.2462405908e+07,
-    "GREENBEB": -4.3021476065e+06,
-    "GROW15":   -1.0687094129e+08,
-    "GROW22":   -1.6083433648e+08,
-    "GROW7":    -4.7787811815e+07,
-    "ISRAEL":   -8.9664482186e+05,
-    "KB2":      -1.7499001299e+03,
-    "LOTFI":    -2.5264706062e+01,
-    "MAROS":    -5.8063743701e+04,
-    "MAROS-R7":  1.4971851665e+06,
-    "MODSZK1":   3.2061972906e+02,
-    "NESM":      1.4076073035e+07,
-    "PEROLD":   -9.3807580773e+03,
-    "PILOT":    -5.5740430007e+02,
-    "PILOT.JA": -6.1131344111e+03,
-    "PILOT.WE": -2.7201027439e+06,
-    "PILOT4":   -2.5811392641e+03,
-    "PILOT87":   3.0171072827e+02,
-    "PILOTNOV": -4.4972761882e+03,
-    "QAP8":      2.0350000000e+02,
-    "QAP12":     5.2289435056e+02,
-    "QAP15":     1.0409940410e+03,
-    "RECIPE":   -2.6661600000e+02,
-    "SC105":    -5.2202061212e+01,
-    "SC205":    -5.2202061212e+01,
-    "SC50A":    -6.4575077059e+01,
-    "SC50B":    -7.0000000000e+01,
-    "SCAGR25":  -1.4753433061e+07,
-    "SCAGR7":   -2.3313892548e+06,
-    "SCFXM1":    1.8416759028e+04,
-    "SCFXM2":    3.6660261565e+04,
-    "SCFXM3":    5.4901254550e+04,
-    "SCORPION":  1.8781248227e+03,
-    "SCRS8":     9.0429998619e+02,
-    "SCSD1":     8.6666666743e+00,
-    "SCSD6":     5.0500000078e+01,
-    "SCSD8":     9.0499999993e+02,
-    "SCTAP1":    1.4122500000e+03,
-    "SCTAP2":    1.7248071429e+03,
-    "SCTAP3":    1.4240000000e+03,
-    "SEBA":      1.5711600000e+04,
-    "SHARE1B":  -7.6589318579e+04,
-    "SHARE2B":  -4.1573224074e+02,
-    "SHELL":     1.2088253460e+09,
-    "SHIP04L":   1.7933245380e+06,
-    "SHIP04S":   1.7987147004e+06,
-    "SHIP08L":   1.9090552114e+06,
-    "SHIP08S":   1.9200982105e+06,
-    "SHIP12L":   1.4701879193e+06,
-    "SHIP12S":   1.4892361344e+06,
-    "SIERRA":    1.5394362184e+07,
-    "STAIR":    -2.5126695119e+02,
-    "STANDATA":  1.2576995000e+03,
-    "STANDMPS":  1.4060175000e+03,
-    "STOCFOR1": -4.1131976219e+04,
-    "STOCFOR2": -3.9024408538e+04,
-    "STOCFOR3": -3.9976661576e+04,
-    "TRUSS":     4.5881584719e+05,
-    "TUFF":      2.9214776509e-01,
-    "VTP.BASE":  1.2983146246e+05,
-    "WOOD1P":    1.4429024116e+00,
-    "WOODW":     1.3044763331e+00,
-}
-
-# ---------------------------------------------------------------------------
-# Kennington LP problem list  (name → reference optimal objective)
+# Problem set.
 #
-# The large Netlib "kennington" family, distributed separately from the main
-# Netlib LP set and living in data/kennington/.  Reference objectives are the
-# published Kennington optima; they are documentation only — nothing in this
-# script reads them.
+# data/netlib-main/feasible/ holds all 114 feasible instances of the Netlib LP
+# collection, with the large "kennington" family (CRE-*, KEN-*, OSA-*, PDS-*)
+# blended in rather than kept in a separate directory. The problem list is taken
+# from the directory listing, so adding or removing an .mps file is all it takes
+# to change the set.
+#
+# Filenames are lowercase; problem names are the uppercased stems, which is the
+# spelling used in the result CSVs (e.g. vtp.base.mps -> VTP.BASE).
+#
+# Reference optimal objectives are NOT kept here: the dataset ships them in
+# data/netlib-main/feasible_gurobi_1e-8.csv (Gurobi 10 at 1e-8). Note that those
+# disagree with the long-standing published Netlib optima on a handful of
+# problems -- E226 and CRE-A among them -- so treat either source with care.
 # ---------------------------------------------------------------------------
-KENNINGTON = {
-    "CRE-A":   2.9889732e+07,
-    "CRE-B":   2.3129640e+07,
-    "CRE-C":   2.5275116e+07,
-    "CRE-D":   2.4454970e+07,
-    "KEN-07": -6.7952044e+08,
-    "KEN-11": -6.9723823e+09,
-    "KEN-13": -1.0257395e+10,
-    "KEN-18": -5.2217025e+10,
-    "OSA-07":  5.3572252e+05,
-    "OSA-14":  1.1064628e+06,
-    "OSA-30":  2.1421399e+06,
-    "OSA-60":  4.0440725e+06,
-    "PDS-02":  2.8857862e+10,
-    "PDS-06":  2.7761038e+10,
-    "PDS-10":  2.6727094e+10,
-    "PDS-20":  2.3821659e+10,
-}
-
-# Test set name → (problem dict, directory under data/, profile-plot label)
-TEST_SETS = {
-    "netlib":     (LPS,        "netlib",     "Netlib LPs"),
-    "kennington": (KENNINGTON, "kennington", "Kennington LPs"),
-}
+FEASIBLE_SUBDIR = "netlib-main/feasible"
 
 # ---------------------------------------------------------------------------
 # Subprocess worker functions (each spawned in a fresh process for clean RSS)
@@ -230,24 +116,24 @@ def _worker_ssn_netlib(mps_path, tol, time_limit, max_iter, conn):
     conn.close()
 
 
-def _worker_qpalm_netlib(mps_path, tol, time_limit, conn):
+def _worker_qpalm_netlib(mps_path, tol, time_limit, eps_inf, conn):
     result = {}
     try:
         pd_data = ksp_qp_bind.parse_sif(mps_path)
         qpalm_data = kspqp_to_qpalm(pd_data)
-        result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
+        result["res"] = run_qpalm(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0), eps_inf)
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)
     conn.close()
 
 
-def _worker_osqp_netlib(mps_path, tol, time_limit, conn):
+def _worker_osqp_netlib(mps_path, tol, time_limit, eps_inf, conn):
     result = {}
     try:
         pd_data = ksp_qp_bind.parse_sif(mps_path)
         qpalm_data = kspqp_to_qpalm(pd_data)
-        result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0))
+        result["res"] = run_osqp(qpalm_data, tol, time_limit, pd_data.get("obj_const", 0.0), eps_inf)
     except Exception as e:
         result["error"] = str(e)
     conn.send(result)
@@ -275,11 +161,6 @@ def main() -> None:
         "--out", default="", help="Prefix for output filenames (e.g. '0508' → '0508_comparison_netlib.csv')"
     )
     parser.add_argument(
-        "--set", nargs="+", dest="sets", default=["netlib", "kennington"],
-        choices=["netlib", "kennington"], metavar="SET",
-        help="Test sets to run (default: both). Choices: netlib kennington",
-    )
-    parser.add_argument(
         "--solver", nargs="+", default=["ksp-qp", "qpalm", "osqp"],
         choices=["ksp-qp", "qpalm", "osqp"], metavar="SOLVER",
         help="Solvers to run (default: all three). Choices: ksp-qp qpalm osqp",
@@ -287,6 +168,18 @@ def main() -> None:
     parser.add_argument(
         "--cooldown", type=float, default=0.0,
         help="Seconds to sleep between problems to prevent CPU throttling (default: 0)",
+    )
+    cert = parser.add_mutually_exclusive_group()
+    cert.add_argument(
+        "--inf-tol-factor", type=float, default=INF_TOL_FACTOR, dest="inf_tol_factor",
+        help=f"QPALM/OSQP eps_prim_inf = eps_dual_inf = FACTOR * tol "
+             f"(default: {INF_TOL_FACTOR:g}, matching KSP-QP's eps_pinf = 1e-3 * tol, "
+             f"so all three solvers test their certificates at the same ratio).",
+    )
+    cert.add_argument(
+        "--library-default-cert-tol", action="store_true", dest="library_cert_tol",
+        help="Leave QPALM/OSQP at their shipped certificate tolerances "
+             "(QPALM 1e-5, OSQP 1e-4) instead of matching KSP-QP.",
     )
     mp.set_start_method("spawn", force=True)
     args = parser.parse_args()
@@ -296,21 +189,27 @@ def main() -> None:
     result_dir = root / "results"
     result_dir.mkdir(exist_ok=True)
 
-    # Selected test sets, always in the canonical order of TEST_SETS.
-    set_names = [s for s in TEST_SETS if s in set(args.sets)]
-    # (name, path) for every problem across the selected sets, in list order.
-    problems: list[tuple[str, Path]] = []
-    for s in set_names:
-        lp_dict, subdir, _ = TEST_SETS[s]
-        data_dir = root / "data" / subdir
-        problems += [(name, data_dir / f"{name}.mps") for name in lp_dict]
-    suffix = "_".join(set_names)
-    label  = " + ".join(TEST_SETS[s][2] for s in set_names)
+    # (name, path) for every .mps in the feasible set, alphabetical by filename.
+    data_dir = root / "data" / FEASIBLE_SUBDIR
+    if not data_dir.is_dir():
+        sys.exit(f"Problem directory not found: {data_dir}")
+    problems: list[tuple[str, Path]] = [
+        (path.stem.upper(), path) for path in sorted(data_dir.glob("*.mps"))
+    ]
+    if not problems:
+        sys.exit(f"No .mps files found in {data_dir}")
+    suffix = "netlib"
+    label  = "Netlib LPs"
 
     tol        = args.tol
     time_limit = args.time_limit
     cooldown   = args.cooldown
     max_iter   = 10_000_000_000   # effectively infinite for KSP-QP
+    eps_inf    = None if args.library_cert_tol else args.inf_tol_factor * tol
+
+    print(f"tol = {tol:g}, time limit = {time_limit:g} s, QPALM/OSQP certificate tolerance = "
+          + ("library defaults (QPALM 1e-5, OSQP 1e-4)" if eps_inf is None
+             else f"{eps_inf:g} ({args.inf_tol_factor:g} * tol, matching KSP-QP)"))
 
     prefix = f"{args.out}_" if args.out else ""
     csv_path = result_dir / f"{prefix}comparison_{suffix}.csv"
@@ -372,7 +271,7 @@ def main() -> None:
 
         # ---- QPALM --------------------------------------------------
         if "qpalm" in solvers:
-            qpalm_out = _run_isolated(_worker_qpalm_netlib, (mps_path, tol, time_limit))
+            qpalm_out = _run_isolated(_worker_qpalm_netlib, (mps_path, tol, time_limit, eps_inf))
             if "error" in qpalm_out:
                 print(f"  QPALM   : ERROR — {qpalm_out['error']}")
                 row.update(qpalm_status=-99, qpalm_solved=0, qpalm_time=np.inf,
@@ -397,7 +296,7 @@ def main() -> None:
 
         # ---- OSQP ---------------------------------------------------
         if "osqp" in solvers:
-            osqp_out = _run_isolated(_worker_osqp_netlib, (mps_path, tol, time_limit))
+            osqp_out = _run_isolated(_worker_osqp_netlib, (mps_path, tol, time_limit, eps_inf))
             if "error" in osqp_out:
                 print(f"  OSQP    : ERROR — {osqp_out['error']}")
                 row.update(osqp_status=-99, osqp_solved=0, osqp_time=np.inf, osqp_iter=np.inf,
