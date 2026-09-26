@@ -1,0 +1,262 @@
+% =====================================================================================
+% Revised Section "Implementation details" of the KSP-QP paper (main_upgrade.tex).
+%
+% Drop-in replacement for the whole former section, from
+%   \section{Implementation details} \label{sec: implementation details}
+% up to (not including)
+%   \section{Numerical results} \label{sec: numerical results}.
+%
+% Labels used elsewhere in the paper are kept: sec: implementation details, tab:params,
+% subsec: algorithm settings (now the PMM subsection, referenced from Section 2.2).
+% All statements were checked against the C++ implementation (include/ksp_qp.*,
+% include/ssn.*, include/schur_preconditioner.hpp, include/mps_format_parser.tpp);
+% see docs/implementation_details_notes.md for the list of corrections.
+% =====================================================================================
+
+\section{Implementation details} \label{sec: implementation details}
+
+This section describes how Algorithms~\ref{alg: PD_PMM}--\ref{alg: SSN} are implemented in KSP-QP. Section~\ref{subsec: implementation overview} gives an overview of the solver. Sections~\ref{subsec: algorithm settings}--\ref{subsec: PCG implementation} then describe its three nested loops, from the outermost to the innermost: the PMM loop, the SSN loop, and the PCG loop that solves the SSN linear systems. The last three subsections describe components that are used within these loops: the factorization and updating of the preconditioner (Section~\ref{subsec: preconditioner factorizations}), Ruiz scaling and unscaling (Section~\ref{subsec: scaling implementation}), and infeasibility detection (Section~\ref{subsec: infeasibility implementation}). Table~\ref{tab:params} lists all parameters of the solver together with their default values.
+
+\begin{table}[tbp]
+\centering
+\small
+\caption{Parameters of KSP-QP and their default values. Parameters marked with $^\dagger$ can be set by the user; all others are fixed in the implementation. The last column gives the subsection in which each parameter is used, and $\varepsilon_{\mathrm{mach}}$ denotes the machine precision.}
+\label{tab:params}
+\begin{tabular}{@{}p{0.66\textwidth}@{\hspace{1em}}l@{\hspace{1em}}c@{}}
+\toprule
+Parameter & Default & Section \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Termination}} \\
+\quad Tolerance \texttt{tol} of the stopping criterion \eqref{eqn: PMM stopping criterion}$^\dagger$ & $10^{-6}$ & \ref{subsec: algorithm settings} \\
+\quad Maximum number of PMM iterations $k_{\max}$$^\dagger$ & $3000$ & \ref{subsec: algorithm settings} \\
+\quad Time limit for the solve phase$^\dagger$ & $600$\,s & \ref{subsec: algorithm settings} \\
+\quad Maximum total number of SSN iterations $j_{\max}^{\mathrm{tot}}$ & $120\,000$ & \ref{subsec: algorithm settings} \\
+\addlinespace
+\multicolumn{3}{@{}l}{\emph{PMM outer loop}} \\
+\quad Initial penalty parameter $\mu_0$ & $10^{2}$ & \ref{subsec: algorithm settings} \\
+\quad Initial proximal parameter $\rho_0$ & $10^{7}$ & \ref{subsec: algorithm settings} \\
+\quad Bounds $[\mu_{\min},\mu_{\max}]$ and $[\rho_{\min},\rho_{\max}]$ & $[1,\,10^{7}]$ & \ref{subsec: algorithm settings} \\
+\quad Initial SSN tolerance $\varepsilon_0$ & $10^{-2}$ & \ref{subsec: algorithm settings} \\
+\quad Bounds $[\varepsilon_{\min},\varepsilon_{\max}]$ on the SSN tolerance $\varepsilon_k$ & $[\texttt{tol},\,10^{-2}]$ & \ref{subsec: algorithm settings} \\
+\quad Dual relaxation parameter $\alpha$ in \eqref{eqn: PD proximal augmented Lagrangian function} & $0.95$ & \ref{subsec: algorithm settings} \\
+\quad Factors for $(\mu_k,\rho_k)$: success\,/\,linesearch failure\,/\,slow progress & $2$\,/\,$0.5$\,/\,$1.1$ & \ref{subsec: algorithm settings} \\
+\quad Factors for $\varepsilon_k$: success\,/\,linesearch failure & $0.1$\,/\,$1.1$ & \ref{subsec: algorithm settings} \\
+\quad Slow-progress threshold ($r^{\max}_{k+1} > 0.9\,r^{\max}_k$) & $0.9$ & \ref{subsec: algorithm settings} \\
+\quad Factor in the multiplier-update safeguard \eqref{eqn: multiplier update safeguard} & $100$ & \ref{subsec: algorithm settings} \\
+\addlinespace
+\multicolumn{3}{@{}l}{\emph{SSN inner loop}} \\
+\quad Maximum number of SSN iterations per PMM iteration $j_{\max}$ & $50$ & \ref{subsec: SSN implementation} \\
+\quad Relaxed acceptance factor ($\texttt{res}_{\mathrm{SSN}} \le 5\,\varepsilon_k$) & $5$ & \ref{subsec: SSN implementation} \\
+\quad Stagnation: residual ratio\,/\,number of consecutive iterations & $0.999$\,/\,$10$ & \ref{subsec: SSN implementation} \\
+\addlinespace
+\multicolumn{3}{@{}l}{\emph{PCG}} \\
+\quad Maximum number of PCG iterations per linear system & $100$ & \ref{subsec: PCG implementation} \\
+\quad Relative residual tolerance & $10^{-12}$ & \ref{subsec: PCG implementation} \\
+\quad Acceptance threshold at the iteration limit & $10^{-10}$ & \ref{subsec: PCG implementation} \\
+\quad Maximum number of iterative-refinement corrections & $3$ & \ref{subsec: PCG implementation} \\
+\quad Iterative-refinement tolerance: relative\,/\,absolute & $10^{-10}$\,/\,$10^{-12}$ & \ref{subsec: PCG implementation} \\
+\quad Consecutive failures before low-rank updates are suppressed & $5$ & \ref{subsec: PCG implementation} \\
+\addlinespace
+\multicolumn{3}{@{}l}{\emph{Preconditioner}} \\
+\quad Work-ratio threshold for choosing the $LDL^\top$ callback & $0.1$ & \ref{subsec: preconditioner factorizations} \\
+\quad Number of callback selections before the choice is fixed $N_c$ & $3$ & \ref{subsec: preconditioner factorizations} \\
+\quad Maximum rank $N_r$ of a low-rank update & $50$ & \ref{subsec: preconditioner factorizations} \\
+\quad Relative rank threshold of the $LU$ factorization of $S_\Lambda$ & $\sqrt{\varepsilon_{\mathrm{mach}}}$ & \ref{subsec: preconditioner factorizations} \\
+\addlinespace
+\multicolumn{3}{@{}l}{\emph{Model construction and scaling}} \\
+\quad Equality-row tolerance $\varepsilon_{\mathrm{eq}}$ (MPS/SIF interface) & $10^{-12}$ & \ref{subsec: implementation overview} \\
+\quad Maximum number of Ruiz iterations & $10$ & \ref{subsec: scaling implementation} \\
+\quad Ruiz tolerance on the row and column norms & $10^{-3}$ & \ref{subsec: scaling implementation} \\
+\addlinespace
+\multicolumn{3}{@{}l}{\emph{Infeasibility detection}} \\
+\quad Certificate tolerances $\varepsilon_{\mathrm{pinf}}$, $\varepsilon_{\mathrm{dinf}}$ & $10^{-3}\,\texttt{tol}$ & \ref{subsec: infeasibility implementation} \\
+\quad Minimum certificate norms $S_{\mathrm{pinf}}$, $S_{\mathrm{dinf}}$ & $100\,\varepsilon_{\mathrm{mach}}$ & \ref{subsec: infeasibility implementation} \\
+\quad Threshold for certificate entries paired with infinite bounds & $10^{2}\,\texttt{tol}\,S_{\mathrm{pinf}}$ & \ref{subsec: infeasibility implementation} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\subsection{Overview} \label{subsec: implementation overview}
+
+A call to the solver consists of a setup phase, which prepares the problem data, and a solve phase, which runs the iterations.
+
+\paragraph{Setup phase} The setup phase consists of five steps.
+\begin{enumerate}
+    \item \emph{Model construction.} The solver takes the data $(Q,A,B,c,b,l_x,u_x,l_w,u_w)$ of \eqref{eqn: primal QP} as input. A problem given in the bounded-row form
+    \[
+        \min_{x \in \mathbb{R}^n}\ c^\top x + \frac{1}{2} x^\top Q x \quad \text{s.t.} \quad r_l \le Cx \le r_u, \quad l_x \le x \le u_x
+    \]
+    (e.g., read from an MPS or SIF file) is converted to this form by the MPS/SIF interface of the solver, as follows. A row of $C$ whose two bounds are finite and differ by at most $\varepsilon_{\mathrm{eq}}$ becomes a row of $A$, with its lower bound as the corresponding entry of $b$. Every other row with at least one finite bound becomes a row of $B$, with its bounds as the corresponding entries of $l_w$ and $u_w$. Rows without finite bounds are discarded.
+    \item \emph{Scaling.} The problem is scaled by Ruiz scaling (Section~\ref{subsec: scaling implementation}).
+    \item \emph{Lifting.} If $Q$ is not diagonal, the scaled Hessian is factorized as $\hat{Q} = LL^\top$, and the problem is reformulated as an equivalent problem of the form \eqref{eqn: primal QP} with a diagonal Hessian, $N = 2n$ variables and $M = m+n$ equality constraints (Appendix~\ref{Apx: with general Q}). If this factorization fails (e.g., because $Q$ is not positive semidefinite), the solver stops with status \texttt{NumericalError}.
+    \item \emph{Trivial infeasibility check.} If a bound interval is empty, that is, if $(l_x)_i > (u_x)_i$ or $(l_w)_i > (u_w)_i$ for some $i$, the solver stops with status \texttt{PrimalInfeasible}.
+    \item \emph{Initialization.} All primal and dual variables are set to zero, and the parameters are set to their initial values (Section~\ref{subsec: algorithm settings}).
+\end{enumerate}
+
+\paragraph{Solve phase} The solve phase consists of three nested loops, all of which operate on the scaled (and, if applicable, lifted) problem.
+\begin{itemize}
+    \item \textbf{PMM loop} (Algorithm~\ref{alg: PD_PMM}; index $k$; Section~\ref{subsec: algorithm settings}). Each iteration calls the SSN loop to approximately minimize the penalty function $\mathcal{M}_k$, updates the multipliers $(y_1,z)$, tests for optimality and infeasibility, and updates the parameters $(\mu_k,\rho_k,\varepsilon_k)$ by Algorithm~\ref{alg: pmm params}.
+    \item \textbf{SSN loop} (Algorithm~\ref{alg: SSN}; index $j$; Section~\ref{subsec: SSN implementation}). Each iteration determines the active sets, computes a Newton direction from the linear system \eqref{eqn: reduced SSN linear systems}, and computes a step size by exact linesearch.
+    \item \textbf{PCG loop} (Section~\ref{subsec: PCG implementation}). The Newton direction is computed by applying PCG to the normal equations \eqref{eqn: normal equations}, with the preconditioner $P_{k_j}$ of \eqref{eqn: NE preconditioner}. At every SSN iteration, the factorization of $P_{k_j}$ is reused, modified, corrected by a low-rank update, or recomputed, depending on how the active sets and the parameters have changed (Section~\ref{subsec: preconditioner factorizations}).
+\end{itemize}
+Although the iterations are performed on the scaled problem, all termination and infeasibility tests are evaluated on unscaled quantities, so that the tolerances refer to the problem as given by the user (Section~\ref{subsec: scaling implementation}). To simplify notation, we omit the hats that denote scaled quantities in Sections~\ref{subsec: algorithm settings}--\ref{subsec: preconditioner factorizations}.
+
+\paragraph{Termination} The solver returns one of the following statuses:
+\texttt{Optimal}, if the stopping criterion \eqref{eqn: PMM stopping criterion} holds;
+\texttt{PrimalInfeasible} or \texttt{DualInfeasible}, if an infeasibility certificate is found (Section~\ref{subsec: infeasibility implementation});
+\texttt{MaxPmmIterations} or \texttt{MaxSsnIterations}, if the maximum number of PMM iterations or the maximum total number of SSN iterations is reached;
+\texttt{TimeLimit}, if the time limit for the solve phase is exceeded;
+\texttt{Interrupted}, if the solve is interrupted by the user; and
+\texttt{NumericalError}, if a numerical failure occurs during setup or solve (e.g., a failed factorization of $\hat{Q}$ in the lifting step, or of the fallback linear system in Section~\ref{subsec: PCG implementation}).
+On return, the last accepted iterate is unscaled and, if the problem was lifted, the auxiliary components are removed (Section~\ref{subsec: scaling implementation}); the objective value is then evaluated with the original data. No solution is returned for the statuses \texttt{PrimalInfeasible}, \texttt{DualInfeasible} and \texttt{NumericalError}.
+
+
+\subsection{PMM outer loop} \label{subsec: algorithm settings}
+
+\paragraph{Initialization} The PMM loop starts from $(x_0,y_0,z_0) = 0$ with $\mu_0 = 10^2$, $\rho_0 = 10^7$ and $\varepsilon_0 = 10^{-2}$. The relaxation parameter in \eqref{eqn: PD proximal augmented Lagrangian function} is fixed to $\alpha = 0.95$. Recall that $\alpha = \frac{1}{2}$ recovers $\mathcal{M}_{\mu,\rho}$; larger values of $\alpha$ allow larger deviations of $y_2$ from ${y_2}_k$, and thus result in faster, less conservative iterations. The worst residual $r^{\max}_0$ of the initial point (see step~4 below) is computed before the first iteration.
+
+\paragraph{PMM iteration} Given the iterate $(x_k,y_k,z_k)$, the parameters $(\mu_k,\rho_k,\varepsilon_k)$, and the worst residual $r^{\max}_k$ of the iterate, iteration $k$ performs the following steps.
+\begin{enumerate}
+    \item \emph{Subproblem solve.} Algorithm~\ref{alg: SSN} is called with the starting point $u_k = (x_k,{y_2}_k)$ and the tolerance $\varepsilon_k$ (Section~\ref{subsec: SSN implementation}). It returns a point $u_{k+1} = (x_{k+1},{y_2}_{k+1})$, its residual $\texttt{res}_{\mathrm{SSN}}(u_{k+1})$, and an exit status. If the total number of SSN iterations since the start of the solve has reached $j_{\max}^{\mathrm{tot}} = 120\,000$, the solver discards $u_{k+1}$ and stops with status \texttt{MaxSsnIterations}.
+    \item \emph{Update of $(x,y_2)$.} The point $u_{k+1}$ is accepted unconditionally.
+    \item \emph{Safeguarded multiplier update.} Multiplier updates based on an inaccurate subproblem solution can destabilize the PMM. Therefore, $y_1$ and $z$ are updated by the formulas of Algorithm~\ref{alg: PD_PMM} only if SSN returned the status \texttt{Optimal} or
+    \begin{equation} \label{eqn: multiplier update safeguard}
+        \texttt{res}_{\mathrm{SSN}}(u_{k+1}) \le 100\, r^{\max}_k;
+    \end{equation}
+    otherwise, they are kept, that is, ${y_1}_{k+1} = {y_1}_k$ and $z_{k+1} = z_k$.
+    \item \emph{Optimality test.} The residuals \eqref{eqn: PMM termination residuals} are evaluated at $(x_{k+1},y_{k+1},z_{k+1})$ on the unscaled problem (Section~\ref{subsec: scaling implementation}), and we set $r^{\max}_{k+1} \triangleq \max\{r_{\rm p}, r_{\rm d}, r_x, r_w\}$. If $r^{\max}_{k+1} < \texttt{tol}$, so that \eqref{eqn: PMM stopping criterion} holds, the solver stops with status \texttt{Optimal}.
+    \item \emph{Infeasibility tests.} If the primal or the dual infeasibility test of Section~\ref{subsec: infeasibility implementation} is satisfied, the solver stops with status \texttt{PrimalInfeasible} or \texttt{DualInfeasible}, respectively.
+    \item \emph{Parameter update.} The parameters $(\mu_{k+1},\rho_{k+1},\varepsilon_{k+1})$ are computed by Algorithm~\ref{alg: pmm params}, as described below.
+    \item \emph{Limits.} The solver stops with status \texttt{TimeLimit} or \texttt{Interrupted} if the time limit has been exceeded or the user has interrupted the solve (both conditions are also checked at every SSN iteration, in which case SSN returns early), and with status \texttt{MaxPmmIterations} after $k_{\max}$ iterations.
+\end{enumerate}
+
+\paragraph{Parameter update} Algorithm~\ref{alg: pmm params} adapts the parameters to the outcome of the SSN solve.
+\begin{itemize}
+    \item \emph{SSN succeeded} (status \texttt{Optimal}). The penalty parameters are increased and the subproblem tolerance is tightened:
+    \[
+        \mu_{k+1} = \min\{\mu_{\max}, 2\mu_k\}, \quad \rho_{k+1} = \min\{\rho_{\max}, 2\rho_k\}, \quad \varepsilon_{k+1} = \max\{\varepsilon_{\min}, 0.1\,\varepsilon_k\}.
+    \]
+    \item \emph{Linesearch failed} (status \texttt{LineSearchFailed}). The penalty parameters are decreased, which makes the next subproblem better conditioned, and the tolerance is relaxed:
+    \[
+        \mu_{k+1} = \max\{\mu_{\min}, 0.5\,\mu_k\}, \quad \rho_{k+1} = \max\{\rho_{\min}, 0.5\,\rho_k\}, \quad \varepsilon_{k+1} = \min\{1.1\,\varepsilon_k,\ r^{\max}_{k+1},\ \varepsilon_{\max}\}.
+    \]
+    \item \emph{Otherwise} (SSN reached $j_{\max}$ iterations or stagnated). If the worst residual has decreased by less than $10\%$, i.e., if $r^{\max}_{k+1} > 0.9\, r^{\max}_k$, the penalty parameters are increased moderately,
+    \[
+        \mu_{k+1} = \min\{\mu_{\max}, 1.1\,\mu_k\}, \quad \rho_{k+1} = \min\{\rho_{\max}, 1.1\,\rho_k\};
+    \]
+    otherwise, they are kept. In both cases, $\varepsilon_{k+1} = \varepsilon_k$.
+\end{itemize}
+The bounds are $\mu_{\min} = \rho_{\min} = 1$, $\mu_{\max} = \rho_{\max} = 10^7$, $\varepsilon_{\min} = \texttt{tol}$ and $\varepsilon_{\max} = 10^{-2}$, so that $\mu_k,\rho_k \in [1,10^7]$ and $\varepsilon_k \in [\texttt{tol},10^{-2}]$ for all $k$. Since $\rho_0 = \rho_{\max}$, the parameter $\rho_k$ falls below $\rho_{\max}$ only after a linesearch failure.
+
+
+\subsection{SSN inner loop} \label{subsec: SSN implementation}
+
+Algorithm~\ref{alg: SSN} is called once per PMM iteration. It starts from the current PMM iterate, $u_{k_0} = u_k$, and performs at most $j_{\max} = 50$ iterations, during which the multipliers $({y_1}_k,z_k)$ and the parameters $(\mu_k,\rho_k)$ are fixed. Throughout, the gradient norm $\|\nabla_u \mathcal{M}_k(u)\|_\infty$ in \eqref{eqn: optimality condition} and Algorithm~\ref{alg: SSN} is measured on the unscaled problem, by the residual $\texttt{res}_{\mathrm{SSN}}(u)$ defined in \eqref{eqn: descaled SSN residual} below. Iteration $j$ consists of the following steps.
+\begin{enumerate}
+    \item \emph{Active sets.} The matrices $P_{\mathcal{K}_{k_j}}$ and $P_{\mathcal{W}_{k_j}}$ are evaluated at $u_{k_j}$ according to \eqref{eqn: P_K} and \eqref{eqn: P_W}. They define two index sets: $\mathcal{A}_{\mathcal{K}_{k_j}}$ contains the variables for which $x_{k_j} + \mu_k^{-1} z_k$ lies strictly between the bounds, and determines $H_{k_j}$ and the columns of $G_{k_j}$ that are kept in the preconditioner; $\mathcal{A}_{\mathcal{W}_{k_j}}$ contains the rows of $B$ for which $Bx_{k_j} + \mu_k^{-1}((1-\alpha){y_2}_{k_j} - {y_2}_k)$ lies outside $[l_w,u_w]$, and determines the rows of $B$ that enter $G_{k_j}$. The sets are compared with those of the previous SSN iteration, which may belong to the previous PMM iteration: $G_{k_j}$ is rebuilt only if $\mathcal{A}_{\mathcal{W}_{k_j}}$ has changed, and $H_{k_j}$ only if $\mathcal{A}_{\mathcal{K}_{k_j}}$, $\mu_k$ or $\rho_k$ has changed. The comparison also determines how the preconditioner is updated (Section~\ref{subsec: preconditioner factorizations}).
+    \item \emph{Newton direction.} The components $(d_{y_2})_{\mathcal{N}_{\mathcal{W}_{k_j}}}$ are computed explicitly (Section~\ref{subsec: SSN linear systems}), the components $d_\lambda$ and $(d_{y_2})_{\mathcal{A}_{\mathcal{W}_{k_j}}}$ are obtained by solving the normal equations \eqref{eqn: normal equations} with PCG (Section~\ref{subsec: PCG implementation}), and $d_x$ is recovered from \eqref{eqn: d_x elimination}.
+    \item \emph{Exact linesearch.} The step size $\tau_j$ minimizes $\psi(\tau) = \mathcal{M}_k(u_{k_j} + \tau d_u)$ over $\tau > 0$, and is computed from the breakpoints of $\psi'$ as described in Appendix~\ref{apx: exact linesearch}. The linesearch returns $\tau_j \le 0$ if $\psi'(0) \ge 0$, that is, if $d_u$ is not a descent direction for $\mathcal{M}_k$, which can happen because the Newton system is solved inexactly. In this case, SSN proceeds as follows:
+    \begin{enumerate}[(a)]
+        \item if $\texttt{res}_{\mathrm{SSN}}(u_{k_j}) \le 5\varepsilon_k$, SSN returns $u_{k_j}$ with status \texttt{Optimal};
+        \item otherwise, $d_u$ is replaced by the steepest-descent direction $-\nabla_u \mathcal{M}_k(u_{k_j})$ and the linesearch is repeated; if it again returns $\tau_j \le 0$, SSN returns $u_{k_j}$ with status \texttt{LineSearchFailed}.
+    \end{enumerate}
+    \item \emph{Update.} The iterate is updated as $u_{k_{j+1}} = u_{k_j} + \tau_j d_u$. The products $Ax$ and $Bx$ are updated in the same way, using the products $Ad_x$ and $Bd_x$ computed for the linesearch, and are recomputed from scratch every fifth iteration to prevent the accumulation of rounding errors.
+    \item \emph{Convergence test.} If $\texttt{res}_{\mathrm{SSN}}(u_{k_{j+1}}) < \varepsilon_k$, SSN returns $u_{k_{j+1}}$ with status \texttt{Optimal}.
+    \item \emph{Stagnation test.} The iteration is counted as stagnating if $\texttt{res}_{\mathrm{SSN}}(u_{k_{j+1}}) \ge 0.999\, \texttt{res}_{\mathrm{SSN}}(u_{k_j})$, i.e., if the residual has decreased by less than $0.1\%$. After $10$ consecutive stagnating iterations, SSN returns $u_{k_{j+1}}$, with status \texttt{Optimal} if $\texttt{res}_{\mathrm{SSN}}(u_{k_{j+1}}) < 5\varepsilon_k$, and with status \texttt{Stagnated} otherwise.
+\end{enumerate}
+If none of these tests terminates the loop within $j_{\max}$ iterations, SSN returns the last iterate with status \texttt{MaxInnerIterations}. In summary, SSN reports \texttt{Optimal} if it reaches the tolerance $\varepsilon_k$, or if it can make no further progress (because the linesearch fails or the iterations stagnate) at a point that satisfies the relaxed tolerance $5\varepsilon_k$.
+
+
+\subsection{PCG for the SSN linear systems} \label{subsec: PCG implementation}
+
+\paragraph{Linear system} At every SSN iteration, we apply the preconditioned conjugate gradient (PCG) method, as implemented in the Eigen library, to the normal equations \eqref{eqn: normal equations}, with the preconditioner $P_{k_j}$ of \eqref{eqn: NE preconditioner}. The matrix $S_{k_j} = G_{k_j} H_{k_j}^{-1} G_{k_j}^\top + \mu_k^{-1} I$ is never formed: each PCG iteration applies it to a vector through a product with $G_{k_j}^\top$, a scaling by the diagonal matrix $H_{k_j}^{-1}$, and a product with $G_{k_j}$. The preconditioner is applied through a factorization, as described in Section~\ref{subsec: preconditioner factorizations}.
+
+\paragraph{Stopping criterion} PCG stops once the relative residual satisfies $\|\xi - S_{k_j} d\|_2 \le 10^{-12} \|\xi\|_2$, where $\xi$ denotes the right-hand side of \eqref{eqn: normal equations} and $d$ the current approximate solution, or after $100$ iterations. To avoid discarding sufficiently accurate directions, a solution that reaches the iteration limit is still accepted if its relative residual is at most $10^{-10}$; otherwise, the solve has failed (see below).
+
+\paragraph{Warm start} If $\mathcal{A}_{\mathcal{W}_{k_j}}$ has not changed, so that \eqref{eqn: normal equations} has the same dimension as in the previous SSN iteration, PCG starts from the solution of the previous SSN iteration; otherwise, it starts from zero.
+
+\paragraph{Iterative refinement} The direction obtained from the normal equations solves the reduced system \eqref{eqn: reduced SSN linear systems} only approximately. We therefore compute the residual of \eqref{eqn: reduced SSN linear systems}. If its infinity norm exceeds $10^{-10}$ times the infinity norm of the right-hand side of \eqref{eqn: reduced SSN linear systems}, or $10^{-12}$ if this is larger, we solve \eqref{eqn: reduced SSN linear systems} with the residual as the right-hand side, again by PCG on the normal equations with the same preconditioner but from a zero initial guess, add the correction to the direction, and repeat. At most three corrections are computed.
+
+\paragraph{Failure handling} A PCG solve fails if the factorization of the preconditioner fails, or if the iteration limit is reached with a relative residual above $10^{-10}$. Failures are handled in three stages.
+\begin{enumerate}
+    \item If the preconditioner of the failed solve was obtained by a low-rank update (Section~\ref{subsec: low-rank updates}), we assume that the update has degraded it: the preconditioner is refactorized from scratch, and PCG is restarted. To avoid repeatedly wasting effort on degraded updates, such failures are counted; the count is reset by every successful PCG solve with a low-rank updated preconditioner and at the beginning of every PMM iteration. After $5$ consecutive failures, low-rank updates are suppressed until the next PMM iteration, i.e., the preconditioner is refactorized whenever it changes.
+    \item If PCG fails with a preconditioner that was not obtained by a low-rank update (including the refactorized preconditioner of stage~1), or if memory allocation fails while forming the preconditioner or during PCG, the iterative approach is abandoned for the rest of the solve. The current and all subsequent SSN linear systems, including those of the iterative refinement, are then solved directly, by an $LDL^\top$ factorization of the matrix $M_{k_j}$ of \eqref{eqn: reduced SSN linear systems} with the approximate minimum degree (AMD) ordering. The symbolic analysis of $M_{k_j}$ is repeated only when $\mathcal{A}_{\mathcal{W}_{k_j}}$ changes; when only $H_{k_j}$ or $\mu_k$ changes, the diagonal entries of $M_{k_j}$ are overwritten, and only the numerical factorization is recomputed.
+    \item If this factorization fails, the solver stops with status \texttt{NumericalError}.
+\end{enumerate}
+
+
+\subsection{Preconditioner factorizations and updates} \label{subsec: preconditioner factorizations}
+
+Every application of the preconditioner within PCG requires a solve with a factorization of $P_{k_j}$ or of its augmented form $\widehat{P}_{k_j}$ (Section~\ref{subsec: preconditioner callback}). This factorization is provided once per SSN iteration, before PCG starts. This subsection describes which of the two factorizations is used, and how the factorization is carried over from one SSN iteration to the next. Both are computed by the sparse (simplicial) Cholesky and $LDL^\top$ routines of Eigen with the AMD ordering.
+
+\paragraph{Choice of the callback} We apply the preconditioner through an $LDL^\top$ factorization of $\widehat{P}_{k_j}$ if the estimated work ratio $\frac{s}{s+t}\,|\widehat{P}_{k_j}|^2 / |\widetilde{P}_{k_j}|^2$ of Section~\ref{subsec: preconditioner callback} is smaller than $0.1$, that is, if factorizing $\widehat{P}_{k_j}$ is estimated to be at least ten times cheaper than factorizing $P_{k_j}$, and through a Cholesky factorization of $P_{k_j}$ otherwise. The ratio is cheap to evaluate, but it changes with the active sets, and switching between the callbacks discards the cached factorization and, with it, the possibility of low-rank updates. Therefore, the callback is selected only at the first $N_c = 3$ SSN iterations at which the active sets change (the first SSN iteration of the solve counts as such); afterwards, the last selection is kept for the rest of the solve.
+
+\paragraph{Carrying the factorization over} Let $P_{\mathrm{old}}$ denote the most recently factorized preconditioner. Recall that $(H_{k_j})_{i,i} = Q_{i,i} + \rho_k^{-1}$ for $i \in \mathcal{A}_{\mathcal{K}_{k_j}}$. Hence, $\mu_k$ enters $P_{k_j}$ and $\widehat{P}_{k_j}$ only through the term $\mu_k^{-1} I_s$, and $\rho_k$ only through the entries of $H_{k_j}$ indexed by $\mathcal{A}_{\mathcal{K}_{k_j}}$. Since $\mu_k$ and $\rho_k$ are constant within an SSN call, they can change only at the first SSN iteration of a PMM iteration. At every SSN iteration, the preconditioner is obtained by the first of the following rules that applies.
+\begin{enumerate}
+    \item \emph{Reuse.} If neither the active sets nor $(\mu_k,\rho_k)$ have changed since the previous SSN iteration, the preconditioner of the previous iteration is reused as it is.
+    \item \emph{Low-rank update.} If the active sets have changed, we attempt the low-rank update of Section~\ref{subsec: low-rank updates}, in which $P_{\mathrm{old}}$ plays the role of $P_{k_j}$. Since the update is always computed relative to $P_{\mathrm{old}}$, successive updates do not compound: the numbers $h$, $p$ and $q$ count all changes of the active sets since $P_{\mathrm{old}}$ was factorized, and the factorization of $P_{\mathrm{old}}$ is kept until the next refactorization. The update is used if
+    (i) $0 < h+p+q \le N_r = 50$;
+    (ii) $\mu_k$ and $\rho_k$ are the same as when $P_{\mathrm{old}}$ was factorized, because a change of $\mu_k$ shifts all $s$ diagonal entries of the preconditioner and a change of $\rho_k$ changes all nonzero entries of $E_{k_j}$, neither of which is a low-rank modification;
+    (iii) the callback is the same as for $P_{\mathrm{old}}$;
+    (iv) low-rank updates are not suppressed (Section~\ref{subsec: PCG implementation}); and
+    (v) the capacitance matrix $S_\Lambda$ of \eqref{eqn: capacitance_matrix} is numerically nonsingular. For (v), $S_\Lambda$ is factorized by $LU$ with full pivoting (Remark~\ref{remark: numerical stability}), and its numerical rank is determined with the relative threshold $\sqrt{\varepsilon_{\mathrm{mach}}}$.
+    \item \emph{In-place modification.} If the active sets have not changed since $P_{\mathrm{old}}$ was factorized but $\mu_k$ or $\rho_k$ has, the matrix is modified in place, and only its numerical factorization is recomputed. A change of $\mu_k$ only shifts the $s$ diagonal entries of $P_{k_j}$, or of the block $\mu_k^{-1} I_s$ of $\widehat{P}_{k_j}$, which are updated at a cost of $\mathcal{O}(s)$ operations. A change of $\rho_k$ is applied to $\widehat{P}_{k_j}$ by overwriting its diagonal block $-(H_{k_j})_{\mathcal{A}_{\mathcal{K}_{k_j}},\mathcal{A}_{\mathcal{K}_{k_j}}}$, at a cost of $\mathcal{O}(|\mathcal{A}_{\mathcal{K}_{k_j}}|)$ operations. In $P_{k_j}$, these entries enter nonlinearly through the product $G_{k_j} E_{k_j} G_{k_j}^\top$, which is therefore recomputed, although its sparsity pattern is unchanged.
+    \item \emph{Refactorization.} Otherwise, $P_{k_j}$ (or $\widehat{P}_{k_j}$) is formed and factorized from scratch, including its symbolic analysis.
+\end{enumerate}
+Consequently, the symbolic analysis is repeated only when the active sets or the callback have changed since the last factorization, and the preconditioner is refactorized, at least numerically, at the first SSN iteration after every change of $\mu_k$ or $\rho_k$. Between these refactorizations, low-rank updates are used as long as the active sets change little.
+
+
+\subsection{Ruiz scaling and unscaling} \label{subsec: scaling implementation}
+
+\paragraph{Scaling} Before the PMM loop starts, the matrix $\begin{bsmallmatrix} A \\ B \\ I \end{bsmallmatrix}$ is equilibrated by Ruiz scaling \cite[Algorithm 2.1]{Ruiz2001Scaling}, where the identity block represents the bounds on $x$. Each Ruiz iteration divides every row of $A$ and $B$ by the square root of its infinity norm, and every column by the square root of the infinity norm of the corresponding column of $\begin{bsmallmatrix} A \\ B \\ I \end{bsmallmatrix}$, which is at least one because of the identity block; norms below $\sqrt{\varepsilon_{\mathrm{mach}}}$ (e.g., those of empty rows) are replaced by one. The iteration stops as soon as all row and column infinity norms are within $10^{-3}$ of one, or after $10$ iterations. The accumulated factors form the positive diagonal matrices $D_{1,A}$ and $D_{1,B}$ (row scaling of $A$ and $B$) and $D_2$ (column scaling). They define the scaled problem in the variable $\hat{x} = D_2^{-1}x$, with data $\hat{A} = D_{1,A} A D_2$, $\hat{B} = D_{1,B} B D_2$, $\hat{Q} = D_2 Q D_2$, $\hat{c} = D_2 c$, $\hat{b} = D_{1,A} b$ and correspondingly scaled bounds (Appendix~\ref{apx: ruiz scaling}). Note that the objective is scaled only through $D_2$; no separate cost scaling is applied. If $Q$ is not diagonal, the lifting of Appendix~\ref{Apx: with general Q} is applied to the scaled problem. The auxiliary variables and constraints introduced by the lifting are not scaled, i.e., $D_2$ and $D_{1,A}$ are extended by identity blocks.
+
+\paragraph{Unscaling for termination and infeasibility tests} All tests are evaluated on unscaled quantities, so that \texttt{tol}, $\varepsilon_k$, $\varepsilon_{\mathrm{pinf}}$ and $\varepsilon_{\mathrm{dinf}}$ refer to the original problem. A scaled iterate $(\hat{x},\hat{y}_1,\hat{y}_2,\hat{z})$ corresponds to the unscaled iterate
+\[
+    x = D_2 \hat{x}, \quad y_1 = D_{1,A} \hat{y}_1, \quad y_2 = D_{1,B} \hat{y}_2, \quad z = D_2^{-1} \hat{z},
+\]
+and the matrix--vector products required by the tests are obtained from the scaled products computed during the iteration by diagonal scaling, e.g.,
+\[
+    Ax = D_{1,A}^{-1} \hat{A}\hat{x}, \quad Bx = D_{1,B}^{-1} \hat{B}\hat{x}, \quad Qx = D_2^{-1} \hat{Q}\hat{x}, \quad A^\top y_1 = D_2^{-1} \hat{A}^\top \hat{y}_1, \quad B^\top y_2 = D_2^{-1} \hat{B}^\top \hat{y}_2.
+\]
+Hence, unscaling requires no products with the original matrices. These quantities are used as follows.
+\begin{itemize}
+    \item The outer stopping criterion \eqref{eqn: PMM stopping criterion} is evaluated at $(x,y_1,y_2,z)$ with the original data $Q$, $A$, $B$, $c$ and $b$ and the original bounds $l_x$, $u_x$, $l_w$ and $u_w$.
+    \item The SSN residual, which replaces $\|\nabla_u \mathcal{M}_k(u)\|_\infty$ in \eqref{eqn: optimality condition} and Algorithm~\ref{alg: SSN}, is the infinity norm of the unscaled gradient,
+    \begin{equation} \label{eqn: descaled SSN residual}
+        \texttt{res}_{\mathrm{SSN}}(u) \triangleq \max\left\{ \|D_2^{-1} \nabla_{\hat{x}} \mathcal{M}_k(u)\|_\infty,\ \|D_{1,B}^{-1} \nabla_{\hat{y}_2} \mathcal{M}_k(u)\|_\infty \right\},
+    \end{equation}
+    since, by the chain rule, $\nabla_x = D_2^{-1} \nabla_{\hat{x}}$ and $\nabla_{y_2} = D_{1,B}^{-1} \nabla_{\hat{y}_2}$.
+    \item The infeasibility certificates are unscaled as described in Section~\ref{subsec: infeasibility implementation}.
+\end{itemize}
+In the lifted case, the tests are evaluated on the unscaled lifted problem, using the extended scaling matrices. Appendix~\ref{apx: descaling} shows that this also certifies the corresponding tests for the original problem, up to a fixed constant factor.
+
+\paragraph{Recovery of the solution} On termination, the last accepted iterate is unscaled by the formulas above, and, in the lifted case, the auxiliary components of $x$, $y_1$ and $z$ are removed.
+
+
+\subsection{Infeasibility detection} \label{subsec: infeasibility implementation}
+
+Infeasibility is detected in two ways: by a trivial check during setup, and by approximate certificates during the PMM loop.
+
+\paragraph{Setup check} If a bound interval is empty, that is, if $(l_x)_i > (u_x)_i$ or $(l_w)_i > (u_w)_i$ for some $i$, the problem is primal infeasible, and the solver returns before the first iteration.
+
+\paragraph{Certificates} Following \cite{DeMarchi2022_PDnproxQP,Hermans_2022}, we detect infeasibility from the differences between consecutive PMM iterates: if \eqref{eqn: primal QP} is primal (respectively, dual) infeasible, the dual (respectively, primal) iterates do not converge, and their successive differences approximate a certificate of primal (respectively, dual) infeasibility. The certificates are tested at every PMM iteration, after the optimality test (step~5 in Section~\ref{subsec: algorithm settings}). The candidate certificate of primal infeasibility is $(\Delta y_1, \Delta y_2, \Delta z)$, where $\Delta y_2 \triangleq {y_2}_{k+1} - {y_2}_k$ and $(\Delta y_1,\Delta z)$ is the most recent update of the multipliers $(y_1,z)$ in step~3 of Section~\ref{subsec: algorithm settings} (if the update was skipped at iteration $k$, the update of an earlier iteration is used). The candidate certificate of dual infeasibility is $\Delta x \triangleq x_{k+1} - x_k$. The certificates are unscaled as in Section~\ref{subsec: scaling implementation}, and their unscaled norms
+\[
+    S_{\mathrm{pinf}} \triangleq \max\{\|\Delta y_1\|_\infty, \|\Delta y_2\|_\infty, \|\Delta z\|_\infty\}, \qquad S_{\mathrm{dinf}} \triangleq \|\Delta x\|_\infty,
+\]
+serve as reference magnitudes in the tests. The conditions are stated in full in Appendix~\ref{apx: infeasibility detection}; in summary, they read as follows.
+\begin{itemize}
+    \item \emph{Primal infeasibility.} The problem is declared primal infeasible if $S_{\mathrm{pinf}} \ge 100\,\varepsilon_{\mathrm{mach}}$ and
+    \begin{enumerate}[(i)]
+        \item $\|A^\top \Delta y_1 + B^\top \Delta y_2 - \Delta z\|_\infty \le \varepsilon_{\mathrm{pinf}}\, S_{\mathrm{pinf}}$;
+        \item $-b^\top \Delta y_1 + \delta^\ast_{\mathcal{W}}(-\Delta y_2) + \delta^\ast_{\mathcal{K}}(\Delta z) \le -\varepsilon_{\mathrm{pinf}}\, S_{\mathrm{pinf}}$, where the support functions are evaluated over the finite bounds only;
+        \item the support functions in (ii) are finite up to a threshold, that is, every entry of $\Delta z$ and $-\Delta y_2$ that is paired with an infinite bound has the sign that keeps them finite, up to $10^2\,\texttt{tol}\,S_{\mathrm{pinf}}$; e.g., $(\Delta z)_i \le 10^2\,\texttt{tol}\,S_{\mathrm{pinf}}$ if $(u_x)_i = +\infty$, and $(\Delta z)_i \ge -10^2\,\texttt{tol}\,S_{\mathrm{pinf}}$ if $(l_x)_i = -\infty$.
+    \end{enumerate}
+    \item \emph{Dual infeasibility.} The problem is declared dual infeasible if $S_{\mathrm{dinf}} \ge 100\,\varepsilon_{\mathrm{mach}}$ and
+    \begin{enumerate}[(i)]
+        \item $\|Q\Delta x\|_\infty \le \varepsilon_{\mathrm{dinf}}\, S_{\mathrm{dinf}}$ and $\|A\Delta x\|_\infty \le \varepsilon_{\mathrm{dinf}}\, S_{\mathrm{dinf}}$;
+        \item $c^\top \Delta x \le -\varepsilon_{\mathrm{dinf}}\, S_{\mathrm{dinf}}$;
+        \item $\Delta x$ and $B\Delta x$ are recession directions of the bounds on $x$ and $Bx$, respectively, up to $\varepsilon_{\mathrm{dinf}}\, S_{\mathrm{dinf}}$ in every entry; e.g., $(\Delta x)_i \ge -\varepsilon_{\mathrm{dinf}}\, S_{\mathrm{dinf}}$ if only $(l_x)_i$ is finite, and $|(\Delta x)_i| \le \varepsilon_{\mathrm{dinf}}\, S_{\mathrm{dinf}}$ if both bounds are finite.
+    \end{enumerate}
+\end{itemize}
+The tolerances are $\varepsilon_{\mathrm{pinf}} = \varepsilon_{\mathrm{dinf}} = 10^{-3}\,\texttt{tol}$, so that tightening \texttt{tol} also tightens the certificate tests. The lower bound $100\,\varepsilon_{\mathrm{mach}}$ on $S_{\mathrm{pinf}}$ and $S_{\mathrm{dinf}}$ prevents tests on numerically zero differences, for which the relative conditions would be dominated by rounding errors. The threshold in condition~(iii) of the primal test acts as a noise floor for entries that should vanish rather than as a residual tolerance, and is therefore looser than $\varepsilon_{\mathrm{pinf}} S_{\mathrm{pinf}}$. The inner products $b^\top \Delta y_1$ and $c^\top \Delta x$ and the support-function terms are invariant under the scaling (e.g., $\hat{b}^\top \Delta \hat{y}_1 = b^\top \Delta y_1$), and are therefore evaluated with scaled quantities. All other conditions are evaluated on unscaled vectors, e.g., $A^\top \Delta y_1 + B^\top \Delta y_2 - \Delta z = D_2^{-1}(\hat{A}^\top \Delta\hat{y}_1 + \hat{B}^\top \Delta\hat{y}_2 - \Delta\hat{z})$.
